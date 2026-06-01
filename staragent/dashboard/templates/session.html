@@ -1,0 +1,1468 @@
+{% extends "base.html" %}
+{% block title %}{{ view.name }} · StarAgent{% endblock %}
+{% block head_extra %}
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/highlight.js/github.min.css') }}">
+  <script src="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}"></script>
+  <script src="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"></script>
+  <script src="{{ url_for('static', path='vendor/highlight.js/highlight.min.js') }}"></script>
+{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <div>
+      <a class="back" href="/sessions">← Sessions</a>
+      <h1>{{ view.name }}</h1>
+      <p>{{ view.node_id }} · {{ view.task }}</p>
+    </div>
+    <span class="pill status-{{ view.status }}">{{ view.status }}</span>
+  </section>
+
+  <section class="detail-grid">
+    <div class="panel session-panel">
+      <div class="compact-panel-head">
+        <h2>Session</h2>
+        {% if view.session_type == "agent" and (view.status_report.source if view.status_report else "") != "adopted" %}
+          <button type="button" class="danger-button detail-stop-session" data-node="{{ view.node_id }}" data-session="{{ view.name }}">Stop</button>
+        {% endif %}
+      </div>
+      <dl class="session-stats">
+        <dt>Node</dt><dd>{{ view.node_name }}</dd>
+        <dt>Agent</dt><dd>{{ view.agent }}</dd>
+        <dt>Type</dt><dd>{{ view.session_type }}</dd>
+        <dt>Backend</dt><dd>{{ view.backend }}</dd>
+        <dt>Repo</dt><dd>{{ view.repo }}</dd>
+        <dt>Branch</dt><dd>{{ view.branch or "-" }}</dd>
+        <dt>Last updated</dt><dd>{{ relative_time(view.last_updated) }}</dd>
+        <dt>Source</dt><dd>{{ view.status_report.source if view.status_report else "config" }}</dd>
+      </dl>
+      {% if (view.status_report.source if view.status_report else "") == "adopted" %}
+        <p class="session-note">Adopted sessions are controlled from their original tmux session. StarAgent will not kill them.</p>
+      {% endif %}
+      <div class="session-attach">
+        <div class="section-title compact-title">
+          <h2>Attach</h2>
+          <span>from shell</span>
+        </div>
+        <div class="copy-command">
+          <pre class="command attach-command">{{ attach_command }}</pre>
+          <button type="button" class="copy-button" data-copy="{{ attach_command }}">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    {% if view.is_agent_session %}
+      <div class="panel token-panel" data-token-panel>
+        <h2>CLI Metadata</h2>
+        <div class="token-total" data-token-total>--</div>
+        <div class="token-subtitle" data-token-source>Waiting for CLI usage</div>
+        <dl class="token-stats">
+          <dt>Model</dt><dd data-token-model>--</dd>
+          <dt>Reasoning</dt><dd data-token-effort>--</dd>
+          <dt>Plan</dt><dd data-token-plan>--</dd>
+          <dt>Context</dt><dd data-token-context>--</dd>
+          <dt>Rate</dt><dd data-token-rate>--</dd>
+          <dt>Last Turn</dt><dd data-token-last>--</dd>
+          <dt>Cached</dt><dd data-token-cached>--</dd>
+          <dt>Output</dt><dd data-token-output>--</dd>
+          <dt>Reasoning Tokens</dt><dd data-token-reasoning>--</dd>
+        </dl>
+      </div>
+    {% endif %}
+
+  </section>
+
+  {% if view.status_report %}
+    {% if view.is_agent_session %}
+      <section class="band mobile-chat-band">
+        <div class="section-title">
+          <h2>Chat</h2>
+        </div>
+        <div class="mobile-chat" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
+          <div class="chat-log" aria-live="polite"></div>
+          <div class="chat-meta"></div>
+          <form class="chat-form">
+            <textarea name="message" rows="4" placeholder="Message {{ view.agent or 'agent' }}"></textarea>
+            <div class="chat-actions">
+              <span class="chat-status"></span>
+              <button type="button" class="chat-refresh">Refresh</button>
+              <button type="submit">Send</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    {% else %}
+      <section class="band">
+        <div class="section-title">
+          <h2>System Session</h2>
+          <span>read only</span>
+        </div>
+        <p class="summary">This tmux session runs StarAgent infrastructure. Chat is disabled; use Terminal only for read-only logs.</p>
+      </section>
+    {% endif %}
+
+    <section class="band terminal-band">
+      <div class="section-title">
+        <h2>Terminal</h2>
+        <button type="button" class="terminal-toggle">Show Terminal</button>
+      </div>
+      <div class="terminal-wrap">
+        <div class="web-terminal" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
+          <div class="terminal-screen"></div>
+          <div class="terminal-status" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    {% if view.is_agent_session and view.repo %}
+      <section class="band workspace-band">
+        <div class="section-title">
+          <h2>Workspace</h2>
+          <span>{{ view.repo }}</span>
+        </div>
+        <div class="workspace-layout">
+          <div class="workspace-sidebar">
+            <div class="explorer session-explorer" data-node="{{ view.node_id }}" data-path="{{ view.repo }}">
+              <div class="explorer-head">
+                <div>
+                  <strong>File Explorer</strong>
+                  <span class="explorer-selected">{{ view.repo }}</span>
+                </div>
+                <button type="button" class="explorer-refresh" aria-label="Refresh directory">Refresh</button>
+              </div>
+              <div class="explorer-toolbar">
+                <div class="explorer-roots"></div>
+                <input class="explorer-filter" placeholder="Filter files" autocomplete="off">
+              </div>
+              <div class="explorer-path" aria-label="Current path"></div>
+              <div class="explorer-list"></div>
+            </div>
+            <div class="changed-panel">
+              <div class="section-title compact-title">
+                <h2>Changed Files</h2>
+                <span>{{ view.status_report.changed_files|length }} files</span>
+              </div>
+              {% if view.status_report.changed_files %}
+                <ul class="file-list changed-file-list">
+                  {% for file in view.status_report.changed_files %}
+                    <li>
+                      <button type="button" class="directory-row changed-file-row" data-file="{{ file }}">
+                        <span class="change-badge">...</span>
+                        <span class="explorer-entry-text">
+                          <strong class="changed-file-name">{{ file }}</strong>
+                          <small class="changed-file-dir"></small>
+                        </span>
+                      </button>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="empty">No git changes in this workspace.</p>
+              {% endif %}
+            </div>
+          </div>
+          <div class="preview-panel">
+            <div class="section-title compact-title">
+              <h2>Preview</h2>
+              <span class="preview-meta">No file selected</span>
+            </div>
+            <pre class="file-preview"><code class="file-preview-code">Select a file from Explorer or Changed Files.</code></pre>
+          </div>
+        </div>
+      </section>
+    {% endif %}
+
+  {% else %}
+    <section class="band">
+      <p class="empty">No status report found for this session.</p>
+    </section>
+  {% endif %}
+  <script>
+    for (const button of document.querySelectorAll(".copy-button")) {
+      button.addEventListener("click", async () => {
+        const text = button.dataset.copy || "";
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = "Copied";
+        } catch {
+          const area = document.createElement("textarea");
+          area.value = text;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+          button.textContent = "Copied";
+        }
+        setTimeout(() => { button.textContent = "Copy"; }, 1200);
+      });
+    }
+
+    const stopButton = document.querySelector(".detail-stop-session");
+    if (stopButton) {
+      stopButton.addEventListener("click", async () => {
+        const name = stopButton.dataset.session;
+        const node = stopButton.dataset.node;
+        if (!confirm(`Stop tmux session "${name}"?`)) {
+          return;
+        }
+        stopButton.disabled = true;
+        stopButton.textContent = "Stopping";
+        const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(name)}`, {method: "DELETE"});
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          alert(body.detail || "Stop failed.");
+          stopButton.disabled = false;
+          stopButton.textContent = "Stop";
+          return;
+        }
+        window.location.href = "/";
+      });
+    }
+
+    const sessionExplorer = document.querySelector(".session-explorer");
+    if (sessionExplorer) {
+      const explorerNode = sessionExplorer.dataset.node;
+      const workspaceRoot = sessionExplorer.dataset.path;
+      const previewPanel = document.querySelector(".preview-panel");
+      const previewMeta = previewPanel?.querySelector(".preview-meta");
+      const previewBody = previewPanel?.querySelector(".file-preview-code");
+      let highlightedPath = "";
+      const workspaceExplorer = window.StarAgentExplorer.mount(sessionExplorer, {
+        node: () => explorerNode,
+        rootPath: () => workspaceRoot,
+        getPath: () => sessionExplorer.dataset.path || workspaceRoot,
+        setPath: (path) => {
+          sessionExplorer.dataset.path = path;
+        },
+        includeFiles: true,
+        loadingText: "Loading workspace...",
+        emptyText: "No matching files.",
+        selectedPath: () => highlightedPath,
+        onFileSelect: (path) => {
+          highlightedPath = path;
+          workspaceExplorer.render(highlightedPath);
+          previewFile(path);
+        },
+      });
+
+      async function previewFile(path) {
+        if (!previewBody || !previewMeta) {
+          return;
+        }
+        previewMeta.textContent = "Loading";
+        previewBody.textContent = "";
+        previewBody.className = "file-preview-code";
+        const response = await fetch(`/api/files/preview?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          previewMeta.textContent = "Error";
+          previewBody.textContent = body.detail || "Could not preview file.";
+          return;
+        }
+        const body = await response.json();
+        previewMeta.textContent = `${body.name || "file"} · ${formatBytes(Number(body.size || 0))}`;
+        if (body.error) {
+          previewBody.textContent = body.error;
+          return;
+        }
+        renderHighlightedPreview(body.text || "", previewLanguage(body.name || path));
+      }
+
+      function renderHighlightedPreview(text, language) {
+        previewBody.className = language ? `file-preview-code hljs language-${language}` : "file-preview-code hljs";
+        const local = localHighlight(text, language);
+        if (local) {
+          previewBody.innerHTML = local;
+          return;
+        }
+        if (!window.hljs) {
+          previewBody.textContent = text;
+          return;
+        }
+        try {
+          const result = language
+            ? window.hljs.highlight(text, {language, ignoreIllegals: true})
+            : window.hljs.highlightAuto(text);
+          previewBody.innerHTML = result.value;
+        } catch {
+          previewBody.textContent = text;
+        }
+      }
+
+      function escapeHtml(text) {
+        return String(text || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function localHighlight(text, language) {
+        const lang = String(language || "").toLowerCase();
+        if (["javascript", "typescript", "python", "bash", "json", "toml", "yaml", "markdown", "css", "rust", "go", "java", "c", "cpp"].includes(lang)) {
+          return highlightCodeLike(text, lang);
+        }
+        if (lang === "xml") {
+          return escapeHtml(text).replace(/(&lt;\/?[\w:-]+)([^&]*?)(\/?&gt;)/g, '<span class="syntax-tag">$1</span><span class="syntax-attr">$2</span><span class="syntax-tag">$3</span>');
+        }
+        return "";
+      }
+
+      function highlightCodeLike(text, language) {
+        const keywordSets = {
+          javascript: "await async break case catch class const continue debugger default delete do else export extends finally for function if import in instanceof let new return switch throw try typeof var void while with yield true false null undefined",
+          typescript: "await async break case catch class const continue debugger default delete do else enum export extends finally for function if implements import interface in instanceof let namespace new private protected public readonly return switch throw try type typeof var void while with yield true false null undefined",
+          python: "and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield",
+          bash: "case do done elif else esac export fi for function if in local readonly return set shift then unset until while",
+          rust: "as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while",
+          go: "break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var true false nil",
+          java: "abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null",
+          c: "auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while",
+          cpp: "alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend goto if inline int long mutable namespace new noexcept nullptr operator private protected public register reinterpret_cast return short signed sizeof static_cast struct switch template this throw true try typedef typeid typename union unsigned using virtual void volatile while",
+        };
+        const keywords = new Set((keywordSets[language] || "").split(/\s+/).filter(Boolean));
+        const escaped = escapeHtml(text);
+        const pattern = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
+        return escaped.replace(pattern, (token) => {
+          if (/^(\/\*|\/\/|#)/.test(token)) {
+            return `<span class="syntax-comment">${token}</span>`;
+          }
+          if (/^["'`]/.test(token)) {
+            return `<span class="syntax-string">${token}</span>`;
+          }
+          if (/^\d/.test(token)) {
+            return `<span class="syntax-number">${token}</span>`;
+          }
+          if (keywords.has(token)) {
+            return `<span class="syntax-keyword">${token}</span>`;
+          }
+          if (language === "json" && /^(true|false|null)$/.test(token)) {
+            return `<span class="syntax-keyword">${token}</span>`;
+          }
+          return token;
+        });
+      }
+
+      function previewLanguage(name) {
+        const ext = String(name || "").split(".").pop().toLowerCase();
+        const mapping = {
+          js: "javascript",
+          jsx: "javascript",
+          ts: "typescript",
+          tsx: "typescript",
+          py: "python",
+          sh: "bash",
+          bash: "bash",
+          zsh: "bash",
+          json: "json",
+          toml: "toml",
+          yaml: "yaml",
+          yml: "yaml",
+          md: "markdown",
+          html: "xml",
+          css: "css",
+          rs: "rust",
+          go: "go",
+          java: "java",
+          c: "c",
+          h: "c",
+          cc: "cpp",
+          cpp: "cpp",
+          hpp: "cpp",
+        };
+        return mapping[ext] || "";
+      }
+
+      function formatBytes(size) {
+        if (!size) {
+          return "0 B";
+        }
+        if (size >= 1024 * 1024) {
+          return `${(size / 1024 / 1024).toFixed(1)} MiB`;
+        }
+        if (size >= 1024) {
+          return `${(size / 1024).toFixed(1)} KiB`;
+        }
+        return `${size} B`;
+      }
+
+      function changedFilePath(raw) {
+        return parseChangedFile(raw).path;
+      }
+
+      function parseChangedFile(raw) {
+        let value = String(raw || "").trim();
+        const status = value.slice(0, 2).trim() || "M";
+        if (value.includes(" -> ")) {
+          value = value.split(" -> ").pop().trim();
+        }
+        value = value.replace(/^([ MADRCU?!]{1,2})\s+/, "").trim();
+        return {
+          path: value,
+          rawStatus: status,
+          deleted: status.includes("D"),
+          label: changeStatusLabel(status),
+          shortLabel: changeStatusShortLabel(status),
+        };
+      }
+
+      function changeStatusLabel(status) {
+        if (status.includes("U")) return "Conflict";
+        if (status.includes("R")) return "Renamed";
+        if (status.includes("C")) return "Copied";
+        if (status.includes("D")) return "Deleted";
+        if (status.includes("A") || status.includes("?")) return "Added";
+        if (status.includes("M")) return "Modified";
+        return "Changed";
+      }
+
+      function changeStatusShortLabel(status) {
+        if (status.includes("U")) return "!";
+        if (status.includes("R")) return "R";
+        if (status.includes("C")) return "C";
+        if (status.includes("D")) return "D";
+        if (status.includes("A") || status.includes("?")) return "A";
+        if (status.includes("M")) return "M";
+        return "*";
+      }
+
+      function renderChangedFileButton(button) {
+        const parsed = parseChangedFile(button.dataset.file);
+        const parts = parsed.path.split("/").filter(Boolean);
+        const name = parts.pop() || parsed.path;
+        const directory = parts.join("/");
+        const badge = button.querySelector(".change-badge");
+        const fileName = button.querySelector(".changed-file-name");
+        const fileDir = button.querySelector(".changed-file-dir");
+        button.classList.add(`change-${parsed.label.toLowerCase()}`);
+        button.title = `${parsed.label}: ${parsed.path}`;
+        if (parsed.deleted) {
+          button.classList.add("is-deleted");
+        }
+        if (badge) {
+          badge.textContent = parsed.shortLabel;
+          badge.setAttribute("aria-label", parsed.label);
+        }
+        if (fileName) {
+          fileName.textContent = name;
+        }
+        if (fileDir) {
+          fileDir.textContent = directory || ".";
+        }
+      }
+
+      for (const button of document.querySelectorAll(".changed-file-list button[data-file]")) {
+        renderChangedFileButton(button);
+        button.addEventListener("click", () => {
+          const parsed = parseChangedFile(button.dataset.file);
+          if (parsed.deleted) {
+            if (previewMeta && previewBody) {
+              previewMeta.textContent = "Deleted";
+              previewBody.textContent = `${parsed.path} was deleted in the working tree.`;
+              previewBody.className = "file-preview-code";
+            }
+            return;
+          }
+          const relative = parsed.path;
+          if (!relative) {
+            return;
+          }
+          const root = workspaceRoot.replace(/\/$/, "");
+          const parts = relative.split("/").filter(Boolean);
+          parts.pop();
+          const directory = `${root}/${parts.join("/")}`.replace(/\/$/, "");
+          highlightedPath = `${root}/${relative}`;
+          workspaceExplorer.load(directory || root, highlightedPath);
+          previewFile(highlightedPath);
+        });
+      }
+
+      workspaceExplorer.load(sessionExplorer.dataset.path);
+    }
+
+    const chat = document.querySelector(".mobile-chat");
+    if (chat) {
+      const chatNode = chat.dataset.node;
+      const chatSession = chat.dataset.session;
+      const chatLog = chat.querySelector(".chat-log");
+      const chatMeta = chat.querySelector(".chat-meta");
+      const chatForm = chat.querySelector(".chat-form");
+      const chatInput = chat.querySelector("textarea");
+      const chatStatus = chat.querySelector(".chat-status");
+      const chatRefresh = chat.querySelector(".chat-refresh");
+      const tokenPanel = document.querySelector("[data-token-panel]");
+      const chatStorageKey = `staragent.chat.${chatNode}.${chatSession}`;
+      const chatPendingKey = `staragent.chat.pending.${chatNode}.${chatSession}`;
+      let chatHistory = [];
+      let lastChatSnapshot = "";
+      let workingMessage = null;
+      let workingStartedAt = 0;
+      let workingTimer = null;
+      let transcriptSyncTimer = null;
+      let userScrollLockedUntil = 0;
+      let programmaticScroll = false;
+      let lastRenderedChatSignature = "";
+      const longMessageChars = 900;
+      const longMessageLines = 14;
+
+      const stripAnsi = (text) => text
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, "");
+
+      const localChatHistory = () => {
+        try {
+          const saved = JSON.parse(localStorage.getItem(chatStorageKey) || "[]");
+          return Array.isArray(saved) ? saved.slice(-80) : [];
+        } catch {
+          return [];
+        }
+      };
+
+      const saveChatHistory = () => {
+        localStorage.setItem(chatStorageKey, JSON.stringify(chatHistory.slice(-80)));
+      };
+
+      const normalizeMessageText = (text) => String(text || "").trim().replace(/\s+/g, " ");
+      const messageFingerprint = (text) => String(text || "").trim().replace(/\s+/g, "").toLowerCase();
+      const looksLikeTranscriptFragment = (role, text) => {
+        const first = String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
+        return role === "agent" && (first.startsWith("›") || first.startsWith("◦ Working"));
+      };
+
+      const saveChatMessageRemote = (message) => {
+        fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/chat-history`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(message)
+        }).catch(() => {});
+      };
+
+      const formatTokenCount = (value) => {
+        const count = Number(value || 0);
+        if (!count) {
+          return "--";
+        }
+        if (count >= 1000000) {
+          return `${(count / 1000000).toFixed(count >= 10000000 ? 1 : 2)}M`;
+        }
+        if (count >= 1000) {
+          return `${(count / 1000).toFixed(count >= 10000 ? 1 : 2)}k`;
+        }
+        return count.toLocaleString();
+      };
+
+      const setTokenText = (selector, text) => {
+        const item = tokenPanel?.querySelector(selector);
+        if (item) {
+          item.textContent = text;
+        }
+      };
+
+      const renderTokenUsage = (usage) => {
+        if (!usage) {
+          return;
+        }
+        const source = usage.source ? `${usage.source} native usage` : "CLI native usage";
+        const rate = [
+          Number(usage.primary_rate_used_percent || 0) ? `${Number(usage.primary_rate_used_percent).toFixed(0)}% primary` : "",
+          Number(usage.secondary_rate_used_percent || 0) ? `${Number(usage.secondary_rate_used_percent).toFixed(0)}% weekly` : "",
+        ].filter(Boolean).join(" · ");
+        setTokenText("[data-token-total]", formatTokenCount(usage.total_tokens));
+        setTokenText("[data-token-source]", source);
+        setTokenText("[data-token-model]", usage.model || "--");
+        setTokenText("[data-token-effort]", usage.reasoning_effort || "default");
+        setTokenText("[data-token-plan]", usage.plan_type || "--");
+        setTokenText("[data-token-context]", usage.context_window ? `${formatTokenCount(usage.context_window)} window` : "--");
+        setTokenText("[data-token-rate]", rate || "--");
+        setTokenText("[data-token-last]", formatTokenCount(usage.last_total_tokens));
+        setTokenText("[data-token-cached]", formatTokenCount(usage.cached_input_tokens));
+        setTokenText("[data-token-output]", formatTokenCount(usage.output_tokens));
+        setTokenText("[data-token-reasoning]", formatTokenCount(usage.reasoning_output_tokens));
+        chatMeta.textContent = `Tokens ${formatTokenCount(usage.total_tokens)} total · last ${formatTokenCount(usage.last_total_tokens)}`;
+      };
+
+      const mergeMessages = (...lists) => {
+        const seenIds = new Set();
+        const seenFingerprints = new Set();
+        const merged = [];
+        const candidates = [];
+        for (const list of lists) {
+          for (const message of list || []) {
+            const role = ["user", "agent", "session"].includes(message.role) ? message.role : "agent";
+            const text = String(message.text || "").trim();
+            if (!text || looksLikeTranscriptFragment(role, text)) {
+              continue;
+            }
+            const id = String(message.id || "");
+            const fingerprint = `${role}\n${messageFingerprint(text)}`;
+            candidates.push({role, text, time: Number(message.time || Date.now()), id, fingerprint});
+          }
+        }
+        candidates.sort((a, b) => {
+          if (a.fingerprint === b.fingerprint && Boolean(a.id) !== Boolean(b.id)) {
+            return a.id ? -1 : 1;
+          }
+          return a.time - b.time;
+        });
+        for (const message of candidates) {
+          if (message.id && seenIds.has(message.id)) {
+            continue;
+          }
+          if (seenFingerprints.has(message.fingerprint)) {
+            continue;
+          }
+          if (message.id) {
+            seenIds.add(message.id);
+          }
+          seenFingerprints.add(message.fingerprint);
+          merged.push({
+            role: message.role,
+            text: message.text,
+            time: message.time,
+            id: message.id,
+          });
+        }
+        return merged
+          .sort((a, b) => a.time - b.time)
+          .slice(-80);
+      };
+
+      const loadPendingChat = () => {
+        try {
+          const pending = JSON.parse(localStorage.getItem(chatPendingKey) || "null");
+          if (!pending || !pending.baseline || !pending.startedAt) {
+            return null;
+          }
+          if (Date.now() - Number(pending.startedAt) > 15 * 60 * 1000) {
+            localStorage.removeItem(chatPendingKey);
+            return null;
+          }
+          return pending;
+        } catch {
+          return null;
+        }
+      };
+
+      const savePendingChat = (baseline, startedAt = Date.now()) => {
+        localStorage.setItem(chatPendingKey, JSON.stringify({baseline, startedAt}));
+      };
+
+      const clearPendingChat = () => {
+        localStorage.removeItem(chatPendingKey);
+      };
+
+      const loadChatHistory = async () => {
+        const local = localChatHistory();
+        let remote = [];
+        try {
+          const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/chat-sync`);
+          if (response.ok) {
+            const body = await response.json();
+            remote = Array.isArray(body.messages) ? body.messages : [];
+            applyTranscriptState(body);
+          }
+        } catch {
+          remote = [];
+        }
+        chatHistory = remote.length ? mergeMessages(remote) : mergeMessages(remote, local);
+        saveChatHistory();
+        if (!remote.length) {
+          for (const message of local) {
+            saveChatMessageRemote(message);
+          }
+        }
+        lastChatSnapshot = [...chatHistory].reverse().find((item) => item.role === "agent" || item.role === "session")?.text || "";
+        renderChatHistory();
+      };
+
+      const messageTitle = (message) => {
+        const firstLine = (message.text || "").split("\n").find((line) => line.trim()) || "(empty)";
+        const compact = firstLine.trim().slice(0, 72);
+        return `${messageLabel(message.role)} · ${compact}`;
+      };
+
+      const messageLabel = (role) => {
+        if (role === "user") {
+          return "You";
+        }
+        if (role === "session") {
+          return "Session";
+        }
+        return "Agent";
+      };
+
+      const isLongMessage = (text) => {
+        const value = String(text || "");
+        return value.length > longMessageChars || value.split("\n").length > longMessageLines;
+      };
+
+      const compactMessageText = (text) => {
+        const lines = String(text || "").trim().split("\n");
+        const compactLines = lines.slice(0, longMessageLines);
+        let compact = compactLines.join("\n");
+        if (compact.length > longMessageChars) {
+          compact = `${compact.slice(0, longMessageChars).trimEnd()}...`;
+        }
+        if (lines.length > compactLines.length) {
+          compact = `${compact.trimEnd()}\n...`;
+        }
+        return compact || "(empty)";
+      };
+
+      const messageKey = (message) => `${message.role}:${message.time || 0}:${normalizeMessageText(message.text).slice(0, 120)}`;
+
+      const chatRenderSignature = (visibleHistory) => {
+        const messages = visibleHistory
+          .map((message) => `${messageKey(message)}:${message.id || ""}:${String(message.text || "").length}`)
+          .join("|");
+        return `${messages}|working:${Boolean(workingMessage)}`;
+      };
+
+      const openDetailKeys = () => new Set(
+        Array.from(chatLog.querySelectorAll("details[data-detail-key][open]"))
+          .map((item) => item.dataset.detailKey)
+          .filter(Boolean)
+      );
+
+      const appendMessageBody = (bodyWrap, message, key) => {
+        const text = (message.text || "").trim() || "(empty)";
+        if (!isLongMessage(text)) {
+          const body = document.createElement("pre");
+          body.textContent = text;
+          bodyWrap.appendChild(body);
+          return;
+        }
+        const preview = document.createElement("pre");
+        preview.className = "chat-preview";
+        preview.textContent = compactMessageText(text);
+        const full = document.createElement("details");
+        full.className = "chat-full-message";
+        full.dataset.detailKey = `${key}:full`;
+        const summary = document.createElement("summary");
+        summary.textContent = "Show full message";
+        const body = document.createElement("pre");
+        body.textContent = text;
+        full.append(summary, body);
+        bodyWrap.append(preview, full);
+      };
+
+      const isChatNearBottom = () => chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
+
+      const lockUserScroll = () => {
+        userScrollLockedUntil = Date.now() + 5000;
+      };
+
+      const isUserScrollLocked = () => Date.now() < userScrollLockedUntil;
+
+      const setChatScrollTop = (value) => {
+        programmaticScroll = true;
+        chatLog.scrollTop = value;
+        setTimeout(() => {
+          programmaticScroll = false;
+        }, 80);
+      };
+
+      const scrollChatToBottom = () => {
+        setChatScrollTop(chatLog.scrollHeight);
+      };
+
+      const currentScrollAnchor = () => {
+        const logTop = chatLog.getBoundingClientRect().top;
+        const messages = Array.from(chatLog.querySelectorAll(".chat-message[data-scroll-key]"));
+        for (const item of messages) {
+          const rect = item.getBoundingClientRect();
+          if (rect.bottom > logTop + 1) {
+            return {
+              key: item.dataset.scrollKey,
+              offset: rect.top - logTop,
+            };
+          }
+        }
+        return null;
+      };
+
+      const restoreScrollAnchor = (anchor) => {
+        if (!anchor?.key) {
+          return false;
+        }
+        const target = chatLog.querySelector(`.chat-message[data-scroll-key="${CSS.escape(anchor.key)}"]`);
+        if (!target) {
+          return false;
+        }
+        const logTop = chatLog.getBoundingClientRect().top;
+        const targetTop = target.getBoundingClientRect().top;
+        setChatScrollTop(chatLog.scrollTop + targetTop - logTop - anchor.offset);
+        return true;
+      };
+
+      const renderChatHistory = ({preserveScroll = true, forceBottom = false} = {}) => {
+        const scrollLocked = preserveScroll && isUserScrollLocked() && !forceBottom;
+        const previousScrollTop = chatLog.scrollTop;
+        const shouldStickToBottom = !scrollLocked && (forceBottom || (preserveScroll && isChatNearBottom()));
+        const previousBottomOffset = chatLog.scrollHeight - chatLog.scrollTop;
+        const anchor = !shouldStickToBottom && preserveScroll ? currentScrollAnchor() : null;
+        const opened = openDetailKeys();
+        const visibleHistory = chatHistory.filter((message) => !message.transient);
+        const nextSignature = chatRenderSignature(visibleHistory);
+        if (preserveScroll && !forceBottom && nextSignature === lastRenderedChatSignature) {
+          return;
+        }
+        lastRenderedChatSignature = nextSignature;
+        chatLog.innerHTML = "";
+        const expandedStart = Math.max(0, visibleHistory.length - 4);
+        visibleHistory.forEach((message, index) => {
+          const collapsed = index < expandedStart;
+          const key = messageKey(message);
+          const item = document.createElement(collapsed ? "details" : "div");
+          item.className = `chat-message chat-${message.role}`;
+          item.dataset.scrollKey = key;
+          if (collapsed) {
+            item.dataset.detailKey = `${key}:thread`;
+            item.open = opened.has(item.dataset.detailKey);
+            const summary = document.createElement("summary");
+            summary.textContent = messageTitle(message);
+            item.appendChild(summary);
+          }
+          const bodyWrap = document.createElement("div");
+          bodyWrap.className = "chat-bubble";
+          if (!collapsed) {
+            const label = document.createElement("strong");
+            label.textContent = messageLabel(message.role);
+            bodyWrap.appendChild(label);
+          }
+          appendMessageBody(bodyWrap, message, key);
+          item.appendChild(bodyWrap);
+          for (const detail of item.querySelectorAll("details[data-detail-key]")) {
+            detail.open = opened.has(detail.dataset.detailKey);
+          }
+          chatLog.appendChild(item);
+        });
+        if (workingMessage) {
+          chatLog.appendChild(workingMessage);
+        }
+        if (shouldStickToBottom) {
+          scrollChatToBottom();
+        } else if (scrollLocked) {
+          setChatScrollTop(previousScrollTop);
+        } else if (preserveScroll) {
+          if (!restoreScrollAnchor(anchor)) {
+            setChatScrollTop(Math.max(0, chatLog.scrollHeight - previousBottomOffset));
+          }
+        }
+      };
+
+      const appendChat = (role, text) => {
+        role = ["user", "agent", "session"].includes(role) ? role : "agent";
+        const normalized = messageFingerprint(text);
+        if (looksLikeTranscriptFragment(role, text) || chatHistory.some((message) => message.role === role && messageFingerprint(message.text) === normalized)) {
+          return;
+        }
+        const message = {role, text: text.trim(), time: Date.now()};
+        chatHistory.push(message);
+        saveChatHistory();
+        saveChatMessageRemote(message);
+        renderChatHistory({forceBottom: role === "user"});
+      };
+
+      const showWorking = ({forceBottom = false, label = "Working", startedAt = 0} = {}) => {
+        const scrollLocked = isUserScrollLocked() && !forceBottom;
+        const shouldStickToBottom = !scrollLocked && (forceBottom || isChatNearBottom());
+        if (!workingMessage) {
+          workingStartedAt = startedAt || Date.now();
+          workingMessage = document.createElement("div");
+          workingMessage.className = "chat-message chat-agent chat-working";
+          const bodyWrap = document.createElement("div");
+          bodyWrap.className = "chat-bubble";
+          const label = document.createElement("strong");
+          label.textContent = "Agent";
+          const body = document.createElement("div");
+          body.className = "working-pill";
+          body.innerHTML = '<span class="chat-spinner"></span><span class="working-text">Working</span>';
+          bodyWrap.append(label, body);
+          workingMessage.appendChild(bodyWrap);
+        } else if (startedAt && (!workingStartedAt || startedAt < workingStartedAt)) {
+          workingStartedAt = startedAt;
+        }
+        const elapsed = Math.max(1, Math.round((Date.now() - workingStartedAt) / 1000));
+        const text = workingMessage.querySelector(".working-text");
+        if (text) {
+          text.textContent = label === "Working" ? `Working · ${elapsed}s` : label;
+        }
+        if (!workingMessage.isConnected) {
+          renderChatHistory({forceBottom: shouldStickToBottom});
+        }
+        if (shouldStickToBottom) {
+          scrollChatToBottom();
+        }
+      };
+
+      const clearWorking = () => {
+        if (workingTimer) {
+          clearTimeout(workingTimer);
+          workingTimer = null;
+        }
+        if (workingMessage) {
+          workingMessage.remove();
+          workingMessage = null;
+        }
+        clearPendingChat();
+      };
+
+      chatLog.addEventListener("wheel", lockUserScroll, {passive: true});
+      chatLog.addEventListener("touchstart", lockUserScroll, {passive: true});
+      chatLog.addEventListener("pointerdown", lockUserScroll);
+      chatLog.addEventListener("scroll", () => {
+        if (!programmaticScroll) {
+          lockUserScroll();
+        }
+      }, {passive: true});
+
+      const applyTranscriptState = (body) => {
+        renderTokenUsage(body.token_usage);
+        if (Array.isArray(body.messages)) {
+          const transcriptMessages = body.messages;
+          const latestTranscriptTime = transcriptMessages.reduce((latest, message) => Math.max(latest, Number(message.time || 0)), 0);
+          const transcriptFingerprints = new Set(
+            transcriptMessages.map((message) => {
+              const role = ["user", "agent", "session"].includes(message.role) ? message.role : "agent";
+              return `${role}\n${messageFingerprint(message.text || "")}`;
+            })
+          );
+          const pendingLocalUsers = chatHistory.filter((message) => {
+            if (message.id || message.role !== "user" || Number(message.time || 0) <= latestTranscriptTime) {
+              return false;
+            }
+            return !transcriptFingerprints.has(`user\n${messageFingerprint(message.text || "")}`);
+          });
+          chatHistory = mergeMessages(transcriptMessages, pendingLocalUsers);
+          saveChatHistory();
+          lastChatSnapshot = [...chatHistory].reverse().find((item) => item.role === "agent")?.text || lastChatSnapshot;
+        }
+        if (body.working) {
+          showWorking({
+            label: body.working_label || "Working",
+            startedAt: Number(body.working_since_ms || 0),
+          });
+          savePendingChat(lastChatSnapshot || String(body.reply || ""), Date.now());
+          chatStatus.textContent = "Agent working";
+          return;
+        }
+        if (body.final || body.reply || !loadPendingChat()) {
+          clearWorking();
+        }
+      };
+
+      const syncChatFromTranscript = async ({silent = true} = {}) => {
+        if (!silent) {
+          chatStatus.textContent = "Syncing";
+        }
+        try {
+          const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/chat-sync`);
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.detail || "Sync failed");
+          }
+          const body = await response.json();
+          applyTranscriptState(body);
+          renderChatHistory();
+          if (!body.working && !silent) {
+            chatStatus.textContent = "Updated";
+          }
+          return body;
+        } catch (error) {
+          if (!silent) {
+            chatStatus.textContent = error.message;
+          }
+        }
+        return null;
+      };
+
+      const scheduleTranscriptSync = () => {
+        if (transcriptSyncTimer) {
+          clearInterval(transcriptSyncTimer);
+        }
+        transcriptSyncTimer = setInterval(() => {
+          syncChatFromTranscript({silent: true});
+        }, 3500);
+      };
+
+      const cleanOutputLines = (text) => stripAnsi(text)
+          .split("\n")
+          .map((line) => line.trimEnd())
+          .filter((line) => line.trim());
+
+      const extractSessionMeta = (lines) => {
+        for (let index = lines.length - 1; index >= Math.max(0, lines.length - 12); index -= 1) {
+          const line = lines[index].trim();
+          if (/(gpt|codex|claude|gemini|sonnet|opus|haiku)/i.test(line) && /[·•]/.test(line) && /(~|\/)/.test(line)) {
+            lines.splice(index, 1);
+            return line;
+          }
+        }
+        return "";
+      };
+
+      const extractLastAgentReply = (text) => {
+        const lines = cleanOutputLines(text);
+        const meta = extractSessionMeta(lines);
+        if (meta) {
+          chatMeta.textContent = meta;
+        }
+
+        while (lines.length && (/^›/.test(lines[lines.length - 1].trim()) || /^◦/.test(lines[lines.length - 1].trim()))) {
+          lines.pop();
+        }
+
+        const workedIndex = lines.map((line) => line.includes("Worked for")).lastIndexOf(true);
+        if (workedIndex >= 0) {
+          let start = -1;
+          for (let index = workedIndex - 1; index >= 0; index -= 1) {
+            if (/─{6,}/.test(lines[index])) {
+              start = index;
+              break;
+            }
+          }
+          return lines.slice(start + 1, workedIndex).join("\n").trim();
+        }
+
+        let promptIndex = -1;
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          if (/^›/.test(lines[index].trim())) {
+            promptIndex = index;
+            break;
+          }
+        }
+        return lines.slice(promptIndex + 1).join("\n").trim();
+      };
+
+      const hasFinalAgentReport = (text) => {
+        const lines = cleanOutputLines(text);
+        const tail = lines.slice(-120);
+        const workedIndex = latestMatchingLine(tail, /Worked for/i);
+        const workingIndex = latestWorkingLine(tail);
+        return workedIndex >= 0 && workedIndex > workingIndex;
+      };
+
+      const isAgentWorking = (text) => {
+        const lines = cleanOutputLines(text);
+        const tail = lines.slice(-120);
+        const workedIndex = latestMatchingLine(tail, /Worked for/i);
+        const workingIndex = latestWorkingLine(tail);
+        return workingIndex >= 0 && workingIndex > workedIndex;
+      };
+
+      const latestWorkingLine = (lines) => latestMatchingLine(lines, /^\s*(?:[◦∙·○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\b/i);
+
+      const latestMatchingLine = (lines, pattern) => {
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          if (pattern.test(lines[index])) {
+            return index;
+          }
+        }
+        return -1;
+      };
+
+      const fetchChatOutput = async () => {
+        const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/output?lines=260`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || "Refresh failed");
+        }
+        return response.json();
+      };
+
+      const refreshChatOutput = async () => {
+        chatStatus.textContent = "Refreshing";
+        let body;
+        try {
+          body = await fetchChatOutput();
+        } catch (error) {
+          chatStatus.textContent = error.message;
+          return;
+        }
+        const reply = extractLastAgentReply(body.output || "");
+        const output = body.output || "";
+        if ((hasFinalAgentReport(output) || !isAgentWorking(output)) && reply && reply !== lastChatSnapshot) {
+          clearWorking();
+          appendChat("agent", reply);
+          lastChatSnapshot = reply;
+        }
+        chatStatus.textContent = "Updated";
+      };
+
+      const monitorAgentReply = (baseline, startedAt = Date.now()) => {
+        savePendingChat(baseline, startedAt);
+        showWorking({forceBottom: true, startedAt});
+        chatStatus.textContent = "Agent working";
+        workingTimer = setTimeout(async () => {
+          const body = await syncChatFromTranscript({silent: true});
+          if (body && !body.working) {
+            clearWorking();
+            chatStatus.textContent = "Done";
+            return;
+          }
+          monitorAgentReply(baseline, startedAt);
+        }, 1800);
+      };
+
+      loadChatHistory().then(() => {
+        const pending = loadPendingChat();
+        if (pending) {
+          monitorAgentReply(pending.baseline, Number(pending.startedAt));
+        } else {
+          chatStatus.textContent = "Loaded";
+        }
+        scheduleTranscriptSync();
+      });
+
+      chatForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const text = chatInput.value.trim();
+        if (!text) {
+          chatInput.focus();
+          return;
+        }
+        appendChat("user", text);
+        chatInput.value = "";
+        chatStatus.textContent = "Sending";
+        const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/send`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({text})
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          chatStatus.textContent = body.detail || "Send failed";
+          return;
+        }
+        chatStatus.textContent = "Sent";
+        const startedAt = Date.now();
+        savePendingChat(lastChatSnapshot, startedAt);
+        monitorAgentReply(lastChatSnapshot, startedAt);
+      });
+
+      chatRefresh.addEventListener("click", () => syncChatFromTranscript({silent: false}));
+    }
+
+    const terminalBand = document.querySelector(".terminal-band");
+    if (terminalBand) {
+      const terminalToggle = terminalBand.querySelector(".terminal-toggle");
+      const prefersCollapsed = window.matchMedia("(max-width: 820px)").matches;
+      if (!prefersCollapsed) {
+        terminalBand.classList.add("is-open");
+        terminalToggle.textContent = "Hide Terminal";
+      }
+      terminalToggle.addEventListener("click", () => {
+        terminalBand.classList.toggle("is-open");
+        terminalToggle.textContent = terminalBand.classList.contains("is-open") ? "Hide Terminal" : "Show Terminal";
+        window.dispatchEvent(new Event("resize"));
+      });
+    }
+
+    const terminal = document.querySelector(".web-terminal");
+    if (terminal) {
+      const session = terminal.dataset.session;
+      const node = terminal.dataset.node;
+      const screenEl = terminal.querySelector(".terminal-screen");
+      const status = terminal.querySelector(".terminal-status");
+      const term = new Terminal({
+        allowProposedApi: false,
+        convertEol: true,
+        cursorBlink: false,
+        disableStdin: true,
+        fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+        fontSize: 13,
+        lineHeight: 1.15,
+        fastScrollModifier: "alt",
+        fastScrollSensitivity: 5,
+        scrollSensitivity: 1.2,
+        scrollback: 10000,
+        theme: {
+          background: "#1e1e1e",
+          foreground: "#d4d4d4",
+          cursor: "#aeafad",
+          selectionBackground: "#264f78",
+          black: "#000000",
+          red: "#f14c4c",
+          green: "#23d18b",
+          yellow: "#f5f543",
+          blue: "#3b8eea",
+          magenta: "#d670d6",
+          cyan: "#29b8db",
+          white: "#e5e5e5",
+          brightBlack: "#666666",
+          brightRed: "#f14c4c",
+          brightGreen: "#23d18b",
+          brightYellow: "#f5f543",
+          brightBlue: "#3b8eea",
+          brightMagenta: "#d670d6",
+          brightCyan: "#29b8db",
+          brightWhite: "#ffffff"
+        }
+      });
+      const fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(screenEl);
+      let socket = null;
+      let reconnectTimer = null;
+      let keepaliveTimer = null;
+      let reconnectAttempts = 0;
+      let closedByPage = false;
+      let terminalPaused = false;
+      let transport = "websocket";
+      let httpTerminalId = "";
+      let httpPolling = false;
+      const preferHttpTerminal = window.matchMedia("(max-width: 820px)").matches;
+
+      const sendTerminalMessage = (payload) => {
+        if (transport === "websocket" && socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(payload));
+          return true;
+        }
+        if (transport === "http" && httpTerminalId) {
+          if (payload.type === "resize") {
+            fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}/resize`, {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({cols: payload.cols, rows: payload.rows})
+            }).catch(() => {});
+            return true;
+          }
+        }
+        return false;
+      };
+
+      const fit = () => {
+        fitAddon.fit();
+        sendTerminalMessage({type: "resize", cols: term.cols, rows: term.rows});
+      };
+      fit();
+      window.addEventListener("resize", fit);
+      screenEl.addEventListener("click", () => term.blur());
+      let wheelRemainder = 0;
+      screenEl.addEventListener("wheel", (event) => {
+        if (event.ctrlKey) {
+          return;
+        }
+        const sampleRow = screenEl.querySelector(".xterm-rows > div");
+        const lineHeight = sampleRow ? sampleRow.getBoundingClientRect().height || 16 : 16;
+        const pageLines = Math.max(1, Math.floor(term.rows * 0.85));
+        let lines = 0;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+          lines = event.deltaY;
+        } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+          lines = event.deltaY * pageLines;
+        } else {
+          wheelRemainder += event.deltaY / lineHeight;
+          lines = wheelRemainder > 0 ? Math.floor(wheelRemainder) : Math.ceil(wheelRemainder);
+          wheelRemainder -= lines;
+        }
+        if (lines !== 0) {
+          term.scrollLines(lines);
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      }, {passive: false});
+
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const terminalUrl = `${protocol}//${window.location.host}/ws/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/terminal`;
+
+      const clearKeepalive = () => {
+        if (keepaliveTimer) {
+          clearInterval(keepaliveTimer);
+          keepaliveTimer = null;
+        }
+      };
+
+      const scheduleReconnect = (event) => {
+        if (closedByPage || terminalPaused || reconnectTimer) {
+          return;
+        }
+        clearKeepalive();
+        if (reconnectAttempts >= 2) {
+          startHttpTerminal();
+          return;
+        }
+        const reason = event && event.reason ? ` · ${event.reason}` : "";
+        const code = event && event.code ? event.code : "closed";
+        const delay = Math.min(10000, 1000 * Math.max(1, 2 ** reconnectAttempts));
+        reconnectAttempts += 1;
+        status.textContent = `Disconnected (${code})${reason} · reconnecting in ${Math.round(delay / 1000)}s`;
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connectTerminal();
+        }, delay);
+      };
+
+      const connectTerminal = () => {
+        if (terminalPaused || transport !== "websocket") {
+          return;
+        }
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        status.textContent = reconnectAttempts ? "Reconnecting" : "Connecting";
+        socket = new WebSocket(terminalUrl);
+        socket.binaryType = "arraybuffer";
+
+        socket.addEventListener("open", () => {
+          reconnectAttempts = 0;
+          status.textContent = "Connected";
+          fit();
+          clearKeepalive();
+          keepaliveTimer = setInterval(() => {
+            sendTerminalMessage({type: "ping", time: Date.now()});
+          }, 20000);
+        });
+        socket.addEventListener("message", (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            term.write(new Uint8Array(event.data));
+          } else {
+            term.write(event.data);
+          }
+        });
+        socket.addEventListener("close", scheduleReconnect);
+        socket.addEventListener("error", () => {
+          status.textContent = "Terminal connection error";
+        });
+      };
+
+      const startHttpTerminal = async () => {
+        if (terminalPaused || transport === "http") {
+          return;
+        }
+        transport = "http";
+        clearKeepalive();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        status.textContent = "Switching to HTTP terminal";
+        try {
+          const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/terminal-http`, {
+            method: "POST"
+          });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            status.textContent = body.detail || "HTTP terminal failed";
+            transport = "websocket";
+            return;
+          }
+          const body = await response.json();
+          httpTerminalId = body.terminal_id;
+          status.textContent = "Connected · HTTP fallback";
+          fit();
+          pollHttpTerminal();
+        } catch {
+          status.textContent = "HTTP terminal connection error";
+          transport = "websocket";
+        }
+      };
+
+      const writeBase64Chunk = (chunk) => {
+        const raw = atob(chunk);
+        const bytes = new Uint8Array(raw.length);
+        for (let index = 0; index < raw.length; index += 1) {
+          bytes[index] = raw.charCodeAt(index);
+        }
+        term.write(bytes);
+      };
+
+      const pollHttpTerminal = async () => {
+        if (!httpTerminalId || httpPolling) {
+          return;
+        }
+        httpPolling = true;
+        while (!closedByPage && transport === "http" && httpTerminalId) {
+          try {
+            const response = await fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}/output?timeout=1.5`);
+            if (!response.ok) {
+              status.textContent = "HTTP terminal disconnected";
+              break;
+            }
+            const body = await response.json();
+            for (const chunk of body.chunks || []) {
+              writeBase64Chunk(chunk);
+            }
+            if (body.closed) {
+              status.textContent = "HTTP terminal closed";
+              break;
+            }
+          } catch {
+            status.textContent = "HTTP terminal reconnecting";
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        }
+        httpPolling = false;
+      };
+
+      const connectPreferredTerminal = () => {
+        terminalPaused = false;
+        if (preferHttpTerminal) {
+          startHttpTerminal();
+        } else {
+          connectTerminal();
+        }
+      };
+
+      const pauseTerminal = () => {
+        terminalPaused = true;
+        clearKeepalive();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (socket) {
+          socket.close(1000, "terminal collapsed");
+          socket = null;
+        }
+        if (httpTerminalId) {
+          fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}`, {method: "DELETE", keepalive: true}).catch(() => {});
+          httpTerminalId = "";
+        }
+        transport = "websocket";
+        httpPolling = false;
+        reconnectAttempts = 0;
+        status.textContent = "Collapsed · terminal paused";
+      };
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && !terminalPaused && (!socket || socket.readyState === WebSocket.CLOSED)) {
+          connectPreferredTerminal();
+        }
+      });
+
+      window.addEventListener("beforeunload", () => {
+        closedByPage = true;
+        clearKeepalive();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+        if (socket) {
+          socket.close(1000, "page unload");
+        }
+        if (httpTerminalId) {
+          fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}`, {method: "DELETE", keepalive: true}).catch(() => {});
+        }
+      });
+
+      const parentTerminalBand = terminal.closest(".terminal-band");
+      const parentTerminalToggle = parentTerminalBand ? parentTerminalBand.querySelector(".terminal-toggle") : null;
+      if (parentTerminalBand && !parentTerminalBand.classList.contains("is-open")) {
+        pauseTerminal();
+      } else {
+        connectPreferredTerminal();
+      }
+      if (parentTerminalToggle) {
+        parentTerminalToggle.addEventListener("click", () => {
+          if (parentTerminalBand.classList.contains("is-open")) {
+            setTimeout(() => {
+              fit();
+              connectPreferredTerminal();
+            }, 0);
+          } else {
+            pauseTerminal();
+          }
+        });
+      }
+    }
+  </script>
+{% endblock %}

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login · StarAgent</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+  </head>
+  <body class="login-page">
+    <main class="login-shell">
+      <form class="login-card" method="post" action="/login">
+        <h1>StarAgent</h1>
+        <p>Enter the dashboard token.</p>
+        {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <label>
+          <span>Login Token</span>
+          <input name="token" type="password" autocomplete="current-password" autofocus>
+        </label>
+        <button type="submit">Login</button>
+      </form>
+    </main>
+  </body>
+</html>

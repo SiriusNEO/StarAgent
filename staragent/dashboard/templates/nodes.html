@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}Nodes · StarAgent{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <div class="page-title">
+      <h1>Nodes</h1>
+      <p>Manage local, LAN, and remote agent nodes.</p>
+    </div>
+    <div class="dashboard-stats dashboard-stats-nodes">
+      <div class="stat-group">
+        <span class="stat-group-title">Nodes</span>
+        <div class="stat-row">
+          <div><strong>{{ stats.nodes }}</strong><span>Total</span></div>
+          <div><strong>{{ stats.connected_nodes }}</strong><span>Online</span></div>
+          <div><strong>{{ stats.disconnected_nodes }}</strong><span>Offline</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="section-title">
+      <h2>Dependencies</h2>
+      <span>tmux required · Tailscale optional</span>
+    </div>
+    <div class="dependency-panel">
+      <div class="dependency-status">Checking dependencies...</div>
+      <div class="dependency-list"></div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="section-title">
+      <h2>Nodes</h2>
+      <span>{{ stats.connected_nodes }} / {{ stats.nodes }} online</span>
+    </div>
+    <div class="tailscale-dashboard" hidden>
+      <div class="tailscale-summary">
+        <div>
+          <strong>Tailnet</strong>
+          <span class="tailscale-tailnet">Checking Hub Tailscale...</span>
+        </div>
+        <div>
+          <strong>Hub IP</strong>
+          <span class="tailscale-hub-ip">-</span>
+        </div>
+        <div>
+          <strong>Peers</strong>
+          <span class="tailscale-peer-count">-</span>
+        </div>
+        <button type="button" class="tailscale-refresh">Refresh</button>
+      </div>
+      <div class="tailscale-peers"></div>
+    </div>
+    <form class="node-form">
+      <div class="node-grid">
+        <label>
+          <span>Scale</span>
+          <select name="mode">
+            <option value="lan">LAN</option>
+            <option value="remote">Remote</option>
+          </select>
+        </label>
+        <label>
+          <span>Name</span>
+          <input name="name" placeholder="w1" autocomplete="off">
+        </label>
+        <label>
+          <span>Node or URL</span>
+          <input name="url" placeholder="192.168.1.20, 100.x.x.x, or http://node:8081" autocomplete="off">
+        </label>
+        <button type="submit">Add Node</button>
+      </div>
+      <p class="form-hint">Run a StarAgent node on the target machine, then add the endpoint that the Hub can reach.</p>
+      <div class="node-status" aria-live="polite"></div>
+    </form>
+    <div class="node-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Mode</th>
+            <th>Status</th>
+            <th>Sessions</th>
+            <th>Endpoint</th>
+            <th>Last error</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for node in node_views %}
+            <tr>
+              <td data-label="Node"><strong>{{ node.name }}</strong></td>
+              <td data-label="Mode"><span class="pill mode-{{ node.mode }}">{{ node.mode }}</span></td>
+              <td data-label="Status"><span class="pill node-status-{{ node.status }}">{{ node.status }}</span></td>
+              <td data-label="Sessions">{{ node.session_count }}</td>
+              <td data-label="Endpoint"><code class="inline-command">{{ node.endpoint }}</code></td>
+              <td data-label="Last error">{{ node.error or "-" }}</td>
+              <td data-label="Actions">
+                {% if node.is_removable %}
+                  <button type="button" class="node-remove" data-node="{{ node.name }}">Remove</button>
+                {% else %}
+                  <span class="muted-cell">Built in</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    const dependencyPanel = document.querySelector(".dependency-panel");
+    if (dependencyPanel) {
+      const status = dependencyPanel.querySelector(".dependency-status");
+      const list = dependencyPanel.querySelector(".dependency-list");
+      const rowFor = (item) => {
+        const row = document.createElement("div");
+        row.className = "dependency-row";
+        const info = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = item.label;
+        const detail = document.createElement("span");
+        detail.textContent = item.installed ? (item.version || "installed") : item.install_command;
+        const note = document.createElement("span");
+        note.className = "dependency-note";
+        note.textContent = `${item.required ? "Required" : "Optional"} · ${item.note || ""}`.trim();
+        info.append(title, detail);
+        if (note.textContent) {
+          info.appendChild(note);
+        }
+        const pill = document.createElement("span");
+        const state = item.installed ? "connected" : (item.required ? "disconnected" : "optional");
+        pill.className = `pill node-status-${state}`;
+        pill.textContent = item.installed ? "installed" : (item.required ? "missing" : "optional");
+        row.append(info, pill);
+        return row;
+      };
+      const renderDependencies = (items) => {
+        list.innerHTML = "";
+        for (const item of items) {
+          list.appendChild(rowFor(item));
+        }
+      };
+      const checkDependencies = async () => {
+        const response = await fetch("/api/dependencies");
+        const body = await response.json();
+        const items = body.dependencies || [];
+        renderDependencies(items);
+        const missingRequired = items.filter((item) => item.required && !item.installed);
+        const missingOptional = items.filter((item) => !item.required && !item.installed);
+        if (!missingRequired.length) {
+          status.textContent = missingOptional.length
+            ? "Required dependencies are installed. Tailscale is optional for LAN-only setups."
+            : "All dependencies are installed.";
+          return;
+        }
+        status.textContent = `Installing ${missingRequired.map((item) => item.label).join(", ")}...`;
+        const ensure = await fetch("/api/dependencies/ensure", {method: "POST"});
+        const ensured = await ensure.json();
+        const next = ensured.dependencies || [];
+        renderDependencies(next);
+        const failed = next.filter((item) => item.required && !item.installed);
+        status.textContent = failed.length
+          ? `Install failed for ${failed.map((item) => item.label).join(", ")}. Run the shown command manually.`
+          : "Dependencies installed.";
+      };
+      checkDependencies().catch((error) => {
+        status.textContent = error.message || "Dependency check failed.";
+      });
+    }
+
+    const nodeForm = document.querySelector(".node-form");
+    if (nodeForm) {
+      const status = nodeForm.querySelector(".node-status");
+      nodeForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = new FormData(nodeForm);
+        const payload = {
+          mode: String(form.get("mode") || "lan").trim(),
+          name: String(form.get("name") || "").trim(),
+          url: String(form.get("url") || "").trim()
+        };
+        if (!payload.name || !payload.url) {
+          status.textContent = "Name and node are required.";
+          return;
+        }
+        status.textContent = "Adding...";
+        try {
+          await addNode(payload, status);
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+    }
+
+    async function addNode(payload, statusEl) {
+      const response = await fetch("/api/nodes", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "Add node failed.");
+      }
+      if (statusEl) {
+        statusEl.textContent = "Added.";
+      }
+      window.location.reload();
+    }
+
+    const tailscaleDashboard = document.querySelector(".tailscale-dashboard");
+    if (tailscaleDashboard) {
+      const tailnet = tailscaleDashboard.querySelector(".tailscale-tailnet");
+      const hubIp = tailscaleDashboard.querySelector(".tailscale-hub-ip");
+      const peerCount = tailscaleDashboard.querySelector(".tailscale-peer-count");
+      const refresh = tailscaleDashboard.querySelector(".tailscale-refresh");
+      const peersEl = tailscaleDashboard.querySelector(".tailscale-peers");
+
+      const loadTailscale = async () => {
+        tailscaleDashboard.hidden = false;
+        tailnet.textContent = "Checking Hub Tailscale...";
+        hubIp.textContent = "-";
+        peerCount.textContent = "-";
+        peersEl.innerHTML = "";
+        const response = await fetch("/api/tailscale/hub");
+        const body = await response.json();
+        if (!body.available) {
+          tailnet.textContent = body.error || `State: ${body.backend_state || "unavailable"}`;
+          peersEl.innerHTML = '<div class="explorer-empty">Hub Tailscale is not running.</div>';
+          return;
+        }
+        const self = body.self || {};
+        const peers = body.peers || [];
+        tailnet.textContent = body.tailnet || body.magic_dns_suffix || "Running";
+        hubIp.textContent = (self.addresses || [])[0] || self.preferred_node || "-";
+        peerCount.textContent = `${peers.filter((peer) => peer.online).length} / ${peers.length} online`;
+        if (!peers.length) {
+          peersEl.innerHTML = '<div class="explorer-empty">No tailnet peers found.</div>';
+          return;
+        }
+        for (const peer of peers) {
+          peersEl.appendChild(tailscalePeerRow(peer));
+        }
+      };
+
+      const tailscalePeerRow = (peer) => {
+        const row = document.createElement("div");
+        row.className = "tailscale-peer";
+        const info = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = peer.name || peer.preferred_node || "unknown";
+        const meta = document.createElement("span");
+        meta.textContent = [
+          peer.preferred_node,
+          peer.os,
+          peer.relay ? `relay ${peer.relay}` : ""
+        ].filter(Boolean).join(" · ");
+        info.append(name, meta);
+        const state = document.createElement("span");
+        state.className = `pill node-status-${peer.online ? "connected" : "disconnected"}`;
+        state.textContent = peer.online ? "online" : "offline";
+        const endpoint = document.createElement("code");
+        endpoint.className = "inline-command";
+        endpoint.textContent = peer.endpoint || "";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "Add Remote";
+        button.disabled = !peer.preferred_node;
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          button.textContent = "Adding";
+          try {
+            await addNode(
+              {mode: "remote", name: peer.name || peer.preferred_node, url: peer.preferred_node},
+              document.querySelector(".node-status")
+            );
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = "Add Remote";
+            document.querySelector(".node-status").textContent = error.message;
+          }
+        });
+        row.append(info, state, endpoint, button);
+        return row;
+      };
+
+      refresh.addEventListener("click", loadTailscale);
+      loadTailscale().catch((error) => {
+        tailscaleDashboard.hidden = false;
+        tailnet.textContent = error.message || "Tailscale check failed.";
+      });
+    }
+
+    for (const button of document.querySelectorAll(".node-remove")) {
+      button.addEventListener("click", async () => {
+        const name = button.dataset.node;
+        if (!confirm(`Remove node "${name}"?`)) {
+          return;
+        }
+        button.disabled = true;
+        const response = await fetch(`/api/nodes/${encodeURIComponent(name)}`, {method: "DELETE"});
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          alert(body.detail || "Remove node failed.");
+          button.disabled = false;
+          return;
+        }
+        window.location.reload();
+      });
+    }
+  </script>
+{% endblock %}

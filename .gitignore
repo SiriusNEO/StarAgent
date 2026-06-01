@@ -1,0 +1,8 @@
+.agents/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.conda/
+.staragent/
+.pytest_cache/

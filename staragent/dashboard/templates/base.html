@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}StarAgent{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+    <script src="{{ url_for('static', path='explorer.js') }}"></script>
+    {% block head_extra %}{% endblock %}
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-lockup">
+          <div class="theme-menu-wrap">
+            <button type="button" class="brand-theme-button" aria-expanded="false" aria-label="Change theme color" title="Change theme color">
+              <span class="theme-swatch" aria-hidden="true"></span>
+              <span class="brand">StarAgent</span>
+            </button>
+            <div class="theme-menu" hidden>
+              <button type="button" class="theme-option" data-theme="#660874" style="--theme-color: #660874"><span></span><strong>Purple</strong></button>
+              <button type="button" class="theme-option" data-theme="#315efb" style="--theme-color: #315efb"><span></span><strong>Blue</strong></button>
+              <button type="button" class="theme-option" data-theme="#167a46" style="--theme-color: #167a46"><span></span><strong>Green</strong></button>
+              <button type="button" class="theme-option" data-theme="#b45309" style="--theme-color: #b45309"><span></span><strong>Amber</strong></button>
+              <button type="button" class="theme-option" data-theme="#b42318" style="--theme-color: #b42318"><span></span><strong>Red</strong></button>
+            </div>
+          </div>
+        </div>
+        <nav class="app-nav" aria-label="Primary navigation">
+          <a class="{{ 'is-active' if request.url.path.startswith('/sessions') or request.url.path.startswith('/nodes/') else '' }}" href="/sessions">Sessions</a>
+          <a class="{{ 'is-active' if request.url.path.startswith('/nodes') and not request.url.path.startswith('/nodes/') else '' }}" href="/nodes">Nodes</a>
+        </nav>
+      </div>
+      <nav class="utility-nav">
+        <form class="logout-form" method="post" action="/logout">
+          <button type="submit">Logout</button>
+        </form>
+      </nav>
+    </header>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+    <script>
+      (() => {
+        const storageKey = "staragent.theme.accent";
+        const themeButton = document.querySelector(".brand-theme-button");
+        const menu = document.querySelector(".theme-menu");
+        if (!themeButton || !menu) {
+          return;
+        }
+
+        const themes = {
+          "#660874": {hover: "#52065d", soft: "#f5edf7", border: "#dfc7e5"},
+          "#315efb": {hover: "#2448c4", soft: "#edf3ff", border: "#c9d7ff"},
+          "#167a46": {hover: "#105f36", soft: "#e8f5ee", border: "#badccb"},
+          "#b45309": {hover: "#8c4004", soft: "#fff4db", border: "#edd28e"},
+          "#b42318": {hover: "#912018", soft: "#fff0ed", border: "#f0c5bd"},
+        };
+        const applyTheme = (hex, persist = false) => {
+          const theme = themes[hex];
+          if (!theme) {
+            return;
+          }
+          const root = document.documentElement;
+          root.style.setProperty("--accent", hex);
+          root.style.setProperty("--accent-hover", theme.hover);
+          root.style.setProperty("--accent-soft", theme.soft);
+          root.style.setProperty("--accent-border", theme.border);
+          for (const option of menu.querySelectorAll(".theme-option")) {
+            option.classList.toggle("is-active", option.dataset.theme === hex);
+          }
+          if (persist) {
+            localStorage.setItem(storageKey, hex);
+          }
+        };
+
+        const saved = localStorage.getItem(storageKey);
+        if (themes[saved]) {
+          applyTheme(saved);
+        }
+
+        const closeMenu = () => {
+          menu.hidden = true;
+          themeButton.setAttribute("aria-expanded", "false");
+        };
+        const openMenu = () => {
+          menu.hidden = false;
+          themeButton.setAttribute("aria-expanded", "true");
+        };
+
+        themeButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          menu.hidden ? openMenu() : closeMenu();
+        });
+        menu.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const option = event.target.closest(".theme-option");
+          if (!option) {
+            return;
+          }
+          applyTheme(option.dataset.theme, true);
+          closeMenu();
+        });
+        document.addEventListener("click", closeMenu);
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            closeMenu();
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

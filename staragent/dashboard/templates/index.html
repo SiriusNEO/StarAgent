@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+{% block title %}Sessions · StarAgent{% endblock %}
+{% block content %}
+  <section class="page-head">
+    <div class="page-title">
+      <h1>Sessions</h1>
+      <p>Manage live tmux sessions across local, LAN, and remote nodes.</p>
+    </div>
+    <div class="dashboard-stats dashboard-stats-sessions">
+      <div class="stat-group">
+        <span class="stat-group-title">Sessions</span>
+        <div class="stat-row">
+          <div><strong>{{ stats.total }}</strong><span>Total</span></div>
+          <div><strong>{{ stats.agent }}</strong><span>Agent</span></div>
+          <div><strong>{{ stats.system }}</strong><span>System</span></div>
+          <div><strong>{{ stats.active }}</strong><span>Active</span></div>
+          <div><strong>{{ stats.idle }}</strong><span>Idle</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="section-title">
+      <h2>All Sessions</h2>
+      <span>{{ views|length }} sessions</span>
+    </div>
+    <div class="table-wrap sessions-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Agent</th>
+            <th>Status</th>
+            <th>Working Dir</th>
+            <th>Last active</th>
+            <th>Actions</th>
+            <th>Task</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for view in views %}
+            <tr onclick="location.href='/nodes/{{ view.node_id }}/sessions/{{ view.name }}'">
+              <td>{{ view.node_id }}</td>
+              <td><strong>{{ view.name }}</strong></td>
+              <td><span class="pill mode-{{ view.session_type }}">{{ view.session_type }}</span></td>
+              <td>{{ "N/A" if view.session_type == "system" else view.agent }}</td>
+              <td><span class="pill status-{{ view.status }}">{{ view.status }}</span></td>
+              <td>
+                <div class="working-dir" title="{{ view.repo or '-' }}">{{ view.repo or "-" }}</div>
+                {% if view.branch %}
+                  <div class="working-branch">{{ view.branch }}</div>
+                {% endif %}
+              </td>
+              <td>{{ relative_time(view.last_updated) }}</td>
+              <td onclick="event.stopPropagation()">
+                {% if view.session_type == "agent" and (view.status_report.source if view.status_report else "") != "adopted" %}
+                  <button type="button" class="danger-button stop-session" data-node="{{ view.node_id }}" data-session="{{ view.name }}">Stop</button>
+                {% elif (view.status_report.source if view.status_report else "") == "adopted" %}
+                  <span class="muted-cell">Adopted</span>
+                {% else %}
+                  <span class="muted-cell">Read only</span>
+                {% endif %}
+              </td>
+              <td>{{ view.task }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="9" class="empty">No tmux sessions found on configured nodes.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="section-title">
+      <h2>Create Worker</h2>
+      <span>tmux new-session</span>
+    </div>
+    <form class="worker-form">
+      <div class="worker-layout">
+        <div class="worker-fields">
+          <label>
+            <span>Node</span>
+            <select name="node">
+              {% for node in node_views %}
+                <option value="{{ node.name }}">{{ node.name }} · {{ node.mode }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span>Name</span>
+            <input name="name" placeholder="codex-staragent-1" autocomplete="off">
+          </label>
+          <label>
+            <span>Command Preset</span>
+            <select name="preset">
+              {% for preset in command_presets %}
+                <option value="{{ preset.command }}">{{ preset.label }}</option>
+              {% endfor %}
+              <option value="">Custom</option>
+            </select>
+          </label>
+          <label class="command-field">
+            <span>Coding CLI Command</span>
+            <input name="command" value="{{ command_presets[0].command }}" autocomplete="off">
+          </label>
+          <label>
+            <span>Working Directory</span>
+            <input name="cwd" value="{{ initial_explorer_path }}" autocomplete="off">
+          </label>
+          <div class="send-actions">
+            <span class="worker-status" aria-live="polite"></span>
+            <button type="submit">Start</button>
+          </div>
+        </div>
+        <div class="explorer worker-explorer">
+          <div class="explorer-head">
+            <div>
+              <strong>Working Directory</strong>
+              <span class="explorer-selected">Choose a project folder</span>
+            </div>
+            <div class="explorer-actions">
+              <button type="button" class="explorer-new-folder">New Folder</button>
+              <button type="button" class="explorer-refresh" aria-label="Refresh directory">Refresh</button>
+            </div>
+          </div>
+          <div class="explorer-toolbar">
+            <div class="explorer-roots"></div>
+            <input class="explorer-filter" placeholder="Filter folders" autocomplete="off">
+          </div>
+          <div class="explorer-path" aria-label="Current path"></div>
+          <div class="explorer-list"></div>
+        </div>
+      </div>
+    </form>
+  </section>
+
+  <section class="band">
+    <div class="section-title">
+      <h2>Adopt Existing Tmux</h2>
+      <span>register a live CLI session</span>
+    </div>
+    <form class="adopt-form">
+      <div class="node-grid">
+        <label>
+          <span>Node</span>
+          <select name="node">
+            {% for node in node_views %}
+              <option value="{{ node.name }}">{{ node.name }} · {{ node.mode }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Tmux Session</span>
+          <select name="name">
+            <option value="">Scan first</option>
+          </select>
+        </label>
+        <button type="button" class="adopt-scan">Scan</button>
+        <button type="submit">Adopt</button>
+      </div>
+      <div class="adopt-list"></div>
+      <div class="adopt-status" aria-live="polite"></div>
+    </form>
+  </section>
+
+  <script>
+    for (const button of document.querySelectorAll(".stop-session")) {
+      button.addEventListener("click", async () => {
+        const name = button.dataset.session;
+        const node = button.dataset.node;
+        if (!confirm(`Stop tmux session "${name}"?`)) {
+          return;
+        }
+        button.disabled = true;
+        button.textContent = "Stopping";
+        const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(name)}`, {method: "DELETE"});
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          alert(body.detail || "Stop failed.");
+          button.disabled = false;
+          button.textContent = "Stop";
+          return;
+        }
+        window.location.reload();
+      });
+    }
+
+    const workerForm = document.querySelector(".worker-form");
+    if (workerForm) {
+      const status = workerForm.querySelector(".worker-status");
+      const cwdInput = workerForm.querySelector('input[name="cwd"]');
+      const nodeSelect = workerForm.querySelector('select[name="node"]');
+      const commandInput = workerForm.querySelector('input[name="command"]');
+      const presetSelect = workerForm.querySelector('select[name="preset"]');
+      const explorer = workerForm.querySelector(".explorer");
+
+      presetSelect.addEventListener("change", () => {
+        if (presetSelect.value) {
+          commandInput.value = presetSelect.value;
+        }
+        commandInput.focus();
+      });
+      commandInput.addEventListener("input", () => {
+        if (commandInput.value !== presetSelect.value) {
+          presetSelect.value = "";
+        }
+      });
+
+      const workerExplorer = window.StarAgentExplorer.mount(explorer, {
+        node: () => nodeSelect.value,
+        getPath: () => cwdInput.value,
+        setPath: (path) => {
+          cwdInput.value = path;
+        },
+        includeFiles: false,
+        allowCreateDirectory: true,
+        loadingText: "Loading folders...",
+        emptyText: "No matching folders.",
+      });
+
+      cwdInput.addEventListener("change", () => workerExplorer.load(cwdInput.value));
+      nodeSelect.addEventListener("change", () => workerExplorer.load(cwdInput.value));
+      workerExplorer.load(cwdInput.value);
+
+      workerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const form = new FormData(workerForm);
+        const payload = {
+          name: String(form.get("name") || "").trim(),
+          node: String(form.get("node") || "local").trim(),
+          cwd: String(form.get("cwd") || "").trim(),
+          command: String(form.get("command") || "").trim()
+        };
+        if (!payload.name || !payload.cwd || !payload.command) {
+          status.textContent = "Name, working directory, and command are required.";
+          return;
+        }
+        status.textContent = "Starting...";
+        const response = await fetch("/api/workers", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          status.textContent = body.detail || "Start failed.";
+          return;
+        }
+        status.textContent = "Started.";
+        setTimeout(() => window.location.reload(), 500);
+      });
+    }
+
+    const adoptForm = document.querySelector(".adopt-form");
+    if (adoptForm) {
+      const status = adoptForm.querySelector(".adopt-status");
+      const sessionSelect = adoptForm.querySelector('select[name="name"]');
+      const nodeSelect = adoptForm.querySelector('select[name="node"]');
+      const list = adoptForm.querySelector(".adopt-list");
+      const scanButton = adoptForm.querySelector(".adopt-scan");
+
+      async function scanAdoptableSessions() {
+        status.textContent = "Scanning...";
+        sessionSelect.innerHTML = '<option value="">Scanning...</option>';
+        list.innerHTML = "";
+        const response = await fetch(`/api/adoptable-sessions?node=${encodeURIComponent(nodeSelect.value)}`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          status.textContent = body.detail || "Scan failed.";
+          sessionSelect.innerHTML = '<option value="">Scan failed</option>';
+          return;
+        }
+        const data = await response.json();
+        const sessions = data.sessions || [];
+        sessionSelect.innerHTML = "";
+        if (!sessions.length) {
+          sessionSelect.innerHTML = '<option value="">No CLI tmux sessions</option>';
+          list.innerHTML = '<div class="explorer-empty">No adoptable Codex, Claude, Gemini, or OpenCode tmux sessions found.</div>';
+          status.textContent = "No sessions found.";
+          return;
+        }
+        for (const item of sessions) {
+          const option = document.createElement("option");
+          option.value = item.name;
+          option.textContent = `${item.name} · ${item.cli} · ${item.cwd || "-"}`;
+          sessionSelect.appendChild(option);
+
+          const row = document.createElement("button");
+          row.type = "button";
+          row.className = "directory-row";
+          row.innerHTML = `<span>${item.cli}</span><strong>${item.name}</strong><small>${item.cwd || ""}</small>`;
+          row.addEventListener("click", () => {
+            sessionSelect.value = item.name;
+          });
+          list.appendChild(row);
+        }
+        status.textContent = `${sessions.length} session(s) found.`;
+      }
+
+      scanButton.addEventListener("click", scanAdoptableSessions);
+      nodeSelect.addEventListener("change", scanAdoptableSessions);
+      adoptForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = {
+          node: nodeSelect.value,
+          name: sessionSelect.value
+        };
+        if (!payload.name) {
+          status.textContent = "Choose a tmux session first.";
+          return;
+        }
+        status.textContent = "Adopting...";
+        const response = await fetch("/api/adopt", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          status.textContent = body.detail || "Adopt failed.";
+          return;
+        }
+        status.textContent = "Adopted.";
+        setTimeout(() => window.location.reload(), 500);
+      });
+      scanAdoptableSessions();
+    }
+  </script>
+{% endblock %}
