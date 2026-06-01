@@ -6,9 +6,11 @@
 
 > ⚠️ This project is currently intended for personal use and is under active development. A stable version will be released later.
 
+> ⚠️ This project was primarily built with vibe coding and may contain potential bugs. Please keep this in mind before using it.
+
 StarAgent is an **agent multiplexer** for managing coding agent sessions across machines in a unified dashboard. It reflects my own best practices for using multiple agents:
 
-**We just need a lightweight tmux wrapper for Codex / Claude Code that supports cross-machine connections and can be accessed from any of my devices.**
+> **We just need a lightweight tmux wrapper for Codex / Claude Code that supports cross-machine connections and can be accessed from any of my devices.**
 
 ## Design Principles
 
@@ -69,3 +71,7 @@ Expose `127.0.0.1:8081` through your network layer, then add that reachable endp
 ## Acknowledgements
 
 StarAgent's CLI transcript parsing is adapted from ideas and code in [botmux](https://github.com/deepcoldy/botmux). The dashboard visual style is inspired by the [Tailscale admin console](https://tailscale.com/). The web terminal uses [xterm.js](https://xtermjs.org/), and file preview highlighting uses [highlight.js](https://highlightjs.org/).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
