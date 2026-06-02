@@ -79,7 +79,7 @@ The Hub adds node management and browser authentication.
 
 ## Chat and Terminal
 
-Terminal is a live tmux PTY view. It is the ground truth display.
+Terminal is a live tmux PTY view. It is the ground truth display and accepts direct keyboard input.
 
 Chat is a structured view derived from the tmux transcript. StarAgent parses the captured pane output with CLI-specific transcript parsers, then maps user and agent turns into the chat UI. Chat sends input through tmux, so messages also appear in the real terminal.
 

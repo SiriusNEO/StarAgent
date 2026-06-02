@@ -16,10 +16,15 @@ from staragent.dashboard.app import (
     file_preview_payload,
     http_terminals,
 )
+from staragent.dashboard.app import create_app as create_dashboard_app
 from staragent.main import ensure_hub_auth_for_bind, is_loopback_bind
 from staragent.node.app import create_app
 from staragent.paths import state_dir
-from staragent.pty_terminal import parse_client_message
+from staragent.pty_terminal import (
+    MAX_TERMINAL_INPUT_BYTES,
+    TerminalOutputFilter,
+    parse_client_message,
+)
 
 
 def test_parse_client_message_rejects_invalid_json() -> None:
@@ -30,6 +35,16 @@ def test_parse_client_message_rejects_invalid_json() -> None:
 def test_parse_client_message_rejects_oversized_input() -> None:
     message = json.dumps({"type": "input", "data": "x" * (65 * 1024)})
     assert parse_client_message(message) == ("unknown", None)
+
+
+def test_terminal_output_filter_keeps_scrollback_buffer() -> None:
+    output_filter = TerminalOutputFilter()
+    chunks = [
+        b"history\r\n\x1b[?10",
+        b"49h\x1b[22;0;0tlive\r\n\x1b[3J\x1bc",
+    ]
+    filtered = b"".join(output_filter.feed(chunk) for chunk in chunks) + output_filter.flush()
+    assert filtered == b"history\r\nlive\r\n"
 
 
 def test_file_preview_is_limited_to_workspace_root(tmp_path) -> None:
@@ -142,6 +157,43 @@ def test_cleanup_http_terminals_closes_stale_terminal() -> None:
         asyncio.run(cleanup_http_terminals())
         assert "stale" not in http_terminals
         assert terminal.closed
+    finally:
+        http_terminals.pop(row.terminal_id, None)
+
+
+def test_http_terminal_input_writes_to_terminal(monkeypatch) -> None:
+    monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
+
+    class FakeTerminal:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, data: str) -> None:
+            self.writes.append(data)
+
+    terminal = FakeTerminal()
+    row = HttpTerminal(
+        terminal_id="live",
+        node_name="local",
+        session_name="demo",
+        created_at=datetime.now().timestamp(),
+        last_poll_at=datetime.now().timestamp(),
+    )
+    row.terminal = terminal  # type: ignore[assignment]
+    http_terminals[row.terminal_id] = row
+    client = TestClient(create_dashboard_app())
+    try:
+        response = client.post("/api/terminal-http/live/input", json={"data": "ls\r"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "sent"}
+        assert terminal.writes == ["ls\r"]
+
+        oversized = client.post(
+            "/api/terminal-http/live/input",
+            json={"data": "x" * (MAX_TERMINAL_INPUT_BYTES + 1)},
+        )
+        assert oversized.status_code == 413
+        assert terminal.writes == ["ls\r"]
     finally:
         http_terminals.pop(row.terminal_id, None)
 

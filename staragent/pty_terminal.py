@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import signal
 import struct
 import subprocess
@@ -13,6 +14,37 @@ import termios
 from dataclasses import dataclass
 
 MAX_TERMINAL_INPUT_BYTES = 64 * 1024
+TERMINAL_FILTER_TAIL_BYTES = 32
+
+TERMINAL_SCROLLBACK_RESET_PATTERN = re.compile(
+    rb"\x1b\[\?(?:47|1047|1048|1049)[hl]"
+    rb"|\x1b\[(?:22|23);0;0t"
+    rb"|\x1b\[3J"
+    rb"|\x1b\[(?:H|1;1H)\x1b\[2J"
+    rb"|\x1b\[2J"
+    rb"|\x1bc"
+)
+
+
+class TerminalOutputFilter:
+    def __init__(self) -> None:
+        self._tail = b""
+
+    def feed(self, data: bytes) -> bytes:
+        if not data:
+            return b""
+        combined = self._tail + data
+        if len(combined) <= TERMINAL_FILTER_TAIL_BYTES:
+            self._tail = combined
+            return b""
+        ready = combined[:-TERMINAL_FILTER_TAIL_BYTES]
+        self._tail = combined[-TERMINAL_FILTER_TAIL_BYTES:]
+        return TERMINAL_SCROLLBACK_RESET_PATTERN.sub(b"", ready)
+
+    def flush(self) -> bytes:
+        data = TERMINAL_SCROLLBACK_RESET_PATTERN.sub(b"", self._tail)
+        self._tail = b""
+        return data
 
 
 @dataclass
@@ -26,6 +58,7 @@ class PtyTerminal:
         set_winsize(master_fd, cols, rows)
         env = os.environ.copy()
         env.pop("TMUX", None)
+        env.pop("LD_LIBRARY_PATH", None)
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         process = subprocess.Popen(
