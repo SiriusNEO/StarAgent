@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import socket
 import subprocess
@@ -20,6 +21,16 @@ ATTENTION_PATTERNS = (
 
 SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 SYSTEM_SESSION_NAMES = {"staragent-hub", "staragent-node", "staragent-tailscaled"}
+
+
+def tmux_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
+def run_tmux(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["tmux", *args], env=tmux_env(), **kwargs)
 
 
 def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
@@ -79,7 +90,7 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
         "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_activity}\t#{session_created}",
     ]
     try:
-        result = subprocess.run(command, check=False, text=True, capture_output=True)
+        result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     except FileNotFoundError:
         return []
     if result.returncode != 0:
@@ -105,7 +116,7 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
 
 def capture_tmux_pane(session: str, lines: int = 80) -> str:
     command = ["tmux", "capture-pane", "-t", session, "-p", "-S", f"-{lines}"]
-    result = subprocess.run(command, check=False, text=True, capture_output=True)
+    result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     if result.returncode != 0:
         return ""
     return strip_ansi(result.stdout).strip()
@@ -113,16 +124,17 @@ def capture_tmux_pane(session: str, lines: int = 80) -> str:
 
 def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
     command = ["tmux", "capture-pane", "-t", session, "-p", "-e", "-S", f"-{lines}"]
-    result = subprocess.run(command, check=False, text=True, capture_output=True)
+    result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     if result.returncode != 0:
         return ""
     return result.stdout.rstrip()
 
 
 def tmux_session_exists(session: str) -> bool:
-    result = subprocess.run(
-        ["tmux", "has-session", "-t", session], check=False, capture_output=True
-    )
+    try:
+        result = run_tmux(["has-session", "-t", session], check=False, capture_output=True)
+    except FileNotFoundError:
+        return False
     return result.returncode == 0
 
 
@@ -132,8 +144,8 @@ def send_tmux_message(session: str, text: str) -> None:
     if not tmux_session_exists(session):
         raise ValueError(f"tmux session not found: {session}")
 
-    result = subprocess.run(
-        ["tmux", "send-keys", "-t", session, "-l", text],
+    result = run_tmux(
+        ["send-keys", "-t", session, "-l", text],
         check=False,
         text=True,
         capture_output=True,
@@ -142,8 +154,8 @@ def send_tmux_message(session: str, text: str) -> None:
         detail = result.stderr.strip() or "tmux send-keys failed"
         raise RuntimeError(detail)
     time.sleep(0.08)
-    result = subprocess.run(
-        ["tmux", "send-keys", "-t", session, "C-m"],
+    result = run_tmux(
+        ["send-keys", "-t", session, "C-m"],
         check=False,
         text=True,
         capture_output=True,
@@ -210,8 +222,8 @@ def flush_literal(session: str, literal: list[str]) -> None:
         return
     text = "".join(literal)
     literal.clear()
-    result = subprocess.run(
-        ["tmux", "send-keys", "-t", session, "-l", text],
+    result = run_tmux(
+        ["send-keys", "-t", session, "-l", text],
         check=False,
         text=True,
         capture_output=True,
@@ -222,8 +234,8 @@ def flush_literal(session: str, literal: list[str]) -> None:
 
 
 def send_tmux_key(session: str, key: str) -> None:
-    result = subprocess.run(
-        ["tmux", "send-keys", "-t", session, key],
+    result = run_tmux(
+        ["send-keys", "-t", session, key],
         check=False,
         text=True,
         capture_output=True,
@@ -248,8 +260,8 @@ def start_tmux_worker(name: str, cwd: str, command: str) -> None:
     if tmux_session_exists(name):
         raise ValueError(f"tmux session already exists: {name}")
 
-    result = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", name, "-c", str(cwd_path), command],
+    result = run_tmux(
+        ["new-session", "-d", "-s", name, "-c", str(cwd_path), command],
         check=False,
         text=True,
         capture_output=True,
@@ -273,8 +285,8 @@ def ensure_tmux_session(name: str, cwd: str, command: str) -> None:
         raise ValueError("Command is empty")
     if tmux_session_exists(name):
         return
-    result = subprocess.run(
-        ["tmux", "new-session", "-d", "-s", name, "-c", str(cwd_path), command],
+    result = run_tmux(
+        ["new-session", "-d", "-s", name, "-c", str(cwd_path), command],
         check=False,
         text=True,
         capture_output=True,
@@ -292,8 +304,8 @@ def wait_for_tmux_session(name: str, interval: float = 2.0) -> None:
 def kill_tmux_session(session: str) -> None:
     if not tmux_session_exists(session):
         raise ValueError(f"tmux session not found: {session}")
-    result = subprocess.run(
-        ["tmux", "kill-session", "-t", session],
+    result = run_tmux(
+        ["kill-session", "-t", session],
         check=False,
         text=True,
         capture_output=True,
@@ -318,7 +330,7 @@ def tmux_active_pane(session: str) -> dict[str, str | int]:
         session,
         "#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}\t#{window_name}",
     ]
-    result = subprocess.run(command, check=False, text=True, capture_output=True)
+    result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     if result.returncode != 0:
         return {}
     fields = result.stdout.rstrip("\n").split("\t")

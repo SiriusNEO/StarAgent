@@ -115,7 +115,7 @@ def create_app() -> FastAPI:
     def session_output(name: str, lines: int = 160) -> dict[str, str]:
         if not tmux_session_exists(name):
             raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
-        return {"output": capture_tmux_pane_ansi(name, lines=max(20, min(lines, 500)))}
+        return {"output": capture_tmux_pane_ansi(name, lines=max(20, min(lines, 5000)))}
 
     @app.get("/api/sessions/{name}/transcript-state")
     def session_transcript_state(name: str, lines: int = 500) -> dict[str, object]:

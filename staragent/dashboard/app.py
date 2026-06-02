@@ -37,7 +37,12 @@ from staragent.hub import (
     websocket_url,
 )
 from staragent.paths import state_dir
-from staragent.pty_terminal import PtyTerminal, parse_client_message
+from staragent.pty_terminal import (
+    MAX_TERMINAL_INPUT_BYTES,
+    PtyTerminal,
+    TerminalOutputFilter,
+    parse_client_message,
+)
 from staragent.runtime import (
     capture_tmux_pane_ansi,
     kill_tmux_session,
@@ -303,7 +308,7 @@ def create_app() -> FastAPI:
             node = node_by_name(node_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
-        lines = max(20, min(lines, 500))
+        lines = max(20, min(lines, 5000))
         if not node.is_local:
             return request_json(
                 node, "GET", f"/api/sessions/{urllib.parse.quote(name)}/output?lines={lines}"
@@ -364,12 +369,17 @@ def create_app() -> FastAPI:
 
     @app.post("/api/terminal-http/{terminal_id}/input")
     async def http_terminal_input(terminal_id: str, payload: TerminalInput) -> dict[str, str]:
+        await cleanup_http_terminals()
         terminal = http_terminals.get(terminal_id)
         if not terminal:
             raise HTTPException(status_code=404, detail="terminal not found")
-        raise HTTPException(
-            status_code=403, detail="terminal is read-only; use Chat to send messages"
-        )
+        terminal.last_poll_at = datetime.now().timestamp()
+        if not terminal.terminal:
+            raise HTTPException(status_code=410, detail="terminal closed")
+        if len(payload.data.encode("utf-8", errors="ignore")) > MAX_TERMINAL_INPUT_BYTES:
+            raise HTTPException(status_code=413, detail="terminal input too large")
+        terminal.terminal.write(payload.data)
+        return {"status": "sent"}
 
     @app.post("/api/terminal-http/{terminal_id}/resize")
     async def http_terminal_resize(terminal_id: str, payload: TerminalResize) -> dict[str, str]:
@@ -629,14 +639,22 @@ def safe_next_path(value: str) -> str:
 
 
 async def stream_pty_to_websocket(terminal: PtyTerminal, websocket: WebSocket) -> None:
+    output_filter = TerminalOutputFilter()
     try:
         while terminal.process.poll() is None:
             data = await terminal.read()
             if not data:
                 break
-            await websocket.send_bytes(data)
+            filtered = output_filter.feed(data)
+            if filtered:
+                await websocket.send_bytes(filtered)
     except (OSError, RuntimeError, WebSocketDisconnect):
         pass
+    finally:
+        filtered = output_filter.flush()
+        if filtered:
+            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                await websocket.send_bytes(filtered)
 
 
 async def open_http_terminal(node: NodeEntry, name: str) -> HttpTerminal:
@@ -652,15 +670,21 @@ async def open_http_terminal(node: NodeEntry, name: str) -> HttpTerminal:
 
 
 async def stream_pty_to_queue(terminal: PtyTerminal, queue: asyncio.Queue[bytes | None]) -> None:
+    output_filter = TerminalOutputFilter()
     try:
         while terminal.process.poll() is None:
             data = await terminal.read()
             if not data:
                 break
-            await queue.put(data)
+            filtered = output_filter.feed(data)
+            if filtered:
+                await queue.put(filtered)
     except (OSError, RuntimeError):
         pass
     finally:
+        filtered = output_filter.flush()
+        if filtered:
+            await queue.put(filtered)
         await queue.put(None)
 
 

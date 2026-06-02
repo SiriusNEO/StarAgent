@@ -94,9 +94,9 @@
       <section class="band">
         <div class="section-title">
           <h2>System Session</h2>
-          <span>read only</span>
+          <span>terminal attach</span>
         </div>
-        <p class="summary">This tmux session runs StarAgent infrastructure. Chat is disabled; use Terminal only for read-only logs.</p>
+        <p class="summary">This tmux session runs StarAgent infrastructure. Chat is disabled; use Terminal to inspect or interact directly.</p>
       </section>
     {% endif %}
 
@@ -497,7 +497,7 @@
       let workingStartedAt = 0;
       let workingTimer = null;
       let transcriptSyncTimer = null;
-      let userScrollLockedUntil = 0;
+      let userScrollPinned = false;
       let programmaticScroll = false;
       let lastRenderedChatSignature = "";
       const longMessageChars = 900;
@@ -746,11 +746,21 @@
 
       const isChatNearBottom = () => chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 80;
 
-      const lockUserScroll = () => {
-        userScrollLockedUntil = Date.now() + 5000;
+      const updateUserScrollPin = () => {
+        if (!programmaticScroll) {
+          userScrollPinned = !isChatNearBottom();
+        }
       };
 
-      const isUserScrollLocked = () => Date.now() < userScrollLockedUntil;
+      const scheduleUserScrollPinUpdate = () => {
+        requestAnimationFrame(updateUserScrollPin);
+      };
+
+      const releaseUserScrollPin = () => {
+        userScrollPinned = false;
+      };
+
+      const isUserScrollLocked = () => userScrollPinned && !isChatNearBottom();
 
       const setChatScrollTop = (value) => {
         programmaticScroll = true;
@@ -761,6 +771,7 @@
       };
 
       const scrollChatToBottom = () => {
+        releaseUserScrollPin();
         setChatScrollTop(chatLog.scrollHeight);
       };
 
@@ -906,13 +917,11 @@
         clearPendingChat();
       };
 
-      chatLog.addEventListener("wheel", lockUserScroll, {passive: true});
-      chatLog.addEventListener("touchstart", lockUserScroll, {passive: true});
-      chatLog.addEventListener("pointerdown", lockUserScroll);
+      chatLog.addEventListener("wheel", scheduleUserScrollPinUpdate, {passive: true});
+      chatLog.addEventListener("touchstart", scheduleUserScrollPinUpdate, {passive: true});
+      chatLog.addEventListener("pointerdown", scheduleUserScrollPinUpdate);
       chatLog.addEventListener("scroll", () => {
-        if (!programmaticScroll) {
-          lockUserScroll();
-        }
+        updateUserScrollPin();
       }, {passive: true});
 
       const applyTranscriptState = (body) => {
@@ -1167,7 +1176,7 @@
         allowProposedApi: false,
         convertEol: true,
         cursorBlink: false,
-        disableStdin: true,
+        disableStdin: false,
         fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
         fontSize: 13,
         lineHeight: 1.15,
@@ -1201,6 +1210,13 @@
       const fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
       term.open(screenEl);
+      const terminalScrollbar = document.createElement("div");
+      terminalScrollbar.className = "terminal-scrollbar";
+      terminalScrollbar.setAttribute("aria-hidden", "true");
+      const terminalScrollbarThumb = document.createElement("div");
+      terminalScrollbarThumb.className = "terminal-scrollbar-thumb";
+      terminalScrollbar.appendChild(terminalScrollbarThumb);
+      screenEl.appendChild(terminalScrollbar);
       let socket = null;
       let reconnectTimer = null;
       let keepaliveTimer = null;
@@ -1210,6 +1226,14 @@
       let transport = "websocket";
       let httpTerminalId = "";
       let httpPolling = false;
+      let terminalSelected = false;
+      let terminalHistoryLoaded = false;
+      let terminalHistoryPromise = null;
+      let suppressInitialTerminalPaint = false;
+      let terminalInitialPaintIdleTimer = null;
+      let terminalInitialPaintDeadlineTimer = null;
+      const terminalDecoder = new TextDecoder("utf-8");
+      const terminalResetPattern = /\x1b\[\?(?:47|1047|1048|1049)[hl]|\x1b\[(?:22|23);0;0t|\x1b\[3J|\x1b\[(?:H|1;1H)\x1b\[2J|\x1b\[2J|\x1bc/g;
       const preferHttpTerminal = window.matchMedia("(max-width: 820px)").matches;
 
       const sendTerminalMessage = (payload) => {
@@ -1226,22 +1250,120 @@
             }).catch(() => {});
             return true;
           }
+          if (payload.type === "input") {
+            fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}/input`, {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({data: payload.data || ""})
+            }).then((response) => {
+              if (!response.ok) {
+                status.textContent = "Terminal input failed";
+              }
+            }).catch(() => {
+              status.textContent = "Terminal input failed";
+            });
+            return true;
+          }
         }
         return false;
+      };
+
+      term.onData((data) => {
+        if (!terminalSelected) {
+          return;
+        }
+        if (!sendTerminalMessage({type: "input", data})) {
+          status.textContent = "Terminal input not connected";
+        }
+      });
+
+      const setTerminalSelected = (selected) => {
+        terminalSelected = selected;
+        terminal.classList.toggle("is-focused", selected);
+        if (selected) {
+          term.focus();
+        } else {
+          term.blur();
+        }
       };
 
       const fit = () => {
         fitAddon.fit();
         sendTerminalMessage({type: "resize", cols: term.cols, rows: term.rows});
       };
+      screenEl.addEventListener("pointerdown", () => setTerminalSelected(true));
+      document.addEventListener("pointerdown", (event) => {
+        if (!terminal.contains(event.target)) {
+          setTerminalSelected(false);
+        }
+      });
+      const activeTerminalBuffer = () => term.buffer?.active || term._core?._bufferService?.buffer || null;
+      const terminalLineCount = () => {
+        const buffer = activeTerminalBuffer();
+        return Number(buffer?.length ?? buffer?.lines?.length ?? term.rows);
+      };
+      const terminalMaxScroll = () => Math.max(0, terminalLineCount() - Math.max(1, term.rows));
+      const terminalViewportY = () => Number(activeTerminalBuffer()?.viewportY ?? activeTerminalBuffer()?.ydisp ?? 0);
+      const updateTerminalScrollbar = () => {
+        const maxScroll = terminalMaxScroll();
+        const totalRows = maxScroll + Math.max(1, term.rows);
+        const thumbHeight = maxScroll > 0
+          ? Math.max(24, terminalScrollbar.clientHeight * term.rows / totalRows)
+          : terminalScrollbar.clientHeight;
+        const travel = Math.max(0, terminalScrollbar.clientHeight - thumbHeight);
+        const top = maxScroll > 0 ? travel * terminalViewportY() / maxScroll : 0;
+        terminalScrollbar.classList.toggle("is-scrollable", maxScroll > 0);
+        terminalScrollbarThumb.style.height = `${Math.max(0, thumbHeight)}px`;
+        terminalScrollbarThumb.style.transform = `translateY(${Math.max(0, Math.min(travel, top))}px)`;
+      };
+      const scrollTerminalFromPointer = (clientY) => {
+        const maxScroll = terminalMaxScroll();
+        if (!maxScroll) {
+          return;
+        }
+        const rect = terminalScrollbar.getBoundingClientRect();
+        const thumbHeight = terminalScrollbarThumb.getBoundingClientRect().height || 24;
+        const travel = Math.max(1, rect.height - thumbHeight);
+        const offset = Math.max(0, Math.min(travel, clientY - rect.top - thumbHeight / 2));
+        term.scrollToLine(Math.round(maxScroll * offset / travel));
+        updateTerminalScrollbar();
+      };
+      terminalScrollbar.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        terminalScrollbar.setPointerCapture(event.pointerId);
+        terminalScrollbar.classList.add("is-dragging");
+        scrollTerminalFromPointer(event.clientY);
+      });
+      terminalScrollbar.addEventListener("pointermove", (event) => {
+        if (!terminalScrollbar.classList.contains("is-dragging")) {
+          return;
+        }
+        event.preventDefault();
+        scrollTerminalFromPointer(event.clientY);
+      });
+      terminalScrollbar.addEventListener("pointerup", (event) => {
+        terminalScrollbar.releasePointerCapture(event.pointerId);
+        terminalScrollbar.classList.remove("is-dragging");
+      });
+      terminalScrollbar.addEventListener("pointercancel", () => {
+        terminalScrollbar.classList.remove("is-dragging");
+      });
+      term.onScroll(updateTerminalScrollbar);
+      term.onResize(updateTerminalScrollbar);
       fit();
-      window.addEventListener("resize", fit);
-      screenEl.addEventListener("click", () => term.blur());
+      window.addEventListener("resize", () => {
+        fit();
+        requestAnimationFrame(updateTerminalScrollbar);
+      });
+      requestAnimationFrame(updateTerminalScrollbar);
       let wheelRemainder = 0;
       screenEl.addEventListener("wheel", (event) => {
         if (event.ctrlKey) {
           return;
         }
+        event.preventDefault();
+        event.stopImmediatePropagation();
         const sampleRow = screenEl.querySelector(".xterm-rows > div");
         const lineHeight = sampleRow ? sampleRow.getBoundingClientRect().height || 16 : 16;
         const pageLines = Math.max(1, Math.floor(term.rows * 0.85));
@@ -1257,13 +1379,96 @@
         }
         if (lines !== 0) {
           term.scrollLines(lines);
-          event.preventDefault();
-          event.stopPropagation();
+          updateTerminalScrollbar();
         }
-      }, {passive: false});
+      }, {capture: true, passive: false});
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const terminalUrl = `${protocol}//${window.location.host}/ws/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/terminal`;
+
+      const terminalHistoryText = (text) => String(text || "").replace(/\r?\n/g, "\r\n");
+      const filterTerminalOutput = (text) => String(text || "").replace(terminalResetPattern, "");
+
+      const stopSuppressingInitialTerminalPaint = () => {
+        suppressInitialTerminalPaint = false;
+        if (terminalInitialPaintIdleTimer) {
+          clearTimeout(terminalInitialPaintIdleTimer);
+          terminalInitialPaintIdleTimer = null;
+        }
+        if (terminalInitialPaintDeadlineTimer) {
+          clearTimeout(terminalInitialPaintDeadlineTimer);
+          terminalInitialPaintDeadlineTimer = null;
+        }
+        updateTerminalScrollbar();
+      };
+
+      const beginSuppressingInitialTerminalPaint = () => {
+        stopSuppressingInitialTerminalPaint();
+        suppressInitialTerminalPaint = terminalHistoryLoaded && terminalMaxScroll() > 0;
+        if (suppressInitialTerminalPaint) {
+          terminalInitialPaintDeadlineTimer = setTimeout(stopSuppressingInitialTerminalPaint, 1200);
+        }
+      };
+
+      const shouldSuppressTerminalLiveOutput = () => {
+        if (!suppressInitialTerminalPaint) {
+          return false;
+        }
+        if (terminalInitialPaintIdleTimer) {
+          clearTimeout(terminalInitialPaintIdleTimer);
+        }
+        terminalInitialPaintIdleTimer = setTimeout(stopSuppressingInitialTerminalPaint, 180);
+        updateTerminalScrollbar();
+        return true;
+      };
+
+      const writeTerminalOutput = (data) => {
+        const text = typeof data === "string"
+          ? data
+          : terminalDecoder.decode(data instanceof Uint8Array ? data : new Uint8Array(data), {stream: true});
+        const filtered = filterTerminalOutput(text);
+        if (!filtered) {
+          updateTerminalScrollbar();
+          return;
+        }
+        if (shouldSuppressTerminalLiveOutput()) {
+          return;
+        }
+        term.write(filtered, updateTerminalScrollbar);
+      };
+
+      const loadTerminalHistory = () => {
+        if (terminalHistoryLoaded) {
+          return Promise.resolve();
+        }
+        if (terminalHistoryPromise) {
+          return terminalHistoryPromise;
+        }
+        const previousStatus = status.textContent;
+        status.textContent = "Loading terminal history";
+        terminalHistoryPromise = fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/output?lines=2500`)
+          .then(async (response) => {
+            if (!response.ok) {
+              return;
+            }
+            const body = await response.json();
+            const output = terminalHistoryText(body.output || "");
+            if (output.trim()) {
+              await new Promise((resolve) => term.write(`${output}\r\n`, resolve));
+              term.scrollToBottom();
+              updateTerminalScrollbar();
+            }
+            terminalHistoryLoaded = true;
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (status.textContent === "Loading terminal history") {
+              status.textContent = previousStatus || "Connecting";
+            }
+            terminalHistoryPromise = null;
+          });
+        return terminalHistoryPromise;
+      };
 
       const clearKeepalive = () => {
         if (keepaliveTimer) {
@@ -1307,17 +1512,14 @@
           reconnectAttempts = 0;
           status.textContent = "Connected";
           fit();
+          beginSuppressingInitialTerminalPaint();
           clearKeepalive();
           keepaliveTimer = setInterval(() => {
             sendTerminalMessage({type: "ping", time: Date.now()});
           }, 20000);
         });
         socket.addEventListener("message", (event) => {
-          if (event.data instanceof ArrayBuffer) {
-            term.write(new Uint8Array(event.data));
-          } else {
-            term.write(event.data);
-          }
+          writeTerminalOutput(event.data);
         });
         socket.addEventListener("close", scheduleReconnect);
         socket.addEventListener("error", () => {
@@ -1350,6 +1552,7 @@
           httpTerminalId = body.terminal_id;
           status.textContent = "Connected · HTTP fallback";
           fit();
+          beginSuppressingInitialTerminalPaint();
           pollHttpTerminal();
         } catch {
           status.textContent = "HTTP terminal connection error";
@@ -1363,7 +1566,7 @@
         for (let index = 0; index < raw.length; index += 1) {
           bytes[index] = raw.charCodeAt(index);
         }
-        term.write(bytes);
+        writeTerminalOutput(bytes);
       };
 
       const pollHttpTerminal = async () => {
@@ -1394,8 +1597,12 @@
         httpPolling = false;
       };
 
-      const connectPreferredTerminal = () => {
+      const connectPreferredTerminal = async () => {
         terminalPaused = false;
+        await loadTerminalHistory();
+        if (terminalPaused) {
+          return;
+        }
         if (preferHttpTerminal) {
           startHttpTerminal();
         } else {
@@ -1405,6 +1612,8 @@
 
       const pauseTerminal = () => {
         terminalPaused = true;
+        setTerminalSelected(false);
+        stopSuppressingInitialTerminalPaint();
         clearKeepalive();
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);

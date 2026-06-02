@@ -1001,6 +1001,11 @@ dd {
   overflow: hidden;
 }
 
+.web-terminal.is-focused {
+  border-color: #8ab4f8;
+  box-shadow: 0 0 0 2px rgba(138, 180, 248, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
 .terminal-wrap {
   display: none;
 }
@@ -1031,7 +1036,8 @@ dd {
 .terminal-screen {
   min-height: 0;
   overflow: hidden;
-  padding: 8px 10px;
+  padding: 8px 24px 8px 10px;
+  position: relative;
 }
 
 .terminal-screen .xterm {
@@ -1040,9 +1046,47 @@ dd {
 
 .terminal-screen .xterm-viewport {
   background: #1e1e1e !important;
-  overflow-y: auto !important;
+  overflow-y: hidden !important;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
+}
+
+.terminal-screen .xterm-viewport::-webkit-scrollbar {
+  height: 0;
+  width: 0;
+}
+
+.terminal-scrollbar {
+  background: #252525;
+  border: 1px solid #3c3c3c;
+  border-radius: 999px;
+  bottom: 8px;
+  cursor: default;
+  opacity: 0.75;
+  position: absolute;
+  right: 7px;
+  top: 8px;
+  width: 10px;
+  z-index: 20;
+}
+
+.terminal-scrollbar-thumb {
+  background: #727272;
+  border-radius: 999px;
+  left: 1px;
+  min-height: 24px;
+  position: absolute;
+  right: 1px;
+  top: 0;
+}
+
+.terminal-scrollbar.is-scrollable .terminal-scrollbar-thumb,
+.terminal-scrollbar.is-dragging .terminal-scrollbar-thumb {
+  background: #9a9a9a;
+}
+
+.terminal-scrollbar:hover {
+  opacity: 1;
 }
 
 .terminal-screen .xterm-screen {
