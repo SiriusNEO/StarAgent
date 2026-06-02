@@ -118,6 +118,50 @@ def node(
 
 
 @app.command()
+def feishu(
+    app_id: str = typer.Option("", "--app-id", help="Feishu/Lark app id."),
+    app_secret: str = typer.Option("", "--app-secret", help="Feishu/Lark app secret."),
+    verification_token: str = typer.Option("", "--verification-token"),
+    encrypt_key: str = typer.Option("", "--encrypt-key"),
+    allowed_users: str = typer.Option(
+        "",
+        "--allowed-users",
+        help="Comma-separated Feishu user open_id/user_id/union_id allowlist.",
+    ),
+    allowed_chats: str = typer.Option(
+        "",
+        "--allowed-chats",
+        help="Comma-separated Feishu chat_id allowlist.",
+    ),
+    allow_all: bool = typer.Option(False, "--allow-all", help="Allow all Feishu senders."),
+    dashboard_url: str = typer.Option("", "--dashboard-url", help="Public StarAgent dashboard URL."),
+) -> None:
+    """Run the Feishu command integration worker."""
+    from staragent.integrations.feishu import FeishuConfig, run_feishu_integration
+
+    try:
+        config = FeishuConfig.from_env(
+            app_id=app_id,
+            app_secret=app_secret,
+            verification_token=verification_token,
+            encrypt_key=encrypt_key,
+            allowed_users=allowed_users,
+            allowed_chats=allowed_chats,
+            allow_all=allow_all or None,
+            dashboard_url=dashboard_url,
+        )
+    except ValueError as exc:
+        console.print(str(exc), style="red")
+        raise typer.Exit(1) from exc
+    console.print("StarAgent Feishu integration: WebSocket worker started")
+    try:
+        run_feishu_integration(config)
+    except RuntimeError as exc:
+        console.print(str(exc), style="red")
+        raise typer.Exit(1) from exc
+
+
+@app.command()
 def kill(name: str) -> None:
     """Stop a live tmux session."""
     try:
