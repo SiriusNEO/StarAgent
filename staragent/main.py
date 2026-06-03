@@ -118,29 +118,29 @@ def node(
 
 
 @app.command()
-def feishu(
-    app_id: str = typer.Option("", "--app-id", help="Feishu/Lark app id."),
-    app_secret: str = typer.Option("", "--app-secret", help="Feishu/Lark app secret."),
+def lark(
+    app_id: str = typer.Option("", "--app-id", help="Lark app id."),
+    app_secret: str = typer.Option("", "--app-secret", help="Lark app secret."),
     verification_token: str = typer.Option("", "--verification-token"),
     encrypt_key: str = typer.Option("", "--encrypt-key"),
     allowed_users: str = typer.Option(
         "",
         "--allowed-users",
-        help="Comma-separated Feishu user open_id/user_id/union_id allowlist.",
+        help="Comma-separated Lark user open_id/user_id/union_id allowlist.",
     ),
     allowed_chats: str = typer.Option(
         "",
         "--allowed-chats",
-        help="Comma-separated Feishu chat_id allowlist.",
+        help="Comma-separated Lark chat_id allowlist.",
     ),
-    allow_all: bool = typer.Option(False, "--allow-all", help="Allow all Feishu senders."),
+    allow_all: bool = typer.Option(False, "--allow-all", help="Allow all Lark senders."),
     dashboard_url: str = typer.Option("", "--dashboard-url", help="Public StarAgent dashboard URL."),
 ) -> None:
-    """Run the Feishu command integration worker."""
-    from staragent.integrations.feishu import FeishuConfig, run_feishu_integration
+    """Run the Lark command integration worker."""
+    from staragent.integrations.lark import LarkConfig, run_lark_integration
 
     try:
-        config = FeishuConfig.from_env(
+        config = LarkConfig.from_env(
             app_id=app_id,
             app_secret=app_secret,
             verification_token=verification_token,
@@ -153,9 +153,9 @@ def feishu(
     except ValueError as exc:
         console.print(str(exc), style="red")
         raise typer.Exit(1) from exc
-    console.print("StarAgent Feishu integration: WebSocket worker started")
+    console.print("StarAgent Lark integration: WebSocket worker started")
     try:
-        run_feishu_integration(config)
+        run_lark_integration(config)
     except RuntimeError as exc:
         console.print(str(exc), style="red")
         raise typer.Exit(1) from exc
@@ -210,6 +210,14 @@ def tmux_child_command(kind: str, args: list[str]) -> str:
         "STARAGENT_NODES",
         "STARAGENT_NODE_TOKEN",
         "STARAGENT_SSH_TARGET",
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
     ):
         value = os.environ.get(name)
         if value:

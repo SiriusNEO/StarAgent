@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-feishu = [
+lark = [
   "lark-oapi>=1.6.7,<2",
 ]
 dev = [

@@ -20,7 +20,12 @@ ATTENTION_PATTERNS = (
 )
 
 SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
-SYSTEM_SESSION_NAMES = {"staragent-hub", "staragent-node", "staragent-tailscaled"}
+SYSTEM_SESSION_NAMES = {
+    "staragent-hub",
+    "staragent-lark",
+    "staragent-node",
+    "staragent-tailscaled",
+}
 
 
 def tmux_env() -> dict[str, str]:
@@ -382,6 +387,8 @@ def tmux_task(session: dict[str, int | str], pane: dict[str, str | int]) -> str:
     name = str(session["name"])
     if name == "staragent-hub":
         return "StarAgent hub dashboard"
+    if name == "staragent-lark":
+        return "StarAgent Lark integration"
     if name == "staragent-node":
         return "StarAgent remote node"
     if name == "staragent-tailscaled":

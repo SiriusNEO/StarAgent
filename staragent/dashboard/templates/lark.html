@@ -1,0 +1,596 @@
+{% extends "base.html" %}
+{% block title %}Lark · StarAgent{% endblock %}
+{% block content %}
+  {% set missing = lark.config.missing_required %}
+  {% set secrets = lark.form.secrets %}
+
+  <section class="page-head lark-page-head">
+    <div class="page-title">
+      <h1>Lark</h1>
+      <p>Use private chat for session management and Feishu group chats for agent sessions.</p>
+    </div>
+  </section>
+
+  <section class="band lark-status-band">
+    <div class="lark-status-grid">
+      <div class="lark-status-item">
+        <span>Worker</span>
+        <strong class="lark-worker-value">{{ lark.worker.status }}</strong>
+        <small>{{ lark.worker.session }}</small>
+      </div>
+      <div class="lark-status-item">
+        <span>Config</span>
+        <strong class="lark-config-value">{{ "ready" if not missing else "missing" }}</strong>
+        <small class="lark-config-count">{{ missing | length }} blocking</small>
+      </div>
+      <div class="lark-status-item">
+        <span>Runtime</span>
+        <strong class="lark-sdk-value">{{ "ready" if lark.sdk.venv_ready else "missing" }}</strong>
+        <small class="lark-runtime-short">{{ "SDK installed" if lark.sdk.installed else "SDK missing" }}</small>
+      </div>
+    </div>
+    <div class="lark-actions">
+      <button type="button" class="lark-refresh">Refresh</button>
+      <button type="button" class="lark-test">Test Connection</button>
+      <button type="button" class="lark-start">Start Worker</button>
+      <a class="lark-session-link" href="{{ lark.worker.session_url }}">Open tmux Session</a>
+      <button type="button" class="lark-stop danger-button">Stop Worker</button>
+      <span class="lark-action-status" aria-live="polite"></span>
+    </div>
+    <div class="lark-test-result" hidden></div>
+  </section>
+
+  <div class="lark-settings-layout">
+    <section class="band lark-config-band">
+      <div class="section-title">
+        <h2>Configuration</h2>
+        <span class="lark-config-summary">{{ "ready" if not missing else "missing values" }}</span>
+      </div>
+
+      <form class="lark-config-form">
+        <div class="lark-setting-row">
+          <div class="lark-setting-copy">
+            <strong>App credentials</strong>
+            <span>Copy these from the Feishu/Lark developer console.</span>
+          </div>
+          <div class="lark-setting-fields lark-two-fields">
+            <label>
+              <span>App ID</span>
+              <input name="app_id" autocomplete="off" placeholder="cli_xxx" value="{{ lark.form.app_id }}">
+            </label>
+            <label>
+              <span>App Secret</span>
+              <input name="app_secret" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.app_secret else 'Required' }}">
+            </label>
+          </div>
+        </div>
+
+        <div class="lark-setting-row">
+          <div class="lark-setting-copy">
+            <strong>Allowed senders</strong>
+            <span>Allow users for private management. Allow chats for groups that host agent sessions.</span>
+          </div>
+          <div class="lark-setting-fields">
+            <label>
+              <span>Allowed chat IDs (group optional)</span>
+              <textarea name="allowed_chats" rows="2" placeholder="oc_xxx, oc_yyy">{{ lark.form.allowed_chats }}</textarea>
+            </label>
+            <label>
+              <span>Allowed user IDs (direct chat)</span>
+              <textarea name="allowed_users" rows="2" placeholder="ou_xxx, on_xxx">{{ lark.form.allowed_users }}</textarea>
+            </label>
+            <label class="lark-check">
+              <input name="allow_all" type="checkbox" {% if lark.form.allow_all %}checked{% endif %}>
+              <span>Allow all senders while testing</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="lark-setting-row">
+          <div class="lark-setting-copy">
+            <strong>Dashboard links</strong>
+            <span>Used by the /open command in Lark.</span>
+          </div>
+          <div class="lark-setting-fields">
+            <label>
+              <span>Dashboard URL</span>
+              <input name="dashboard_url" autocomplete="off" placeholder="https://staragent.example.com" value="{{ lark.form.dashboard_url }}">
+            </label>
+          </div>
+        </div>
+
+        <details class="lark-advanced">
+          <summary>Advanced connection options</summary>
+          <div class="lark-setting-row">
+            <div class="lark-setting-copy">
+              <strong>Optional secrets</strong>
+              <span>Only fill these if your app or remote nodes require them.</span>
+            </div>
+            <div class="lark-setting-fields lark-two-fields">
+              <label>
+                <span>Node token</span>
+                <input name="node_token" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.node_token else 'Optional for remote nodes' }}">
+              </label>
+              <label>
+                <span>Verification token</span>
+                <input name="verification_token" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.verification_token else 'Optional' }}">
+              </label>
+              <label>
+                <span>Encrypt key</span>
+                <input name="encrypt_key" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.encrypt_key else 'Optional' }}">
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <div class="lark-form-actions">
+          <button type="submit">Save Config</button>
+          <button type="button" class="lark-clear-config danger-button">Clear Saved Config</button>
+          <span class="lark-save-status" aria-live="polite"></span>
+        </div>
+      </form>
+    </section>
+
+    <aside class="band lark-readiness-band">
+      <div class="section-title">
+        <h2>Readiness</h2>
+        <span class="lark-status-label">{{ lark.worker.status }}</span>
+      </div>
+      <div class="lark-readiness-list">
+        <div class="lark-readiness-row">
+          <div>
+            <strong>tmux worker</strong>
+            <span>{{ lark.worker.session }}</span>
+          </div>
+          <span class="pill node-status-{{ 'connected' if lark.worker.running else 'disconnected' }} lark-worker-pill">{{ lark.worker.status }}</span>
+        </div>
+        <div class="lark-readiness-row">
+          <div>
+            <strong>StarAgent executable</strong>
+            <span class="lark-runtime-path">{{ lark.sdk.venv_executable }}</span>
+          </div>
+          <span class="pill node-status-{{ 'connected' if lark.sdk.venv_ready else 'disconnected' }} lark-runtime-pill">{{ "ready" if lark.sdk.venv_ready else "missing" }}</span>
+        </div>
+        <div class="lark-readiness-row">
+          <div>
+            <strong>lark-oapi</strong>
+            <span>Worker Python import check</span>
+          </div>
+          <span class="pill node-status-{{ 'connected' if lark.sdk.installed else 'disconnected' }} lark-sdk-pill">{{ "installed" if lark.sdk.installed else "missing" }}</span>
+        </div>
+      </div>
+      <p class="form-hint lark-missing-message">
+        {% if missing %}
+          Missing: {{ ", ".join(missing) }}
+        {% elif lark.worker.running %}
+          Lark worker is running.
+        {% else %}
+          Ready to start the Lark worker.
+        {% endif %}
+      </p>
+      <details class="lark-config-details">
+        <summary>Environment details</summary>
+        <div class="lark-config-list">
+          {% for item in lark.config["items"] %}
+            <div class="lark-config-row" data-config-name="{{ item.name }}">
+              <div>
+                <strong>{{ item.label }}</strong>
+                <span>{{ item.value or ("required" if item.required else "optional") }}{% if item.source %} · {{ item.source }}{% endif %}</span>
+              </div>
+              <span class="pill node-status-{{ 'connected' if item.present else ('disconnected' if item.required else 'optional') }}">{{ "set" if item.present else ("missing" if item.required else "optional") }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      </details>
+      <p class="form-hint">Saved config: <span class="lark-config-path">{{ lark.config.path }}</span></p>
+    </aside>
+  </div>
+
+  <div class="lark-guide-grid">
+    <section class="band lark-setup-band">
+      <div class="section-title">
+        <h2>Usage Model</h2>
+        <span>private management · group-bound agents</span>
+      </div>
+      <div class="lark-setup-list">
+        <div class="lark-setup-step">
+          <span>01</span>
+          <div>
+            <strong>Private chat manages sessions</strong>
+            <p>和 StarAgent Bot 私聊只用于管理 session：<code>/help</code>、<code>/sessions</code>、<code>/status local/dev</code>、<code>/history local/dev 20</code>、<code>/tail local/dev 120</code>、<code>/open local/dev</code>。私聊不会把普通消息发给 agent。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>02</span>
+          <div>
+            <strong>Agent chat lives in a Feishu group</strong>
+            <p>每个 agent session 对应一个飞书对话群。在群设置的“群机器人 / 添加机器人”里添加 StarAgent，然后发送 <code>/use local/my-session</code> 绑定这个群。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>03</span>
+          <div>
+            <strong>Talk inside the bound group</strong>
+            <p>绑定后，同一个群里的普通消息会发到对应 agent session。群里命令默认使用当前绑定：<code>/status</code>、<code>/history 20</code>、<code>/tail 120</code>、<code>/open</code>。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>04</span>
+          <div>
+            <strong>Inspect output on demand</strong>
+            <p>需要看终端细节时，在绑定群里用 <code>/tail 120</code> 主动拉取最近输出，或用 <code>/open</code> 打开 Dashboard terminal。没有结构化 transcript 时，<code>/history</code> 会提示改用 <code>/tail</code>。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>05</span>
+          <div>
+            <strong>Command quick reference</strong>
+            <p>私聊：<code>/sessions</code>、<code>/status local/dev</code>、<code>/history local/dev 20</code>。群聊：<code>/use local/dev</code> 绑定，之后直接发消息，或用 <code>/status</code>、<code>/history 20</code>、<code>/tail 120</code>、<code>/open</code>。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="band lark-setup-band">
+      <div class="section-title">
+        <h2>Feishu Setup</h2>
+        <span>app · events · permissions · allowlist</span>
+      </div>
+      <div class="lark-setup-list">
+        <div class="lark-setup-step">
+          <span>01</span>
+          <div>
+            <strong>Create an internal app</strong>
+            <p>飞书开放平台里创建“企业自建应用”。在“凭证与基础信息”复制 App ID 和 App Secret，填到上面的表单。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>02</span>
+          <div>
+            <strong>Enable the bot</strong>
+            <p>在“应用能力”里启用机器人，设置名称和头像。私聊用于 session 管理；agent 对话需要把机器人从群设置里的“群机器人 / 添加机器人”入口加入对应对话群。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>03</span>
+          <div>
+            <strong>Subscribe to message events</strong>
+            <p>在“事件与回调”里启用事件订阅，使用 WebSocket/长连接模式，订阅 <code>im.message.receive_v1</code>。</p>
+          </div>
+        </div>
+        <div class="lark-setup-step">
+          <span>04</span>
+          <div>
+            <strong>Grant permissions and publish</strong>
+            <p>添加消息接收、机器人发消息、发送和删除消息表情回复权限，发布应用版本并完成企业管理员审批。</p>
+            <div class="copy-command lark-scope-copy">
+              <pre class="command">{{ lark.commands.scopes }}</pre>
+              <button type="button" class="copy-button" data-copy="{{ lark.commands.scopes }}">Copy</button>
+            </div>
+          </div>
+        </div>
+        <div class="lark-setup-step lark-setup-wide">
+          <span>05</span>
+          <div>
+            <strong>Lock down access</strong>
+            <p>第一次联调可以临时勾选 Allow all。私聊里发送 <code>/sessions</code>；对话群里发送 <code>@StarAgent /use local/dev</code>。Worker Output 会打印 <code>open_id</code>、<code>chat_id</code>、<code>root_id</code>、<code>thread_id</code>，复制可信用户或群聊到 allowlist 后关闭 Allow all。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="lark-lower-grid">
+    <section class="band lark-command-band">
+      <div class="section-title">
+        <h2>Commands</h2>
+        <span>shell fallback</span>
+      </div>
+      <div class="lark-command-grid">
+        <div class="copy-command">
+          <strong>Install</strong>
+          <pre class="command">{{ lark.commands.install }}</pre>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.install }}">Copy</button>
+        </div>
+        <div class="copy-command">
+          <strong>Start</strong>
+          <pre class="command">{{ lark.commands.start }}</pre>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.start }}">Copy</button>
+        </div>
+        <div class="copy-command">
+          <strong>Attach</strong>
+          <pre class="command">{{ lark.commands.tmux }}</pre>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.tmux }}">Copy</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="band lark-output-band">
+      <div class="section-title">
+        <h2>Worker Output</h2>
+        <span>latest tmux capture</span>
+      </div>
+      <pre class="lark-output">{{ lark.worker.recent_output or "No Lark worker output." }}</pre>
+    </section>
+  </div>
+
+  <script>
+    const larkStatus = document.querySelector(".lark-action-status");
+    const larkSaveStatus = document.querySelector(".lark-save-status");
+    const larkTestResult = document.querySelector(".lark-test-result");
+    const form = document.querySelector(".lark-config-form");
+    const workerValue = document.querySelector(".lark-worker-value");
+    const configValue = document.querySelector(".lark-config-value");
+    const configCount = document.querySelector(".lark-config-count");
+    const sdkValue = document.querySelector(".lark-sdk-value");
+    const runtimeShort = document.querySelector(".lark-runtime-short");
+    const statusLabel = document.querySelector(".lark-status-label");
+    const workerPill = document.querySelector(".lark-worker-pill");
+    const runtimePill = document.querySelector(".lark-runtime-pill");
+    const sdkPill = document.querySelector(".lark-sdk-pill");
+    const runtimePath = document.querySelector(".lark-runtime-path");
+    const configSummary = document.querySelector(".lark-config-summary");
+    const configList = document.querySelector(".lark-config-list");
+    const missingMessage = document.querySelector(".lark-missing-message");
+    const output = document.querySelector(".lark-output");
+    const configPath = document.querySelector(".lark-config-path");
+    const workerSessionLink = document.querySelector(".lark-session-link");
+
+    const setPill = (el, ok, text, optional = false) => {
+      if (!el) return;
+      el.className = `pill node-status-${ok ? "connected" : (optional ? "optional" : "disconnected")}`;
+      el.textContent = text;
+    };
+
+    const secretPlaceholder = (present, emptyText) => present ? "Saved; leave blank to keep" : emptyText;
+
+    const renderWorkerOutput = (text) => {
+      if (!output) return;
+      const next = text || "No Lark worker output.";
+      const atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 16;
+      if (output.textContent !== next) {
+        output.textContent = next;
+        if (atBottom) {
+          output.scrollTop = output.scrollHeight;
+        }
+      }
+    };
+
+    const syncForm = (body) => {
+      if (!form || !body.form) return;
+      form.elements.app_id.value = body.form.app_id || "";
+      form.elements.allowed_chats.value = body.form.allowed_chats || "";
+      form.elements.allowed_users.value = body.form.allowed_users || "";
+      form.elements.dashboard_url.value = body.form.dashboard_url || "";
+      form.elements.allow_all.checked = !!body.form.allow_all;
+      const secrets = body.form.secrets || {};
+      form.elements.app_secret.value = "";
+      form.elements.verification_token.value = "";
+      form.elements.encrypt_key.value = "";
+      form.elements.node_token.value = "";
+      form.elements.app_secret.placeholder = secretPlaceholder(!!secrets.app_secret, "Required");
+      form.elements.verification_token.placeholder = secretPlaceholder(!!secrets.verification_token, "Optional");
+      form.elements.encrypt_key.placeholder = secretPlaceholder(!!secrets.encrypt_key, "Optional");
+      form.elements.node_token.placeholder = secretPlaceholder(!!secrets.node_token, "Optional for remote nodes");
+    };
+
+    const renderConfig = (config, worker = {}) => {
+      configList.innerHTML = "";
+      for (const item of config.items || []) {
+        const row = document.createElement("div");
+        row.className = "lark-config-row";
+        row.dataset.configName = item.name;
+        const info = document.createElement("div");
+        const label = document.createElement("strong");
+        label.textContent = item.label || item.name;
+        const value = document.createElement("span");
+        const source = item.source ? ` · ${item.source}` : "";
+        value.textContent = `${item.value || (item.required ? "required" : "optional")}${source}`;
+        info.append(label, value);
+        const pill = document.createElement("span");
+        setPill(pill, item.present, item.present ? "set" : (item.required ? "missing" : "optional"), !item.required);
+        row.append(info, pill);
+        configList.appendChild(row);
+      }
+      const missing = config.missing_required || [];
+      configSummary.textContent = missing.length ? "missing values" : "ready";
+      configValue.textContent = missing.length ? "missing" : "ready";
+      configCount.textContent = `${missing.length} blocking`;
+      missingMessage.textContent = missing.length
+        ? `Missing: ${missing.join(", ")}`
+        : (worker.running ? "Lark worker is running." : "Ready to start the Lark worker.");
+      if (config.path) {
+        configPath.textContent = config.path;
+      }
+    };
+
+    const renderLark = (body, options = {}) => {
+      const worker = body.worker || {};
+      const sdk = body.sdk || {};
+      const config = body.config || {};
+      workerValue.textContent = worker.status || "unknown";
+      statusLabel.textContent = worker.status || "unknown";
+      setPill(workerPill, !!worker.running, worker.status || "stopped");
+      if (workerSessionLink && worker.session_url) {
+        workerSessionLink.href = worker.session_url;
+      }
+      runtimePath.textContent = sdk.venv_executable || "-";
+      setPill(runtimePill, !!sdk.venv_ready, sdk.venv_ready ? "ready" : "missing");
+      setPill(sdkPill, !!sdk.installed, sdk.installed ? "installed" : "missing");
+      sdkValue.textContent = sdk.venv_ready ? "ready" : "missing";
+      runtimeShort.textContent = sdk.installed ? "SDK installed" : "SDK missing";
+      renderWorkerOutput(worker.recent_output);
+      renderConfig(config, worker);
+      if (options.syncForm) {
+        syncForm(body);
+      }
+    };
+
+    const fetchLark = async (options = {}) => {
+      const response = await fetch("/api/lark/status");
+      if (!response.ok) throw new Error("Status request failed.");
+      const body = await response.json();
+      renderLark(body, options);
+      return body;
+    };
+
+    const larkAction = async (path, pending) => {
+      larkStatus.textContent = pending;
+      const response = await fetch(path, {method: "POST"});
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        larkStatus.textContent = body.detail || "Action failed.";
+        await fetchLark().catch(() => {});
+        return;
+      }
+      larkStatus.textContent = body.status || "Done.";
+      renderLark(body.lark || await fetchLark());
+    };
+
+    const renderConnectionTest = (body) => {
+      if (!larkTestResult) return;
+      larkTestResult.hidden = false;
+      larkTestResult.className = `lark-test-result is-${body.status || (body.ok ? "passed" : "failed")}`;
+      larkTestResult.replaceChildren();
+
+      const header = document.createElement("div");
+      header.className = "lark-test-header";
+      const title = document.createElement("strong");
+      title.textContent = body.ok ? "Connection test passed" : "Connection test failed";
+      const meta = document.createElement("span");
+      meta.textContent = body.base_url ? body.base_url : (body.checked_at || "");
+      header.append(title, meta);
+      larkTestResult.appendChild(header);
+
+      const steps = document.createElement("div");
+      steps.className = "lark-test-steps";
+      for (const item of body.steps || []) {
+        const row = document.createElement("div");
+        row.className = `lark-test-step is-${item.status || (item.ok ? "passed" : "failed")}`;
+        const text = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = item.name || "Check";
+        const detail = document.createElement("span");
+        detail.textContent = item.detail || "";
+        text.append(name, detail);
+        const pill = document.createElement("span");
+        pill.className = `pill lark-test-pill is-${item.status || (item.ok ? "passed" : "failed")}`;
+        pill.textContent = item.status || (item.ok ? "passed" : "failed");
+        row.append(text, pill);
+        steps.appendChild(row);
+      }
+      larkTestResult.appendChild(steps);
+
+      if (body.bot && Object.keys(body.bot).length) {
+        const bot = document.createElement("p");
+        bot.className = "form-hint lark-test-bot";
+        const name = body.bot.name || body.bot.app_name || "Bot";
+        const openId = body.bot.open_id ? ` · open_id ${body.bot.open_id}` : "";
+        bot.textContent = `${name}${openId}`;
+        larkTestResult.appendChild(bot);
+      }
+    };
+
+    const testConnection = async () => {
+      larkStatus.textContent = "Testing connection...";
+      const response = await fetch("/api/lark/test", {method: "POST"});
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        larkStatus.textContent = body.detail || "Connection test failed.";
+        return;
+      }
+      renderConnectionTest(body);
+      larkStatus.textContent = body.ok ? "Connection test passed." : "Connection test failed.";
+    };
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      larkSaveStatus.textContent = "Saving...";
+      const payload = {
+        app_id: form.elements.app_id.value,
+        app_secret: form.elements.app_secret.value,
+        allowed_chats: form.elements.allowed_chats.value,
+        allowed_users: form.elements.allowed_users.value,
+        allow_all: form.elements.allow_all.checked,
+        verification_token: form.elements.verification_token.value,
+        encrypt_key: form.elements.encrypt_key.value,
+        dashboard_url: form.elements.dashboard_url.value,
+        node_token: form.elements.node_token.value,
+      };
+      const response = await fetch("/api/lark/config", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        larkSaveStatus.textContent = body.detail || "Save failed.";
+        return;
+      }
+      renderLark(body.lark || await fetchLark(), {syncForm: true});
+      const running = !!(body.lark && body.lark.worker && body.lark.worker.running);
+      larkSaveStatus.textContent = running ? "Saved. Restart worker to apply." : "Saved.";
+    });
+
+    document.querySelector(".lark-clear-config")?.addEventListener("click", async () => {
+      if (!window.confirm("Clear saved Lark config from this dashboard?")) {
+        return;
+      }
+      larkSaveStatus.textContent = "Clearing...";
+      const response = await fetch("/api/lark/config", {method: "DELETE"});
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        larkSaveStatus.textContent = body.detail || "Clear failed.";
+        return;
+      }
+      renderLark(body.lark || await fetchLark(), {syncForm: true});
+      larkSaveStatus.textContent = "Cleared.";
+    });
+
+    document.querySelector(".lark-refresh")?.addEventListener("click", () => {
+      larkStatus.textContent = "Refreshing...";
+      fetchLark({syncForm: true}).then(() => {
+        larkStatus.textContent = "Refreshed.";
+      }).catch((error) => {
+        larkStatus.textContent = error.message;
+      });
+    });
+    document.querySelector(".lark-test")?.addEventListener("click", () => {
+      testConnection().catch((error) => {
+        larkStatus.textContent = error.message;
+      });
+    });
+    document.querySelector(".lark-start")?.addEventListener("click", () => larkAction("/api/lark/start", "Starting..."));
+    document.querySelector(".lark-stop")?.addEventListener("click", () => larkAction("/api/lark/stop", "Stopping..."));
+
+    output.scrollTop = output.scrollHeight;
+    setInterval(() => {
+      if (!document.hidden) {
+        fetchLark().catch(() => {});
+      }
+    }, 3000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        fetchLark().catch(() => {});
+      }
+    });
+
+    for (const button of document.querySelectorAll(".copy-button")) {
+      button.addEventListener("click", async () => {
+        const text = button.dataset.copy || "";
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const area = document.createElement("textarea");
+          area.value = text;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
+        button.textContent = "Copied";
+        setTimeout(() => { button.textContent = "Copy"; }, 1200);
+      });
+    }
+  </script>
+{% endblock %}
