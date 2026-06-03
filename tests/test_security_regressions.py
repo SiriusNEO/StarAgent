@@ -8,6 +8,7 @@ import typer
 from fastapi.testclient import TestClient
 
 from staragent import dependencies
+from staragent.dashboard import app as dashboard_app
 from staragent.dashboard.app import (
     HTTP_TERMINAL_IDLE_SECONDS,
     HttpTerminal,
@@ -15,6 +16,7 @@ from staragent.dashboard.app import (
     directory_listing,
     file_preview_payload,
     http_terminals,
+    lark_connection_test_payload,
 )
 from staragent.dashboard.app import create_app as create_dashboard_app
 from staragent.main import ensure_hub_auth_for_bind, is_loopback_bind
@@ -196,6 +198,63 @@ def test_http_terminal_input_writes_to_terminal(monkeypatch) -> None:
         assert terminal.writes == ["ls\r"]
     finally:
         http_terminals.pop(row.terminal_id, None)
+
+
+def test_lark_connection_test_fails_fast_without_credentials(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    import staragent.dashboard.app as dashboard_app
+
+    monkeypatch.setattr(dashboard_app, "LARK_CONFIG_PATH", tmp_path / "lark_config.json")
+    monkeypatch.delenv("STARAGENT_LARK_APP_ID", raising=False)
+    monkeypatch.delenv("STARAGENT_LARK_APP_SECRET", raising=False)
+
+    payload = lark_connection_test_payload()
+
+    assert payload["ok"] is False
+    assert payload["status"] == "failed"
+    assert payload["steps"][0]["name"] == "Configuration"
+    assert "App ID" in payload["steps"][0]["detail"]
+
+
+def test_lark_sdk_check_uses_worker_python(monkeypatch, tmp_path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    staragent = bin_dir / "staragent"
+    python = bin_dir / "python"
+    staragent.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(args))
+        return Result()
+
+    dashboard_app.LARK_SDK_CHECK_CACHE.clear()
+    monkeypatch.setattr(dashboard_app.subprocess, "run", fake_run)
+
+    assert dashboard_app.lark_sdk_installed(staragent)
+    assert calls[0][0] == str(python)
+
+
+def test_lark_page_shows_running_worker_readiness(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_LARK_APP_ID", "cli_test")
+    monkeypatch.setenv("STARAGENT_LARK_APP_SECRET", "secret")
+    monkeypatch.setenv("STARAGENT_LARK_ALLOW_ALL", "1")
+    monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(dashboard_app, "LARK_CONFIG_PATH", tmp_path / "lark_config.json")
+    monkeypatch.setattr(dashboard_app, "tmux_session_exists", lambda name: True)
+    monkeypatch.setattr(dashboard_app, "capture_tmux_pane_ansi", lambda name, lines=80: "")
+    monkeypatch.setattr(dashboard_app, "lark_sdk_installed", lambda executable=None: True)
+
+    response = TestClient(create_dashboard_app()).get("/lark")
+
+    assert response.status_code == 200
+    assert "Lark worker is running." in response.text
 
 
 def test_dependencies_report_tailscale_as_optional(monkeypatch) -> None:

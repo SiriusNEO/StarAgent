@@ -4,13 +4,18 @@ import asyncio
 import base64
 import contextlib
 import hmac
+import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import socket
+import subprocess
 import threading
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -36,7 +41,7 @@ from staragent.hub import (
     request_json,
     websocket_url,
 )
-from staragent.paths import state_dir
+from staragent.paths import PROJECT_ROOT, state_dir
 from staragent.pty_terminal import (
     MAX_TERMINAL_INPUT_BYTES,
     PtyTerminal,
@@ -92,6 +97,50 @@ HTTP_TERMINAL_MAX_AGE_SECONDS = 15 * 60.0
 CHAT_HISTORY_PATH = state_dir() / "chat_history.json"
 CHAT_HISTORY_LOCK = threading.RLock()
 AUTH_COOKIE = "staragent_auth"
+LARK_SESSION_NAME = "staragent-lark"
+LARK_CONFIG_PATH = state_dir() / "lark_config.json"
+LARK_CONFIG_LOCK = threading.RLock()
+LARK_ENV_NAMES = (
+    "STARAGENT_LARK_APP_ID",
+    "STARAGENT_LARK_APP_SECRET",
+    "STARAGENT_LARK_ALLOWED_USERS",
+    "STARAGENT_LARK_ALLOWED_CHATS",
+    "STARAGENT_LARK_ALLOW_ALL",
+    "STARAGENT_LARK_VERIFICATION_TOKEN",
+    "STARAGENT_LARK_ENCRYPT_KEY",
+    "STARAGENT_DASHBOARD_URL",
+    "STARAGENT_AUTH_TOKEN",
+    "STARAGENT_NODE_TOKEN",
+    "STARAGENT_STATE_DIR",
+    "STARAGENT_NODES",
+)
+LARK_EDITABLE_ENV_NAMES = (
+    "STARAGENT_LARK_APP_ID",
+    "STARAGENT_LARK_APP_SECRET",
+    "STARAGENT_LARK_ALLOWED_USERS",
+    "STARAGENT_LARK_ALLOWED_CHATS",
+    "STARAGENT_LARK_ALLOW_ALL",
+    "STARAGENT_LARK_VERIFICATION_TOKEN",
+    "STARAGENT_LARK_ENCRYPT_KEY",
+    "STARAGENT_DASHBOARD_URL",
+    "STARAGENT_NODE_TOKEN",
+)
+LARK_OPENAPI_BASES = (
+    ("Feishu", "https://open.feishu.cn"),
+    ("Lark", "https://open.larksuite.com"),
+)
+LARK_SDK_CHECK_CACHE: dict[str, tuple[float, bool]] = {}
+LARK_SDK_CHECK_TTL_SECONDS = 15.0
+PROXY_ENV_NAMES = (
+    "http_proxy",
+    "https_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
 
 
 def create_app() -> FastAPI:
@@ -198,6 +247,14 @@ def create_app() -> FastAPI:
                 "node_views": node_views,
                 "stats": dashboard_stats(node_views, views),
             },
+        )
+
+    @app.get("/lark", response_class=HTMLResponse)
+    def lark_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "lark.html",
+            {"lark": lark_status_payload()},
         )
 
     @app.get("/sessions/{name}", response_class=HTMLResponse)
@@ -475,6 +532,63 @@ def create_app() -> FastAPI:
     @app.get("/api/tailscale/hub")
     def tailscale_hub_status() -> dict[str, object]:
         return tailscale_hub_payload()
+
+    @app.get("/api/lark/status")
+    def lark_status() -> dict[str, object]:
+        return lark_status_payload()
+
+    @app.get("/api/lark")
+    def lark_status_alias() -> dict[str, object]:
+        return lark_status_payload()
+
+    @app.post("/api/lark/test")
+    def test_lark_connection() -> dict[str, object]:
+        return lark_connection_test_payload()
+
+    @app.post("/api/lark/config")
+    def save_lark_config(payload: LarkConfigRequest) -> dict[str, object]:
+        try:
+            write_lark_config(payload)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"status": "saved", "lark": lark_status_payload()}
+
+    @app.delete("/api/lark/config")
+    def clear_lark_config() -> dict[str, object]:
+        try:
+            clear_saved_lark_config()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"status": "cleared", "lark": lark_status_payload()}
+
+    @app.post("/api/lark/start")
+    def start_lark() -> dict[str, object]:
+        status = lark_status_payload()
+        if status["worker"]["running"]:
+            return {"status": "running", "lark": status}
+        missing = status["config"]["missing_required"]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required Lark environment: {', '.join(missing)}",
+            )
+        try:
+            start_tmux_worker(LARK_SESSION_NAME, str(PROJECT_ROOT), lark_worker_command())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"status": "started", "lark": lark_status_payload()}
+
+    @app.post("/api/lark/stop")
+    def stop_lark() -> dict[str, object]:
+        if not tmux_session_exists(LARK_SESSION_NAME):
+            return {"status": "stopped", "lark": lark_status_payload()}
+        try:
+            kill_tmux_session(LARK_SESSION_NAME)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"status": "stopped", "lark": lark_status_payload()}
 
     @app.get("/api/dependencies")
     def dependency_status_route() -> dict[str, object]:
@@ -756,6 +870,18 @@ class CreateWorkerRequest(BaseModel):
     command: str
 
 
+class LarkConfigRequest(BaseModel):
+    app_id: str = ""
+    app_secret: str = ""
+    allowed_chats: str = ""
+    allowed_users: str = ""
+    allow_all: bool = False
+    verification_token: str = ""
+    encrypt_key: str = ""
+    dashboard_url: str = ""
+    node_token: str = ""
+
+
 class AdoptSessionRequest(BaseModel):
     node: str = "local"
     name: str
@@ -834,6 +960,574 @@ def node_payload(node) -> dict[str, object]:
             for session in node.sessions
         ],
     }
+
+
+def lark_status_payload() -> dict[str, object]:
+    saved = read_lark_config()
+    values = lark_effective_env(saved)
+    app_id = values.get("STARAGENT_LARK_APP_ID", "")
+    app_secret = values.get("STARAGENT_LARK_APP_SECRET", "")
+    allowed_users = values.get("STARAGENT_LARK_ALLOWED_USERS", "")
+    allowed_chats = values.get("STARAGENT_LARK_ALLOWED_CHATS", "")
+    verification_token = values.get("STARAGENT_LARK_VERIFICATION_TOKEN", "")
+    encrypt_key = values.get("STARAGENT_LARK_ENCRYPT_KEY", "")
+    dashboard_url = values.get("STARAGENT_DASHBOARD_URL", "")
+    auth_token = values.get("STARAGENT_AUTH_TOKEN", "")
+    node_token = values.get("STARAGENT_NODE_TOKEN", "")
+    allow_all = values.get("STARAGENT_LARK_ALLOW_ALL", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    access_configured = bool(allowed_users or allowed_chats or allow_all)
+    config_items = [
+        config_item(
+            "STARAGENT_LARK_APP_ID",
+            "App ID",
+            bool(app_id),
+            True,
+            masked_value(app_id),
+            config_source(saved, "STARAGENT_LARK_APP_ID"),
+        ),
+        config_item(
+            "STARAGENT_LARK_APP_SECRET",
+            "App Secret",
+            bool(app_secret),
+            True,
+            masked_value(app_secret),
+            config_source(saved, "STARAGENT_LARK_APP_SECRET"),
+        ),
+        config_item(
+            "STARAGENT_LARK_ALLOWED_CHATS",
+            "Allowed chats",
+            bool(allowed_chats),
+            False,
+            count_csv(allowed_chats),
+            config_source(saved, "STARAGENT_LARK_ALLOWED_CHATS"),
+        ),
+        config_item(
+            "STARAGENT_LARK_ALLOWED_USERS",
+            "Allowed users",
+            bool(allowed_users),
+            False,
+            count_csv(allowed_users),
+            config_source(saved, "STARAGENT_LARK_ALLOWED_USERS"),
+        ),
+        config_item(
+            "STARAGENT_LARK_ALLOW_ALL",
+            "Allow all",
+            allow_all,
+            False,
+            "enabled" if allow_all else "",
+            config_source(saved, "STARAGENT_LARK_ALLOW_ALL"),
+        ),
+        config_item(
+            "STARAGENT_LARK_VERIFICATION_TOKEN",
+            "Verification token",
+            bool(verification_token),
+            False,
+            masked_value(verification_token),
+            config_source(saved, "STARAGENT_LARK_VERIFICATION_TOKEN"),
+        ),
+        config_item(
+            "STARAGENT_LARK_ENCRYPT_KEY",
+            "Encrypt key",
+            bool(encrypt_key),
+            False,
+            masked_value(encrypt_key),
+            config_source(saved, "STARAGENT_LARK_ENCRYPT_KEY"),
+        ),
+        config_item(
+            "STARAGENT_DASHBOARD_URL",
+            "Dashboard URL",
+            bool(dashboard_url),
+            False,
+            dashboard_url,
+            config_source(saved, "STARAGENT_DASHBOARD_URL"),
+        ),
+        config_item(
+            "STARAGENT_AUTH_TOKEN",
+            "Hub auth token",
+            bool(auth_token),
+            False,
+            masked_value(auth_token),
+            config_source(saved, "STARAGENT_AUTH_TOKEN"),
+        ),
+        config_item(
+            "STARAGENT_NODE_TOKEN",
+            "Node token",
+            bool(node_token),
+            False,
+            masked_value(node_token),
+            config_source(saved, "STARAGENT_NODE_TOKEN"),
+        ),
+    ]
+    missing_required = [
+        item["name"] for item in config_items if item["required"] and not item["present"]
+    ]
+    if not access_configured:
+        missing_required.append("STARAGENT_LARK_ALLOWED_CHATS or STARAGENT_LARK_ALLOWED_USERS")
+    worker_running = tmux_session_exists(LARK_SESSION_NAME)
+    worker_output = strip_ansi(capture_tmux_pane_ansi(LARK_SESSION_NAME, lines=80)) if worker_running else ""
+    venv_executable = lark_executable()
+    sdk_installed = lark_sdk_installed(venv_executable)
+    python_executable = lark_python_executable(venv_executable)
+    return {
+        "config": {
+            "items": config_items,
+            "access_configured": access_configured,
+            "missing_required": missing_required,
+            "path": str(LARK_CONFIG_PATH),
+        },
+        "sdk": {
+            "installed": sdk_installed,
+            "venv_executable": str(venv_executable),
+            "venv_ready": venv_executable.exists(),
+            "python_executable": str(python_executable) if python_executable else "",
+        },
+        "worker": {
+            "session": LARK_SESSION_NAME,
+            "session_url": f"/nodes/local/sessions/{urllib.parse.quote(LARK_SESSION_NAME)}",
+            "running": worker_running,
+            "status": "running" if worker_running else "stopped",
+            "recent_output": worker_output[-4000:],
+        },
+        "form": {
+            "app_id": app_id,
+            "allowed_chats": allowed_chats,
+            "allowed_users": allowed_users,
+            "allow_all": allow_all,
+            "dashboard_url": dashboard_url,
+            "secrets": {
+                "app_secret": bool(app_secret),
+                "verification_token": bool(verification_token),
+                "encrypt_key": bool(encrypt_key),
+                "node_token": bool(node_token),
+            },
+        },
+        "commands": {
+            "install": "pip install -e '.[lark]'",
+            "start": lark_display_command(),
+            "tmux": f"tmux attach -t {LARK_SESSION_NAME}",
+            "scopes": "\n".join(
+                [
+                    "im:message:send_as_bot",
+                    "im:message.p2p_msg:readonly",
+                    "im:message.group_at_msg:readonly",
+                    "Send and delete message reaction",
+                ]
+            ),
+        },
+    }
+
+
+def config_item(
+    name: str,
+    label: str,
+    present: bool,
+    required: bool,
+    value: str = "",
+    source: str = "",
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "label": label,
+        "present": present,
+        "required": required,
+        "value": value,
+        "source": source,
+    }
+
+
+def lark_connection_test_payload() -> dict[str, object]:
+    values = lark_effective_env()
+    app_id = values.get("STARAGENT_LARK_APP_ID", "")
+    app_secret = values.get("STARAGENT_LARK_APP_SECRET", "")
+    checked_at = datetime.now(UTC).astimezone().isoformat()
+    steps: list[dict[str, object]] = []
+
+    if not app_id or not app_secret:
+        missing = []
+        if not app_id:
+            missing.append("App ID")
+        if not app_secret:
+            missing.append("App Secret")
+        steps.append(
+            test_step(
+                "Configuration",
+                False,
+                f"Missing {', '.join(missing)}.",
+            )
+        )
+        return {
+            "ok": False,
+            "status": "failed",
+            "checked_at": checked_at,
+            "base_url": "",
+            "bot": {},
+            "steps": steps,
+        }
+
+    steps.append(test_step("Configuration", True, "App ID and App Secret are configured."))
+    token = ""
+    base_url = ""
+    provider = ""
+    token_attempt_details = []
+
+    for provider_name, candidate_base in LARK_OPENAPI_BASES:
+        response = lark_openapi_json(
+            candidate_base,
+            "/open-apis/auth/v3/tenant_access_token/internal",
+            body={"app_id": app_id, "app_secret": app_secret},
+        )
+        if is_lark_success(response) and isinstance(response.get("tenant_access_token"), str):
+            token = str(response["tenant_access_token"])
+            base_url = candidate_base
+            provider = provider_name
+            expire = response.get("expire")
+            detail = f"Tenant access token acquired from {provider_name} OpenAPI."
+            if expire:
+                detail += f" Expires in {expire}s."
+            steps.append(test_step("Credentials", True, detail, target=candidate_base))
+            break
+        token_attempt_details.append(
+            f"{provider_name}: {lark_response_detail(response)}"
+        )
+
+    if not token:
+        steps.append(
+            test_step(
+                "Credentials",
+                False,
+                "Could not acquire tenant access token. " + " | ".join(token_attempt_details),
+            )
+        )
+        return {
+            "ok": False,
+            "status": "failed",
+            "checked_at": checked_at,
+            "base_url": "",
+            "bot": {},
+            "steps": steps,
+        }
+
+    bot_response = lark_openapi_json(
+        base_url,
+        "/open-apis/bot/v3/info",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    if not is_lark_success(bot_response):
+        steps.append(
+            test_step(
+                "Bot info",
+                False,
+                lark_response_detail(bot_response),
+                target=f"{base_url}/open-apis/bot/v3/info",
+            )
+        )
+        return {
+            "ok": False,
+            "status": "failed",
+            "checked_at": checked_at,
+            "base_url": base_url,
+            "bot": {},
+            "steps": steps,
+        }
+
+    bot = lark_bot_info(bot_response)
+    label = bot.get("name") or bot.get("app_name") or app_id
+    steps.append(
+        test_step(
+            "Bot info",
+            True,
+            f"Bot information loaded from {provider}. Name: {label}.",
+            target=f"{base_url}/open-apis/bot/v3/info",
+        )
+    )
+    worker_running = tmux_session_exists(LARK_SESSION_NAME)
+    steps.append(
+        test_step(
+            "Worker",
+            worker_running,
+            "Lark worker is running." if worker_running else "Lark worker is not running yet.",
+            status="passed" if worker_running else "warning",
+        )
+    )
+    return {
+        "ok": True,
+        "status": "passed" if worker_running else "warning",
+        "checked_at": checked_at,
+        "base_url": base_url,
+        "bot": bot,
+        "steps": steps,
+    }
+
+
+def test_step(
+    name: str,
+    ok: bool,
+    detail: str,
+    *,
+    status: str | None = None,
+    target: str = "",
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "ok": ok,
+        "status": status or ("passed" if ok else "failed"),
+        "detail": detail,
+        "target": target,
+    }
+
+
+def lark_openapi_json(
+    base_url: str,
+    path: str,
+    *,
+    body: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+    method: str = "POST",
+    timeout: float = 8.0,
+) -> dict[str, object]:
+    data = json.dumps(body or {}).encode("utf-8") if body is not None else None
+    request_headers = {"Content-Type": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        data=data,
+        headers=request_headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read().decode("utf-8")
+            payload = json.loads(text) if text.strip() else {}
+            return payload if isinstance(payload, dict) else {"code": -1, "msg": "invalid JSON body"}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(detail)
+        except json.JSONDecodeError:
+            payload = {"msg": detail.strip() or exc.reason}
+        if isinstance(payload, dict):
+            payload.setdefault("http_status", exc.code)
+            return payload
+        return {"code": -1, "http_status": exc.code, "msg": str(payload)}
+    except (OSError, TimeoutError) as exc:
+        return {"code": -1, "msg": str(exc)}
+    except json.JSONDecodeError as exc:
+        return {"code": -1, "msg": f"invalid JSON response: {exc}"}
+
+
+def is_lark_success(response: dict[str, object]) -> bool:
+    return response.get("code") in {0, "0"}
+
+
+def lark_response_detail(response: dict[str, object]) -> str:
+    code = response.get("code")
+    msg = response.get("msg") or response.get("message") or "Lark OpenAPI request failed"
+    http_status = response.get("http_status")
+    if http_status:
+        return f"HTTP {http_status}: {msg}"
+    if code is not None:
+        return f"code={code}: {msg}"
+    return str(msg)
+
+
+def lark_bot_info(response: dict[str, object]) -> dict[str, object]:
+    data = response.get("bot") or response.get("data") or {}
+    if not isinstance(data, dict):
+        return {}
+    fields = (
+        "app_name",
+        "avatar_url",
+        "bot_id",
+        "name",
+        "open_id",
+        "union_id",
+        "activate_status",
+    )
+    return {field: data[field] for field in fields if data.get(field)}
+
+
+def read_lark_config() -> dict[str, str]:
+    with LARK_CONFIG_LOCK:
+        try:
+            data = json.loads(LARK_CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    config: dict[str, str] = {}
+    for name in LARK_EDITABLE_ENV_NAMES:
+        value = data.get(name)
+        if isinstance(value, str) and value.strip():
+            config[name] = value.strip()
+    return config
+
+
+def write_lark_config(payload: LarkConfigRequest) -> None:
+    with LARK_CONFIG_LOCK:
+        current = read_lark_config()
+        next_config = dict(current)
+        text_fields = {
+            "STARAGENT_LARK_APP_ID": payload.app_id,
+            "STARAGENT_LARK_ALLOWED_CHATS": payload.allowed_chats,
+            "STARAGENT_LARK_ALLOWED_USERS": payload.allowed_users,
+            "STARAGENT_DASHBOARD_URL": payload.dashboard_url,
+        }
+        for name, value in text_fields.items():
+            set_or_remove_lark_config_value(next_config, name, value)
+        for name, value in {
+            "STARAGENT_LARK_APP_SECRET": payload.app_secret,
+            "STARAGENT_LARK_VERIFICATION_TOKEN": payload.verification_token,
+            "STARAGENT_LARK_ENCRYPT_KEY": payload.encrypt_key,
+            "STARAGENT_NODE_TOKEN": payload.node_token,
+        }.items():
+            if value.strip():
+                next_config[name] = value.strip()
+        if payload.allow_all:
+            next_config["STARAGENT_LARK_ALLOW_ALL"] = "1"
+        else:
+            next_config.pop("STARAGENT_LARK_ALLOW_ALL", None)
+
+        try:
+            LARK_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = LARK_CONFIG_PATH.with_suffix(".json.tmp")
+            temp_path.write_text(
+                json.dumps(next_config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temp_path.chmod(0o600)
+            temp_path.replace(LARK_CONFIG_PATH)
+            LARK_CONFIG_PATH.chmod(0o600)
+        except OSError as exc:
+            raise RuntimeError(f"failed to save Lark config: {exc}") from exc
+
+
+def clear_saved_lark_config() -> None:
+    with LARK_CONFIG_LOCK:
+        try:
+            LARK_CONFIG_PATH.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise RuntimeError(f"failed to clear Lark config: {exc}") from exc
+
+
+def set_or_remove_lark_config_value(config: dict[str, str], name: str, value: str) -> None:
+    value = value.strip()
+    if value:
+        config[name] = value
+    else:
+        config.pop(name, None)
+
+
+def lark_effective_env(saved: dict[str, str] | None = None) -> dict[str, str]:
+    saved = read_lark_config() if saved is None else saved
+    values: dict[str, str] = {}
+    for name in LARK_ENV_NAMES:
+        value = saved.get(name) or os.environ.get(name, "").strip()
+        if value:
+            values[name] = value
+    return values
+
+
+def config_source(saved: dict[str, str], name: str) -> str:
+    if saved.get(name):
+        return "saved"
+    if os.environ.get(name, "").strip():
+        return "environment"
+    return ""
+
+
+def masked_value(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "*" * len(value)
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def count_csv(value: str) -> str:
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    if not items:
+        return ""
+    return f"{len(items)} configured"
+
+
+def lark_executable() -> Path:
+    local = PROJECT_ROOT / ".venv-lark" / "bin" / "staragent"
+    if local.exists():
+        return local
+    found = shutil.which("staragent")
+    return Path(found).resolve() if found else Path("staragent")
+
+
+def lark_python_executable(staragent_executable: Path | None = None) -> Path | None:
+    executable = staragent_executable or lark_executable()
+    if executable.name.startswith("python") and executable.exists():
+        return executable
+    if executable.name == "staragent" and executable.parent != Path("."):
+        candidate = executable.parent / "python"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def lark_sdk_installed(staragent_executable: Path | None = None) -> bool:
+    python_executable = lark_python_executable(staragent_executable)
+    if not python_executable:
+        return importlib.util.find_spec("lark_oapi") is not None
+
+    cache_key = str(python_executable)
+    now = datetime.now().timestamp()
+    cached = LARK_SDK_CHECK_CACHE.get(cache_key)
+    if cached and now - cached[0] <= LARK_SDK_CHECK_TTL_SECONDS:
+        return cached[1]
+
+    try:
+        result = subprocess.run(
+            [
+                str(python_executable),
+                "-c",
+                (
+                    "import importlib.util, sys; "
+                    "sys.exit(0 if importlib.util.find_spec('lark_oapi') else 1)"
+                ),
+            ],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        installed = False
+    else:
+        installed = result.returncode == 0
+    LARK_SDK_CHECK_CACHE[cache_key] = (now, installed)
+    return installed
+
+
+def lark_display_command() -> str:
+    return f"cd {shlex.quote(str(PROJECT_ROOT))} && {shlex.quote(str(lark_executable()))} lark"
+
+
+def lark_worker_command() -> str:
+    values = lark_effective_env()
+    env_parts = [f"PATH={shlex.quote(os.environ.get('PATH', ''))}"]
+    for name in PROXY_ENV_NAMES:
+        value = os.environ.get(name)
+        if value:
+            env_parts.append(f"{name}={shlex.quote(value)}")
+    for name in LARK_ENV_NAMES:
+        value = values.get(name)
+        if value:
+            env_parts.append(f"{name}={shlex.quote(value)}")
+    return f"{' '.join(env_parts)} {shlex.quote(str(lark_executable()))} lark"
 
 
 def is_agent_session(node_id: str, name: str) -> bool:
