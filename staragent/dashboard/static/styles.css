@@ -2267,6 +2267,12 @@ dd {
   color: var(--danger);
 }
 
+.node-status-stale {
+  background: var(--warn-soft);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
 .node-status-optional {
   background: var(--surface);
   border-color: var(--line-strong);

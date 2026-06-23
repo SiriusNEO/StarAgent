@@ -147,7 +147,8 @@ export STARAGENT_DASHBOARD_URL='https://staragent.example.com'
 export STARAGENT_LARK_VERIFICATION_TOKEN='xxx'
 export STARAGENT_LARK_ENCRYPT_KEY='xxx'
 
-# 如果需要操作远端 node，worker 环境里也要有 node token
+# 如果需要操作远端 node，worker 会优先使用环境里的 node token；
+# 没有环境变量时，会读取 Hub 的 .staragent/auth_token。
 export STARAGENT_NODE_TOKEN='<same token as nodes>'
 # 或复用
 export STARAGENT_AUTH_TOKEN='<hub token>'
@@ -271,7 +272,6 @@ staragent lark \
 - `system` session 只读，群聊只能绑定 `agent` session。
 - 群聊自动回复只发送最终 agent reply；raw terminal output 只通过 `/tail` 或 Dashboard terminal 查看。
 - agent 输入被接收后，Bot 会尽力给该条用户消息加 `THUMBSUP` reaction 表示 working；最终答复发出后会删除这个 reaction。没有 reaction 权限时主流程不受影响，只会在 worker log 里记录失败。
-- 旧命令 `/where` 和 `/send <message>` 仍保留兼容，但主流程里不再需要。
 - 同一个 Lark chat 内的命令会串行处理，避免连续输入并发打到同一个 session。
 
 ## 排障
@@ -298,5 +298,5 @@ staragent lark \
 
 远端 node 的普通消息或 `/tail` 失败：
 
-- 确认 Lark worker 进程环境里有 `STARAGENT_NODE_TOKEN` 或 `STARAGENT_AUTH_TOKEN`。
+- 确认 Lark worker 能读到 `.staragent/auth_token`，或进程环境里有 `STARAGENT_NODE_TOKEN` / `STARAGENT_AUTH_TOKEN`。
 - 确认 Hub 已配置该 node，且 node API 可达。

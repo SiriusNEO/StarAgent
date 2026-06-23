@@ -13,6 +13,13 @@ import uvicorn
 from rich.console import Console
 from rich.table import Table
 
+from staragent.auth import (
+    auth_token_path,
+    create_stored_auth_token,
+    hub_auth_token,
+    node_auth_token,
+    write_stored_auth_token,
+)
 from staragent.dependencies import ensure_dependencies
 from staragent.runtime import (
     ensure_tmux_session,
@@ -205,7 +212,6 @@ def tmux_child_command(kind: str, args: list[str]) -> str:
         f"PATH={shlex.quote(os.environ.get('PATH', ''))}",
     ]
     for name in (
-        "STARAGENT_AUTH_TOKEN",
         "STARAGENT_STATE_DIR",
         "STARAGENT_NODES",
         "STARAGENT_NODE_TOKEN",
@@ -242,24 +248,25 @@ def usable_ssh_target() -> str:
 
 
 def remote_node_token() -> str:
-    return (
-        os.environ.get("STARAGENT_NODE_TOKEN", "").strip()
-        or os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
-    )
+    return node_auth_token()
 
 
 def ensure_hub_auth_for_bind(bind: str) -> None:
+    env_token = os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
+    if env_token:
+        write_stored_auth_token(env_token)
+        return
     if hub_auth_token() or is_loopback_bind(bind):
         return
+    token = create_stored_auth_token()
     console.print(
-        "STARAGENT_AUTH_TOKEN is required when binding the Hub dashboard to a non-loopback address.",
-        style="red",
+        f"Generated STARAGENT_AUTH_TOKEN and saved it to {auth_token_path()}.",
+        style="yellow",
     )
-    raise typer.Exit(1)
-
-
-def hub_auth_token() -> str:
-    return os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
+    console.print(
+        f"Use this token to log in: {token}",
+        style="yellow",
+    )
 
 
 def is_loopback_bind(bind: str) -> bool:

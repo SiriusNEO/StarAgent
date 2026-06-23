@@ -5,6 +5,7 @@ import base64
 import contextlib
 import hmac
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -30,13 +31,17 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.auth import hub_auth_token as stored_hub_auth_token
+from staragent.auth import hub_auth_token_source
 from staragent.dependencies import dependencies_status, ensure_dependencies
 from staragent.hub import (
+    NODE_HEARTBEAT_INTERVAL_SECONDS,
     NodeEntry,
     add_node,
     collect_hub_sessions,
     collect_node_views,
     node_by_name,
+    refresh_remote_node_heartbeats,
     remove_node,
     request_json,
     websocket_url,
@@ -141,6 +146,7 @@ PROXY_ENV_NAMES = (
     "NO_PROXY",
     "no_proxy",
 )
+TRUE_VALUES = {"1", "true", "yes"}
 
 
 def create_app() -> FastAPI:
@@ -196,6 +202,7 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_http_terminal_janitor() -> None:
         app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
+        app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
 
     @app.on_event("shutdown")
     async def shutdown_http_terminals() -> None:
@@ -204,6 +211,11 @@ def create_app() -> FastAPI:
             janitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await janitor
+        heartbeat = getattr(app.state, "node_heartbeat", None)
+        if heartbeat:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
         for terminal_id in list(http_terminals):
             terminal = http_terminals.pop(terminal_id, None)
             if terminal:
@@ -699,7 +711,7 @@ def create_app() -> FastAPI:
 
 
 def auth_token() -> str:
-    return os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
+    return stored_hub_auth_token()
 
 
 def auth_enabled() -> bool:
@@ -830,11 +842,17 @@ async def http_terminal_janitor() -> None:
         await cleanup_http_terminals()
 
 
+async def node_heartbeat_loop() -> None:
+    while True:
+        await asyncio.sleep(NODE_HEARTBEAT_INTERVAL_SECONDS)
+        await asyncio.to_thread(refresh_remote_node_heartbeats)
+
+
 async def proxy_terminal_socket(websocket: WebSocket, node: NodeEntry, name: str) -> None:
     await websocket.accept()
     remote_url = websocket_url(node, f"/ws/sessions/{urllib.parse.quote(name)}/terminal")
     try:
-        async with websockets.connect(remote_url) as remote:
+        async with websockets.connect(remote_url, **websocket_connect_kwargs(node)) as remote:
             to_remote = asyncio.create_task(proxy_browser_to_agent(websocket, remote))
             to_browser = asyncio.create_task(proxy_agent_to_browser(remote, websocket))
             done, pending = await asyncio.wait(
@@ -861,6 +879,18 @@ async def proxy_agent_to_browser(remote, websocket: WebSocket) -> None:
             await websocket.send_bytes(message)
         else:
             await websocket.send_text(message)
+
+
+def websocket_connect_kwargs(node: NodeEntry) -> dict[str, object]:
+    if node.mode != "lan":
+        return {}
+    try:
+        parameters = inspect.signature(websockets.connect).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "proxy" in parameters:
+        return {"proxy": None}
+    return {}
 
 
 class CreateWorkerRequest(BaseModel):
@@ -927,8 +957,10 @@ def session_response(request: Request, view) -> HTMLResponse:
 def dashboard_stats(node_views, views):
     return {
         "nodes": len(node_views),
-        "connected_nodes": sum(1 for node in node_views if node.status == "connected"),
-        "disconnected_nodes": sum(1 for node in node_views if node.status != "connected"),
+        "connected_nodes": sum(
+            1 for node in node_views if node.status in {"connected", "stale"}
+        ),
+        "disconnected_nodes": sum(1 for node in node_views if node.status == "disconnected"),
         "total": len(views),
         "agent": sum(1 for view in views if view.session_type == "agent"),
         "system": sum(1 for view in views if view.session_type == "system"),
@@ -972,13 +1004,9 @@ def lark_status_payload() -> dict[str, object]:
     verification_token = values.get("STARAGENT_LARK_VERIFICATION_TOKEN", "")
     encrypt_key = values.get("STARAGENT_LARK_ENCRYPT_KEY", "")
     dashboard_url = values.get("STARAGENT_DASHBOARD_URL", "")
-    auth_token = values.get("STARAGENT_AUTH_TOKEN", "")
+    auth_token = values.get("STARAGENT_AUTH_TOKEN", "") or stored_hub_auth_token()
     node_token = values.get("STARAGENT_NODE_TOKEN", "")
-    allow_all = values.get("STARAGENT_LARK_ALLOW_ALL", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    allow_all = truthy(values.get("STARAGENT_LARK_ALLOW_ALL", ""))
     access_configured = bool(allowed_users or allowed_chats or allow_all)
     config_items = [
         config_item(
@@ -1440,6 +1468,8 @@ def config_source(saved: dict[str, str], name: str) -> str:
         return "saved"
     if os.environ.get(name, "").strip():
         return "environment"
+    if name == "STARAGENT_AUTH_TOKEN":
+        return hub_auth_token_source()
     return ""
 
 
@@ -1456,6 +1486,10 @@ def count_csv(value: str) -> str:
     if not items:
         return ""
     return f"{len(items)} configured"
+
+
+def truthy(value: str) -> bool:
+    return value.strip().lower() in TRUE_VALUES
 
 
 def lark_executable() -> Path:
@@ -1518,12 +1552,15 @@ def lark_display_command() -> str:
 
 def lark_worker_command() -> str:
     values = lark_effective_env()
+    values.setdefault("STARAGENT_STATE_DIR", str(state_dir()))
     env_parts = [f"PATH={shlex.quote(os.environ.get('PATH', ''))}"]
     for name in PROXY_ENV_NAMES:
         value = os.environ.get(name)
         if value:
             env_parts.append(f"{name}={shlex.quote(value)}")
     for name in LARK_ENV_NAMES:
+        if name == "STARAGENT_AUTH_TOKEN":
+            continue
         value = values.get(name)
         if value:
             env_parts.append(f"{name}={shlex.quote(value)}")
