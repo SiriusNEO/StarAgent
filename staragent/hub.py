@@ -4,11 +4,14 @@ import json
 import os
 import re
 import secrets
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from staragent.auth import node_auth_token
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
@@ -18,6 +21,10 @@ NODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 NODE_MODES = {"lan", "remote"}
 NODES_PATH = state_dir() / "nodes.json"
 DEFAULT_AGENT_PORT = 8081
+NODE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+NODE_HEARTBEAT_GRACE_SECONDS = 60.0
+NODE_AUTH_FAILURE_STATUS_CODES = {401, 403}
+NODE_REQUEST_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,19 @@ class NodeView:
     @property
     def is_removable(self) -> bool:
         return self.name != "local"
+
+
+@dataclass
+class NodeHeartbeat:
+    endpoint: str
+    sessions: tuple[HubSession, ...]
+    last_success: float
+    failures: int = 0
+    last_error: str = ""
+
+
+NODE_HEARTBEATS: dict[str, NodeHeartbeat] = {}
+NODE_HEARTBEATS_LOCK = threading.Lock()
 
 
 def load_nodes() -> list[NodeEntry]:
@@ -218,6 +238,12 @@ def collect_node_views() -> list[NodeView]:
     return sorted(nodes, key=lambda item: item.name)
 
 
+def refresh_remote_node_heartbeats() -> None:
+    for node in load_nodes():
+        if not node.is_local:
+            collect_node_view(node)
+
+
 def collect_node_view(node: NodeEntry) -> NodeView:
     sessions: list[HubSession] = []
     if node.is_local:
@@ -228,13 +254,72 @@ def collect_node_view(node: NodeEntry) -> NodeView:
     try:
         sessions.extend(remote_sessions(node))
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return NodeView(entry=node, status="disconnected", error=str(exc))
-    return NodeView(entry=node, status="connected", sessions=tuple(sessions))
+        return remote_node_failure_view(node, exc)
+    session_tuple = tuple(sessions)
+    remember_node_heartbeat(node, session_tuple)
+    return NodeView(entry=node, status="connected", sessions=session_tuple)
 
 
 def remote_sessions(node: NodeEntry) -> list[HubSession]:
     payload = request_json(node, "GET", "/api/sessions")
     return session_payloads_to_views(node, payload)
+
+
+def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
+    error = str(exc)
+    if is_remote_auth_failure(exc):
+        forget_node_heartbeat(node)
+        return NodeView(entry=node, status="disconnected", error=error)
+    heartbeat = remember_node_failure(node, error)
+    if heartbeat and node_heartbeat_is_fresh(heartbeat):
+        age = max(0, int(time.monotonic() - heartbeat.last_success))
+        detail = f"stale: last heartbeat {age}s ago; {error}"
+        return NodeView(entry=node, status="stale", sessions=heartbeat.sessions, error=detail)
+    return NodeView(entry=node, status="disconnected", error=error)
+
+
+def remember_node_heartbeat(node: NodeEntry, sessions: tuple[HubSession, ...]) -> None:
+    with NODE_HEARTBEATS_LOCK:
+        NODE_HEARTBEATS[node.name] = NodeHeartbeat(
+            endpoint=node_endpoint(node),
+            sessions=sessions,
+            last_success=time.monotonic(),
+        )
+
+
+def remember_node_failure(node: NodeEntry, error: str) -> NodeHeartbeat | None:
+    with NODE_HEARTBEATS_LOCK:
+        heartbeat = NODE_HEARTBEATS.get(node.name)
+        if heartbeat is None or heartbeat.endpoint != node_endpoint(node):
+            return None
+        heartbeat.failures += 1
+        heartbeat.last_error = error
+        return heartbeat
+
+
+def forget_node_heartbeat(node: NodeEntry) -> None:
+    with NODE_HEARTBEATS_LOCK:
+        NODE_HEARTBEATS.pop(node.name, None)
+
+
+def clear_node_heartbeat_cache() -> None:
+    with NODE_HEARTBEATS_LOCK:
+        NODE_HEARTBEATS.clear()
+
+
+def node_heartbeat_is_fresh(heartbeat: NodeHeartbeat) -> bool:
+    return time.monotonic() - heartbeat.last_success <= NODE_HEARTBEAT_GRACE_SECONDS
+
+
+def node_endpoint(node: NodeEntry) -> str:
+    return "local" if node.is_local else node.url or ""
+
+
+def is_remote_auth_failure(exc: Exception) -> bool:
+    return (
+        isinstance(exc, urllib.error.HTTPError)
+        and exc.code in NODE_AUTH_FAILURE_STATUS_CODES
+    )
 
 
 def session_payloads_to_views(node: NodeEntry, payload: dict) -> list[HubSession]:
@@ -275,8 +360,15 @@ def request_json(node: NodeEntry, method: str, path: str, body: dict | None = No
         headers=headers,
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=5) as response:
+    with open_node_request(node, request) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def open_node_request(node: NodeEntry, request: urllib.request.Request):
+    if node.mode == "lan":
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(request, timeout=NODE_REQUEST_TIMEOUT_SECONDS)
+    return urllib.request.urlopen(request, timeout=NODE_REQUEST_TIMEOUT_SECONDS)
 
 
 def websocket_url(node: NodeEntry, path: str) -> str:
@@ -299,10 +391,7 @@ def remote_node_headers() -> dict[str, str]:
 
 
 def remote_node_token() -> str:
-    return (
-        os.environ.get("STARAGENT_NODE_TOKEN", "").strip()
-        or os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
-    )
+    return node_auth_token()
 
 
 def valid_remote_node_token(value: str) -> bool:

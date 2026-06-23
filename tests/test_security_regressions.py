@@ -4,10 +4,10 @@ import asyncio
 import json
 from datetime import datetime
 
-import typer
 from fastapi.testclient import TestClient
 
 from staragent import dependencies
+from staragent.auth import auth_token_path, read_stored_auth_token, write_stored_auth_token
 from staragent.dashboard import app as dashboard_app
 from staragent.dashboard.app import (
     HTTP_TERMINAL_IDLE_SECONDS,
@@ -19,9 +19,9 @@ from staragent.dashboard.app import (
     lark_connection_test_payload,
 )
 from staragent.dashboard.app import create_app as create_dashboard_app
-from staragent.main import ensure_hub_auth_for_bind, is_loopback_bind
+from staragent.main import ensure_hub_auth_for_bind, is_loopback_bind, tmux_child_command
 from staragent.node.app import create_app
-from staragent.paths import state_dir
+from staragent.paths import PROJECT_ROOT, state_dir
 from staragent.pty_terminal import (
     MAX_TERMINAL_INPUT_BYTES,
     TerminalOutputFilter,
@@ -86,7 +86,8 @@ def test_sensitive_paths_are_hidden_and_blocked(tmp_path) -> None:
         raise AssertionError("sensitive file preview should fail")
 
 
-def test_node_api_requires_token(monkeypatch) -> None:
+def test_node_api_requires_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("STARAGENT_NODE_TOKEN", raising=False)
     monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
     client = TestClient(create_app())
@@ -104,31 +105,48 @@ def test_node_api_accepts_bearer_token(monkeypatch) -> None:
     assert response.status_code == 200
 
 
-def test_hub_requires_token_for_non_loopback_bind(monkeypatch) -> None:
+def test_hub_generates_token_for_non_loopback_bind(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
     assert is_loopback_bind("127.0.0.1")
     assert is_loopback_bind("localhost")
     assert not is_loopback_bind("0.0.0.0")
 
     ensure_hub_auth_for_bind("127.0.0.1")
-    try:
-        ensure_hub_auth_for_bind("0.0.0.0")
-    except typer.Exit as exc:
-        assert exc.exit_code == 1
-    else:
-        raise AssertionError("non-loopback hub bind without token should exit")
+    assert not auth_token_path().exists()
 
-
-def test_hub_allows_non_loopback_bind_with_token(monkeypatch) -> None:
-    monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "secret")
     ensure_hub_auth_for_bind("0.0.0.0")
 
+    token = read_stored_auth_token()
+    assert len(token) >= 32
 
-def test_state_dir_uses_user_state_dir_by_default(monkeypatch, tmp_path) -> None:
+
+def test_hub_persists_env_token_for_non_loopback_bind(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "secret")
+    ensure_hub_auth_for_bind("0.0.0.0")
+    assert read_stored_auth_token() == "secret"
+
+
+def test_hub_tmux_child_reads_stored_auth_without_inlining_it(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "secret")
+    monkeypatch.delenv("STARAGENT_NODE_TOKEN", raising=False)
+    ensure_hub_auth_for_bind("0.0.0.0")
+
+    command = tmux_child_command(
+        "hub", ["staragent", "hub", "--host", "0.0.0.0", "--port", "8080"]
+    )
+
+    assert read_stored_auth_token() == "secret"
+    assert "STARAGENT_AUTH_TOKEN=" not in command
+    assert "secret" not in command
+
+
+def test_state_dir_uses_project_state_dir_by_default(monkeypatch) -> None:
     monkeypatch.delenv("STARAGENT_STATE_DIR", raising=False)
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    monkeypatch.setenv("HOME", str(tmp_path))
-    assert state_dir() == tmp_path / ".local" / "state" / "staragent"
+    assert state_dir() == PROJECT_ROOT / ".staragent"
 
 
 def test_state_dir_honors_override(monkeypatch, tmp_path) -> None:
@@ -163,7 +181,8 @@ def test_cleanup_http_terminals_closes_stale_terminal() -> None:
         http_terminals.pop(row.terminal_id, None)
 
 
-def test_http_terminal_input_writes_to_terminal(monkeypatch) -> None:
+def test_http_terminal_input_writes_to_terminal(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
 
     class FakeTerminal:
@@ -255,6 +274,31 @@ def test_lark_page_shows_running_worker_readiness(monkeypatch, tmp_path) -> None
 
     assert response.status_code == 200
     assert "Lark worker is running." in response.text
+
+
+def test_lark_worker_uses_state_auth_token_without_inlining_it(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("STARAGENT_NODE_TOKEN", raising=False)
+    monkeypatch.setenv("STARAGENT_LARK_APP_ID", "cli_test")
+    monkeypatch.setenv("STARAGENT_LARK_APP_SECRET", "secret")
+    monkeypatch.setenv("STARAGENT_LARK_ALLOW_ALL", "1")
+    monkeypatch.setattr(dashboard_app, "LARK_CONFIG_PATH", tmp_path / "lark_config.json")
+    monkeypatch.setattr(dashboard_app, "tmux_session_exists", lambda name: False)
+    monkeypatch.setattr(dashboard_app, "lark_sdk_installed", lambda executable=None: True)
+    write_stored_auth_token("stored-secret")
+
+    payload = dashboard_app.lark_status_payload()
+    auth_item = next(
+        item for item in payload["config"]["items"] if item["name"] == "STARAGENT_AUTH_TOKEN"
+    )
+    worker_command = dashboard_app.lark_worker_command()
+
+    assert auth_item["present"] is True
+    assert auth_item["source"] == "state"
+    assert f"STARAGENT_STATE_DIR={tmp_path}" in worker_command
+    assert "STARAGENT_AUTH_TOKEN=" not in worker_command
+    assert "stored-secret" not in worker_command
 
 
 def test_dependencies_report_tailscale_as_optional(monkeypatch) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -10,6 +9,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.auth import node_auth_token
 from staragent.dashboard.app import (
     create_directory_payload,
     directory_listing,
@@ -175,13 +175,6 @@ def create_app() -> FastAPI:
             terminal.close()
 
     return app
-
-
-def node_auth_token() -> str:
-    return (
-        os.environ.get("STARAGENT_NODE_TOKEN", "").strip()
-        or os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
-    )
 
 
 def bearer_token(header: str | None) -> str:

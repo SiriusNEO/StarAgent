@@ -49,12 +49,13 @@ Run this on the machine that runs the dashboard:
 
 ```bash
 pip install -e '.[dev]'
-export STARAGENT_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 staragent hub --host 0.0.0.0 --port 8080
 ```
 
-Open `http://<hub-node>:8080` and log in with `STARAGENT_AUTH_TOKEN`.
-Runtime state defaults to `~/.local/state/staragent`; set `STARAGENT_STATE_DIR` to override it.
+Open `http://<hub-node>:8080` and log in with the token printed by `staragent hub`.
+Hub auth is saved in `<staragent-source>/.staragent/auth_token`; set `STARAGENT_AUTH_TOKEN`
+before starting the Hub if you want to choose the token yourself.
+Runtime state defaults to `<staragent-source>/.staragent`; set `STARAGENT_STATE_DIR` to override it.
 
 ## Remote Node
 
@@ -62,7 +63,7 @@ Run this on each machine that should run agent sessions:
 
 ```bash
 pip install -e '.[dev]'
-export STARAGENT_NODE_TOKEN="<same token as the Hub>"
+export STARAGENT_NODE_TOKEN="<same token as .staragent/auth_token on the Hub>"
 tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
 ```
 

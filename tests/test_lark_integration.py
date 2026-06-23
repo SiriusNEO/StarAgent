@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import json
 import sys
-import time
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 from staragent.integrations.lark import (
     PROXY_ENV_NAMES,
-    AgentReplyWatcher,
     BoundSessionReplyBroadcaster,
     IncomingLarkMessage,
     LarkCommandHandler,
@@ -186,17 +184,6 @@ def test_command_handler_lists_sessions():
     assert "active" in response
 
 
-def test_command_handler_sends_to_bound_group_session(tmp_path):
-    backend = FakeBackend([FakeSession("node-a", FakeView("dev"))])
-    handler = LarkCommandHandler(backend, LarkConversationRoutes(tmp_path / "routes.json"))
-
-    handler.handle(make_message("/use node-a/dev"))
-    response = handler.handle(make_message("/send fix this bug"))
-
-    assert response == "Sent to node-a/dev."
-    assert backend.sent == [("node-a", "dev", "fix this bug")]
-
-
 def test_command_handler_rejects_system_session_binding(tmp_path):
     backend = FakeBackend([FakeSession("local", FakeView("staragent-hub", session_type="system"))])
     handler = LarkCommandHandler(backend, LarkConversationRoutes(tmp_path / "routes.json"))
@@ -335,7 +322,7 @@ def test_command_handler_unbinds_group_route(tmp_path):
     message = make_message("/use node-a/dev")
     handler.handle(message)
 
-    assert handler.handle(make_message("/where")) == (
+    assert handler.handle(make_message("/use")) == (
         "This Feishu group chat is bound to node-a/dev."
     )
     assert handler.handle(make_message("/unbind")) == (
@@ -572,27 +559,6 @@ def test_bound_session_broadcaster_reaction_failure_does_not_block_forwarding(tm
     assert backend.sent == [("node-a", "dev", "fix this bug")]
     assert transport.reactions == []
     assert transport.deleted_reactions == []
-
-
-def test_agent_reply_watcher_sends_only_new_final_reply():
-    backend = FakeBackend([FakeSession("node-a", FakeView("dev"))])
-    transport = FakeTransport()
-    watcher = AgentReplyWatcher(backend, transport, poll_interval=0.01, timeout=1)
-    message = make_message("fix this bug", thread_id="omt_1")
-    route = LarkSessionRoute("node-a", "dev")
-    baseline = TranscriptState(reply="old answer", completed_reply="old answer", final=True)
-    backend.state = TranscriptState(reply="new answer", completed_reply="new answer", final=True)
-
-    watcher.schedule(message, route, baseline)
-
-    deadline = 1.0
-    step = 0.01
-    while deadline > 0 and not transport.replies:
-        time.sleep(step)
-        deadline -= step
-    assert len(transport.replies) == 1
-    assert transport.replies[0][0] == message
-    assert transport.replies[0][1] == "new answer"
 
 
 def test_lark_websocket_proxy_patch_uses_environment_proxy(monkeypatch):

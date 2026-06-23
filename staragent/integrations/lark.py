@@ -25,11 +25,11 @@ DEFAULT_HISTORY_MESSAGES = 12
 MAX_HISTORY_MESSAGES = 30
 LARK_WORKING_REACTION_EMOJI = "THUMBSUP"
 AGENT_REPLY_POLL_INTERVAL_SECONDS = 2.0
-AGENT_REPLY_TIMEOUT_SECONDS = 20 * 60.0
 LARK_ROUTES_PATH = state_dir() / "lark_routes.json"
 LARK_PENDING_REACTIONS_PATH = state_dir() / "lark_pending_reactions.json"
 DIRECT_CHAT_TYPES = {"p2p", "private", "direct"}
 GROUP_CHAT_TYPES = {"group", "chat"}
+TRUE_VALUES = {"1", "true", "yes"}
 PROXY_ENV_NAMES = (
     "wss_proxy",
     "WSS_PROXY",
@@ -70,11 +70,7 @@ class LarkConfig:
     ) -> LarkConfig:
         configured_allow_all = allow_all
         if configured_allow_all is None:
-            configured_allow_all = os.environ.get("STARAGENT_LARK_ALLOW_ALL", "").strip() in {
-                "1",
-                "true",
-                "yes",
-            }
+            configured_allow_all = parse_bool(os.environ.get("STARAGENT_LARK_ALLOW_ALL", ""))
         config = cls(
             app_id=app_id or os.environ.get("STARAGENT_LARK_APP_ID", "").strip(),
             app_secret=app_secret or os.environ.get("STARAGENT_LARK_APP_SECRET", "").strip(),
@@ -349,26 +345,22 @@ class LarkCommandHandler:
             command, rest = split_command(command_text)
             if not command:
                 return None
-            if command in {"help", "h"}:
+            if command == "help":
                 return help_text()
-            if command in {"sessions", "ls", "ps"}:
+            if command == "sessions":
                 return self.list_sessions()
             if command == "status":
                 return self.status(message, rest)
             if command == "tail":
                 return self.tail(message, rest)
-            if command in {"history", "messages", "chat"}:
+            if command == "history":
                 return self.history(message, rest)
             if command == "open":
                 return self.open_session(message, rest)
-            if command in {"use", "bind", "session"}:
+            if command == "use":
                 return self.bind_conversation(message, rest)
-            if command in {"where", "target"}:
-                return self.conversation_target(message)
-            if command in {"unbind", "clear"}:
+            if command == "unbind":
                 return self.unbind_conversation(message)
-            if command == "send":
-                return self.send_to_bound_session(message, rest)
             return f"Unknown command: /{command}\n\n{help_text()}"
         except CommandError as exc:
             return str(exc)
@@ -410,25 +402,13 @@ class LarkCommandHandler:
         return "\n".join(rows)
 
     def tail(self, message: IncomingLarkMessage, rest: str) -> str:
-        args = split_args(rest)
-        lines = DEFAULT_TAIL_LINES
-        if is_agent_group_chat(message) and (not args or is_int_string(args[0])):
-            session = self.resolve_bound_session(message, "/tail <node/session> [lines]")
-            if len(args) > 1:
-                raise CommandError("Usage in a bound Feishu group chat: /tail [lines]")
-            line_arg = args[0] if args else ""
-        else:
-            if not args:
-                raise CommandError("Usage: /tail <node/session> [lines]")
-            if len(args) > 2:
-                raise CommandError("Usage: /tail <node/session> [lines]")
-            session = self.resolve_session(args[0])
-            line_arg = args[1] if len(args) > 1 else ""
-        if line_arg:
-            try:
-                lines = int(line_arg)
-            except ValueError as exc:
-                raise CommandError("Tail lines must be a number") from exc
+        session, line_arg = self.resolve_session_with_optional_value(
+            message,
+            split_args(rest),
+            "/tail <node/session> [lines]",
+            "/tail [lines]",
+        )
+        lines = parse_tail_lines(line_arg) if line_arg else DEFAULT_TAIL_LINES
         output = self.backend.tail_session(session.node_id, session.name, lines)
         if not output.strip():
             return f"{session.node_id}/{session.name} has no captured output."
@@ -443,37 +423,14 @@ class LarkCommandHandler:
     def resolve_history_request(
         self, message: IncomingLarkMessage, rest: str
     ) -> tuple[HubSession, int]:
-        args = split_args(rest)
-        count = DEFAULT_HISTORY_MESSAGES
-        if is_agent_group_chat(message) and (not args or is_int_string(args[0])):
-            route = self.routes.get(message)
-            if route is None:
-                raise CommandError(
-                    "No StarAgent session is bound to this Feishu group chat. "
-                    "Use /use <node/session> first, or use /history <node/session> [count]."
-                )
-            if len(args) > 1:
-                raise CommandError("Usage in a bound Feishu group chat: /history [count]")
-            if args:
-                count = parse_history_count(args[0])
-            return self.resolve_session(route.target), count
-        if not args:
-            raise CommandError("Usage: /history <node/session> [count]")
-        if len(args) > 2:
-            raise CommandError("Usage: /history <node/session> [count]")
-        session = self.resolve_session(args[0])
-        if len(args) == 2:
-            count = parse_history_count(args[1])
-        return session, count
-
-    def send_to_bound_session(self, message: IncomingLarkMessage, rest: str) -> str:
-        text = rest.strip()
-        if not text:
-            raise CommandError("Usage in a bound Feishu group chat: /send <message>")
-        return (
-            self.forward_to_bound_session(message, text=text, acknowledge=True)
-            or group_required_text(message)
+        session, count_arg = self.resolve_session_with_optional_value(
+            message,
+            split_args(rest),
+            "/history <node/session> [count]",
+            "/history [count]",
         )
+        count = parse_history_count(count_arg) if count_arg else DEFAULT_HISTORY_MESSAGES
+        return session, count
 
     def bind_conversation(self, message: IncomingLarkMessage, rest: str) -> str:
         if not is_agent_group_chat(message):
@@ -512,7 +469,6 @@ class LarkCommandHandler:
         message: IncomingLarkMessage,
         *,
         text: str | None = None,
-        acknowledge: bool = False,
     ) -> str | None:
         text = message.text.strip() if text is None else text.strip()
         if not text:
@@ -536,8 +492,6 @@ class LarkCommandHandler:
                 LarkSessionRoute(node_id=session.node_id, session=session.name),
                 baseline,
             )
-        if acknowledge:
-            return f"Sent to {session.node_id}/{session.name}."
         return None
 
     def transcript_state_or_none(self, node_id: str, session: str) -> TranscriptState | None:
@@ -563,6 +517,23 @@ class LarkCommandHandler:
         if len(args) != 1:
             raise CommandError(f"Usage: {usage}")
         return self.resolve_session(args[0])
+
+    def resolve_session_with_optional_value(
+        self,
+        message: IncomingLarkMessage,
+        args: list[str],
+        usage: str,
+        bound_usage: str,
+    ) -> tuple[HubSession, str]:
+        if is_agent_group_chat(message) and (not args or is_int_string(args[0])):
+            if len(args) > 1:
+                raise CommandError(f"Usage in a bound Feishu group chat: {bound_usage}")
+            value = args[0] if args else ""
+            return self.resolve_bound_session(message, usage), value
+        if not args or len(args) > 2:
+            raise CommandError(f"Usage: {usage}")
+        value = args[1] if len(args) == 2 else ""
+        return self.resolve_session(args[0]), value
 
     def resolve_bound_session(self, message: IncomingLarkMessage, usage: str) -> HubSession:
         if not is_agent_group_chat(message):
@@ -690,83 +661,6 @@ class LarkTransport:
         ensure_lark_response(response)
 
 
-class AgentReplyWatcher:
-    def __init__(
-        self,
-        backend: StarAgentBackend,
-        transport: LarkTransport,
-        *,
-        poll_interval: float = AGENT_REPLY_POLL_INTERVAL_SECONDS,
-        timeout: float = AGENT_REPLY_TIMEOUT_SECONDS,
-    ) -> None:
-        self.backend = backend
-        self.transport = transport
-        self.poll_interval = poll_interval
-        self.timeout = timeout
-        self._guard = threading.Lock()
-        self._tokens: dict[str, int] = {}
-
-    def schedule(
-        self,
-        message: IncomingLarkMessage,
-        route: LarkSessionRoute,
-        baseline: TranscriptState,
-    ) -> None:
-        key = lark_conversation_key(message)
-        if not key:
-            return
-        token = self._next_token(key)
-        thread = threading.Thread(
-            target=self._watch,
-            args=(key, token, message, route, baseline),
-            name=f"lark-reply-{route.node_id}-{route.session}",
-            daemon=True,
-        )
-        thread.start()
-
-    def _next_token(self, key: str) -> int:
-        with self._guard:
-            token = self._tokens.get(key, 0) + 1
-            self._tokens[key] = token
-            return token
-
-    def _is_current(self, key: str, token: int) -> bool:
-        with self._guard:
-            return self._tokens.get(key) == token
-
-    def _watch(
-        self,
-        key: str,
-        token: int,
-        message: IncomingLarkMessage,
-        route: LarkSessionRoute,
-        baseline: TranscriptState,
-    ) -> None:
-        baseline_reply = final_reply_from_state(baseline)
-        deadline = time.monotonic() + self.timeout
-        while time.monotonic() < deadline:
-            time.sleep(self.poll_interval)
-            if not self._is_current(key, token):
-                return
-            try:
-                state = self.backend.transcript_state(route.node_id, route.session)
-            except Exception as exc:
-                print(
-                    f"Lark final reply poll failed for {route.target}: {exc}",
-                    flush=True,
-                )
-                continue
-            reply = final_reply_from_state(state)
-            if not reply or reply == baseline_reply:
-                continue
-            if not self._is_current(key, token):
-                return
-            self.transport.reply_text(message, format_agent_final_reply(route, reply))
-            return
-        if self._is_current(key, token):
-            print(f"Lark final reply watcher timed out for {route.target}", flush=True)
-
-
 class BoundSessionReplyBroadcaster:
     def __init__(
         self,
@@ -812,8 +706,7 @@ class BoundSessionReplyBroadcaster:
         if not key:
             return
         state_key = self._state_key(key, route)
-        with self._last_guard:
-            self._observed_working.add(state_key)
+        self._remember_working(state_key)
         try:
             reaction_id = self.transport.add_reaction(message, LARK_WORKING_REACTION_EMOJI)
         except Exception as exc:
@@ -821,7 +714,7 @@ class BoundSessionReplyBroadcaster:
             return
         if not reaction_id:
             return
-        self.remember_pending_reaction(
+        self._remember_pending_reaction(
             state_key,
             LarkPendingReaction(message_id=message.message_id, reaction_id=reaction_id),
         )
@@ -851,43 +744,48 @@ class BoundSessionReplyBroadcaster:
             fingerprint, reply, working = self._route_state(binding.route)
             if not fingerprint or not reply:
                 if working:
-                    with self._last_guard:
-                        self._observed_working.add(state_key)
+                    self._remember_working(state_key)
                 continue
-            with self._last_guard:
-                previous = self._last_final.get(state_key)
-                saw_working = state_key in self._observed_working
-            with self._reaction_guard:
-                saw_working = saw_working or bool(self._pending_reactions.get(state_key))
-            if previous is None:
-                with self._last_guard:
-                    self._last_final[state_key] = fingerprint
-                    self._observed_working.discard(state_key)
-                if not saw_working:
-                    continue
-            if previous == fingerprint:
-                with self._last_guard:
-                    self._observed_working.discard(state_key)
+            if not self._should_broadcast_reply(state_key, fingerprint):
                 continue
-            with self._last_guard:
-                self._last_final[state_key] = fingerprint
-                self._observed_working.discard(state_key)
             self.transport.send_text(
                 binding.chat_id,
-                format_agent_final_reply(binding.route, reply),
+                reply.strip(),
             )
-            self.clear_pending_reactions(state_key, binding.route)
+            self._clear_pending_reactions(state_key, binding.route)
+        self._prune_inactive_state(active_keys)
+
+    def _remember_working(self, state_key: str) -> None:
         with self._last_guard:
-            for key in list(self._last_final):
-                if key not in active_keys:
-                    self._last_final.pop(key, None)
+            self._observed_working.add(state_key)
+
+    def _should_broadcast_reply(self, state_key: str, fingerprint: str) -> bool:
+        with self._last_guard:
+            previous = self._last_final.get(state_key)
+            saw_working = state_key in self._observed_working
+            if previous == fingerprint:
+                self._observed_working.discard(state_key)
+                return False
+            self._last_final[state_key] = fingerprint
+            self._observed_working.discard(state_key)
+        return previous is not None or saw_working or self._has_pending_reaction(state_key)
+
+    def _has_pending_reaction(self, state_key: str) -> bool:
+        with self._reaction_guard:
+            return bool(self._pending_reactions.get(state_key))
+
+    def _prune_inactive_state(self, active_keys: set[str]) -> None:
+        with self._last_guard:
+            inactive_keys = set(self._last_final) - active_keys
+            for key in inactive_keys:
+                self._last_final.pop(key, None)
             self._observed_working.intersection_update(active_keys)
         with self._reaction_guard:
             stale_reactions = [
                 key for key in self._pending_reactions if key not in active_keys
             ]
         for key in stale_reactions:
-            self.clear_pending_reactions(key)
+            self._clear_pending_reactions(key)
 
     def _run(self) -> None:
         while True:
@@ -915,7 +813,7 @@ class BoundSessionReplyBroadcaster:
             return "", "", state.working
         return final_reply_fingerprint(state, reply), reply, state.working
 
-    def clear_pending_reactions(
+    def _clear_pending_reactions(
         self,
         state_key: str,
         route: LarkSessionRoute | None = None,
@@ -931,7 +829,7 @@ class BoundSessionReplyBroadcaster:
                 target = route.target if route else state_key
                 print(f"Lark working reaction delete failed for {target}: {exc}", flush=True)
 
-    def remember_pending_reaction(
+    def _remember_pending_reaction(
         self,
         state_key: str,
         reaction: LarkPendingReaction,
@@ -1167,6 +1065,10 @@ def parse_csv(raw: str) -> frozenset[str]:
     return frozenset(item.strip() for item in raw.split(",") if item.strip())
 
 
+def parse_bool(raw: str) -> bool:
+    return raw.strip().lower() in TRUE_VALUES
+
+
 def text_content(text: str) -> str:
     return json.dumps({"text": text}, ensure_ascii=False)
 
@@ -1291,6 +1193,13 @@ def truncate_reply(text: str, max_chars: int = MAX_REPLY_CHARS) -> str:
     return text[: max_chars - len(suffix)].rstrip() + suffix
 
 
+def parse_tail_lines(raw: str) -> int:
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise CommandError("Tail lines must be a number") from exc
+
+
 def parse_history_count(raw: str) -> int:
     try:
         count = int(raw)
@@ -1316,10 +1225,6 @@ def final_reply_fingerprint(state: TranscriptState, reply: str) -> str:
         if message.role == "agent" and message.text.strip() == reply:
             return f"{message.source_id}:{message.timestamp_ms}:{reply}"
     return reply
-
-
-def format_agent_final_reply(route: LarkSessionRoute, reply: str) -> str:
-    return reply.strip()
 
 
 def format_history(route: LarkSessionRoute, state: TranscriptState, count: int) -> str:
