@@ -39,6 +39,7 @@ from staragent.hub import (
     NodeEntry,
     add_node,
     collect_hub_sessions,
+    collect_node_view,
     collect_node_views,
     node_by_name,
     refresh_remote_node_heartbeats,
@@ -47,6 +48,7 @@ from staragent.hub import (
     websocket_url,
 )
 from staragent.paths import PROJECT_ROOT, state_dir
+from staragent.presets import command_presets_payload
 from staragent.pty_terminal import (
     MAX_TERMINAL_INPUT_BYTES,
     PtyTerminal,
@@ -72,16 +74,6 @@ from staragent.transcript import strip_ansi
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
-
-COMMAND_PRESETS = [
-    {"label": "Codex YOLO", "command": "codex --yolo"},
-    {"label": "Codex", "command": "codex"},
-    {"label": "Claude Skip Permissions", "command": "claude --dangerously-skip-permissions"},
-    {"label": "Claude", "command": "claude"},
-    {"label": "Gemini", "command": "gemini"},
-    {"label": "OpenCode", "command": "opencode"},
-    {"label": "Shell", "command": "bash"},
-]
 
 
 @dataclass
@@ -157,9 +149,13 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
         if not auth_enabled() or is_public_path(request.url.path):
-            return await call_next(request)
+            response = await call_next(request)
+            add_static_cache_header(request, response)
+            return response
         if request_is_authenticated(request):
-            return await call_next(request)
+            response = await call_next(request)
+            add_static_cache_header(request, response)
+            return response
         if wants_html(request):
             return RedirectResponse(
                 f"/login?next={urllib.parse.quote(str(request.url.path))}", status_code=303
@@ -240,7 +236,7 @@ def create_app() -> FastAPI:
                 "node_views": node_views,
                 "stats": dashboard_stats(node_views, views),
                 "relative_time": relative_time,
-                "command_presets": COMMAND_PRESETS,
+                "command_presets": command_presets_payload(),
                 "initial_explorer_path": str(Path.cwd()),
             },
         )
@@ -271,16 +267,16 @@ def create_app() -> FastAPI:
 
     @app.get("/sessions/{name}", response_class=HTMLResponse)
     def session_detail(request: Request, name: str) -> HTMLResponse:
-        for view in session_views():
-            if view.name == name:
-                return session_response(request, view)
+        view = node_session_view("local", name)
+        if view:
+            return session_response(request, view)
         raise HTTPException(status_code=404, detail="Session not found")
 
     @app.get("/nodes/{node_id}/sessions/{name}", response_class=HTMLResponse)
     def node_session_detail(request: Request, node_id: str, name: str) -> HTMLResponse:
-        for view in session_views():
-            if view.node_id == node_id and view.name == name:
-                return session_response(request, view)
+        view = node_session_view(node_id, name)
+        if view:
+            return session_response(request, view)
         raise HTTPException(status_code=404, detail="Session not found")
 
     @app.websocket("/ws/sessions/{name}/terminal")
@@ -727,6 +723,11 @@ def is_public_path(path: str) -> bool:
     return path == "/login" or path.startswith("/static/")
 
 
+def add_static_cache_header(request: Request, response) -> None:
+    if request.url.path.startswith("/static/") and response.status_code == 200:
+        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+
+
 def bearer_token(header: str | None) -> str:
     if not header:
         return ""
@@ -939,6 +940,18 @@ def session_views():
     return collect_hub_sessions()
 
 
+def node_session_view(node_id: str, name: str):
+    try:
+        node = node_by_name(node_id)
+    except KeyError:
+        return None
+    node_view = collect_node_view(node)
+    for view in node_view.sessions:
+        if view.name == name:
+            return view
+    return None
+
+
 def session_response(request: Request, view) -> HTMLResponse:
     attach_command = (
         local_attach_command(view) if view.node_id == "local" else ssh_attach_command(view)
@@ -957,9 +970,7 @@ def session_response(request: Request, view) -> HTMLResponse:
 def dashboard_stats(node_views, views):
     return {
         "nodes": len(node_views),
-        "connected_nodes": sum(
-            1 for node in node_views if node.status in {"connected", "stale"}
-        ),
+        "connected_nodes": sum(1 for node in node_views if node.status in {"connected", "stale"}),
         "disconnected_nodes": sum(1 for node in node_views if node.status == "disconnected"),
         "total": len(views),
         "agent": sum(1 for view in views if view.session_type == "agent"),
@@ -1096,7 +1107,9 @@ def lark_status_payload() -> dict[str, object]:
     if not access_configured:
         missing_required.append("STARAGENT_LARK_ALLOWED_CHATS or STARAGENT_LARK_ALLOWED_USERS")
     worker_running = tmux_session_exists(LARK_SESSION_NAME)
-    worker_output = strip_ansi(capture_tmux_pane_ansi(LARK_SESSION_NAME, lines=80)) if worker_running else ""
+    worker_output = (
+        strip_ansi(capture_tmux_pane_ansi(LARK_SESSION_NAME, lines=80)) if worker_running else ""
+    )
     venv_executable = lark_executable()
     sdk_installed = lark_sdk_installed(venv_executable)
     python_executable = lark_python_executable(venv_executable)
@@ -1218,9 +1231,7 @@ def lark_connection_test_payload() -> dict[str, object]:
                 detail += f" Expires in {expire}s."
             steps.append(test_step("Credentials", True, detail, target=candidate_base))
             break
-        token_attempt_details.append(
-            f"{provider_name}: {lark_response_detail(response)}"
-        )
+        token_attempt_details.append(f"{provider_name}: {lark_response_detail(response)}")
 
     if not token:
         steps.append(
@@ -1332,7 +1343,9 @@ def lark_openapi_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             text = response.read().decode("utf-8")
             payload = json.loads(text) if text.strip() else {}
-            return payload if isinstance(payload, dict) else {"code": -1, "msg": "invalid JSON body"}
+            return (
+                payload if isinstance(payload, dict) else {"code": -1, "msg": "invalid JSON body"}
+            )
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         try:
@@ -1788,15 +1801,13 @@ def chat_fingerprint(text: str) -> str:
 
 def local_attach_command(view) -> str:
     session = view.config.session or view.name
-    quoted_session = shlex.quote(session)
-    return f'if [ -n "$TMUX" ]; then tmux switch-client -t {quoted_session}; else tmux attach -t {quoted_session}; fi'
+    return f"tmux attach -t {shlex.quote(session)}"
 
 
 def ssh_attach_command(view) -> str:
     session = view.config.session or view.name
     node = view.node_id if getattr(view, "node_id", "local") != "local" else ssh_target()
-    quoted_session = shlex.quote(session)
-    remote = f'if [ -n "$TMUX" ]; then tmux switch-client -t {quoted_session}; else tmux attach -t {quoted_session}; fi'
+    remote = f"tmux attach -t {shlex.quote(session)}"
     return f"ssh -t {shlex.quote(node)} {shlex.quote(remote)}"
 
 

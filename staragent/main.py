@@ -5,6 +5,7 @@ import os
 import shlex
 import shutil
 import socket
+import urllib.error
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,15 +22,87 @@ from staragent.auth import (
     write_stored_auth_token,
 )
 from staragent.dependencies import ensure_dependencies
+from staragent.hub import node_by_name, request_json
+from staragent.presets import COMMAND_PRESETS, preset_command, preset_names
 from staragent.runtime import (
     ensure_tmux_session,
     kill_tmux_session,
+    start_tmux_worker,
     wait_for_tmux_session,
 )
+from staragent.schemas import CreateWorker
 from staragent.status import collect_session_views
 
 app = typer.Typer(help="Monitor and control AI coding-agent sessions.")
 console = Console()
+
+
+@app.command()
+def presets() -> None:
+    """List available coding CLI command presets."""
+    table = Table(title="StarAgent Command Presets")
+    table.add_column("Preset", style="bold")
+    table.add_column("Command")
+    table.add_column("Label")
+    for preset in COMMAND_PRESETS:
+        table.add_row(preset.name, preset.command, preset.label)
+    console.print(table)
+
+
+@app.command()
+def create(
+    name: str = typer.Argument(..., help="tmux session name to create."),
+    cwd: Path = typer.Option(
+        Path.cwd(),
+        "--cwd",
+        "-C",
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Working directory for the session.",
+    ),
+    preset: str = typer.Option(
+        "codex-yolo",
+        "--preset",
+        "-p",
+        help=f"Command preset. Available: {preset_names()}",
+    ),
+    command: str = typer.Option(
+        "",
+        "--cmd",
+        help="Custom command. Overrides --preset.",
+    ),
+    node_name: str = typer.Option(
+        "local",
+        "--node",
+        "-n",
+        help="Node to create the session on. Defaults to local.",
+    ),
+) -> None:
+    """Create a tmux-backed coding-agent session."""
+    command = command.strip() or resolve_preset_command(preset)
+    worker = CreateWorker(name=name, cwd=str(cwd), command=command)
+    try:
+        node = node_by_name(node_name)
+    except KeyError as exc:
+        raise typer.BadParameter(f"Unknown node: {node_name}") from exc
+
+    try:
+        if node.is_local:
+            start_tmux_worker(worker.name, worker.cwd, worker.command)
+        else:
+            request_json(node, "POST", "/api/workers", worker.model_dump())
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except (RuntimeError, OSError, urllib.error.URLError) as exc:
+        console.print(str(exc), style="red")
+        raise typer.Exit(1) from exc
+
+    console.print(f"Created session: {worker.name}", style="green")
+    console.print(f"Node: {node.name}")
+    console.print(f"Working directory: {worker.cwd}")
+    console.print(f"Command: {worker.command}")
+    console.print(f"Attach: tmux attach -t {shlex.quote(worker.name)}")
 
 
 @app.command()
@@ -141,7 +214,9 @@ def lark(
         help="Comma-separated Lark chat_id allowlist.",
     ),
     allow_all: bool = typer.Option(False, "--allow-all", help="Allow all Lark senders."),
-    dashboard_url: str = typer.Option("", "--dashboard-url", help="Public StarAgent dashboard URL."),
+    dashboard_url: str = typer.Option(
+        "", "--dashboard-url", help="Public StarAgent dashboard URL."
+    ),
 ) -> None:
     """Run the Lark command integration worker."""
     from staragent.integrations.lark import LarkConfig, run_lark_integration
@@ -181,6 +256,13 @@ def kill(name: str) -> None:
     console.print(f"Stopped tmux session: {name}")
 
 
+def resolve_preset_command(name: str) -> str:
+    try:
+        return preset_command(name)
+    except KeyError as exc:
+        raise typer.BadParameter(f"Unknown preset: {name}. Available: {preset_names()}") from exc
+
+
 def relative_time(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -200,8 +282,7 @@ def relative_time(value: datetime | None) -> str:
 
 def ssh_attach_command(session: str) -> str:
     target = os.environ.get("STARAGENT_SSH_TARGET") or usable_ssh_target()
-    quoted_session = shlex.quote(session)
-    remote = f'if [ -n "$TMUX" ]; then tmux switch-client -t {quoted_session}; else tmux attach -t {quoted_session}; fi'
+    remote = f"tmux attach -t {shlex.quote(session)}"
     return f"ssh -t {shlex.quote(target)} {shlex.quote(remote)}"
 
 

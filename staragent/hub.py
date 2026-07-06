@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from staragent.auth import node_auth_token
@@ -25,6 +26,7 @@ NODE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 NODE_HEARTBEAT_GRACE_SECONDS = 60.0
 NODE_AUTH_FAILURE_STATUS_CODES = {401, 403}
 NODE_REQUEST_TIMEOUT_SECONDS = 5.0
+NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 0.8
 
 
 @dataclass(frozen=True)
@@ -232,9 +234,11 @@ def collect_hub_sessions() -> list[HubSession]:
 
 
 def collect_node_views() -> list[NodeView]:
-    nodes = []
-    for node in load_nodes():
-        nodes.append(collect_node_view(node))
+    entries = load_nodes()
+    if len(entries) <= 1:
+        return [collect_node_view(node) for node in entries]
+    with ThreadPoolExecutor(max_workers=min(len(entries), 8)) as executor:
+        nodes = list(executor.map(collect_node_view, entries))
     return sorted(nodes, key=lambda item: item.name)
 
 
@@ -261,7 +265,7 @@ def collect_node_view(node: NodeEntry) -> NodeView:
 
 
 def remote_sessions(node: NodeEntry) -> list[HubSession]:
-    payload = request_json(node, "GET", "/api/sessions")
+    payload = request_json(node, "GET", "/api/sessions", timeout=remote_node_status_timeout())
     return session_payloads_to_views(node, payload)
 
 
@@ -316,10 +320,7 @@ def node_endpoint(node: NodeEntry) -> str:
 
 
 def is_remote_auth_failure(exc: Exception) -> bool:
-    return (
-        isinstance(exc, urllib.error.HTTPError)
-        and exc.code in NODE_AUTH_FAILURE_STATUS_CODES
-    )
+    return isinstance(exc, urllib.error.HTTPError) and exc.code in NODE_AUTH_FAILURE_STATUS_CODES
 
 
 def session_payloads_to_views(node: NodeEntry, payload: dict) -> list[HubSession]:
@@ -346,7 +347,13 @@ def session_payloads_to_views(node: NodeEntry, payload: dict) -> list[HubSession
     return sessions
 
 
-def request_json(node: NodeEntry, method: str, path: str, body: dict | None = None) -> dict:
+def request_json(
+    node: NodeEntry,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    timeout: float = NODE_REQUEST_TIMEOUT_SECONDS,
+) -> dict:
     if node.is_local:
         raise ValueError("local node does not use remote node requests")
     data = None
@@ -360,15 +367,29 @@ def request_json(node: NodeEntry, method: str, path: str, body: dict | None = No
         headers=headers,
         method=method,
     )
-    with open_node_request(node, request) as response:
+    with open_node_request(node, request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def open_node_request(node: NodeEntry, request: urllib.request.Request):
+def open_node_request(
+    node: NodeEntry,
+    request: urllib.request.Request,
+    timeout: float = NODE_REQUEST_TIMEOUT_SECONDS,
+):
     if node.mode == "lan":
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        return opener.open(request, timeout=NODE_REQUEST_TIMEOUT_SECONDS)
-    return urllib.request.urlopen(request, timeout=NODE_REQUEST_TIMEOUT_SECONDS)
+        return opener.open(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def remote_node_status_timeout() -> float:
+    raw = os.environ.get("STARAGENT_NODE_STATUS_TIMEOUT", "").strip()
+    if not raw:
+        return NODE_STATUS_REQUEST_TIMEOUT_SECONDS
+    try:
+        return max(0.1, float(raw))
+    except ValueError:
+        return NODE_STATUS_REQUEST_TIMEOUT_SECONDS
 
 
 def websocket_url(node: NodeEntry, path: str) -> str:
