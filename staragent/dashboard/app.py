@@ -11,7 +11,6 @@ import os
 import re
 import shlex
 import shutil
-import socket
 import subprocess
 import threading
 import urllib.error
@@ -74,6 +73,17 @@ from staragent.transcript import strip_ansi
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
+STATIC_DIR = PACKAGE_DIR / "static"
+
+
+def static_version(path: str) -> int:
+    try:
+        return int((STATIC_DIR / path).stat().st_mtime)
+    except OSError:
+        return 0
+
+
+templates.env.globals["static_version"] = static_version
 
 
 @dataclass
@@ -953,9 +963,7 @@ def node_session_view(node_id: str, name: str):
 
 
 def session_response(request: Request, view) -> HTMLResponse:
-    attach_command = (
-        local_attach_command(view) if view.node_id == "local" else ssh_attach_command(view)
-    )
+    attach_command = tmux_attach_command(view)
     return templates.TemplateResponse(
         request,
         "session.html",
@@ -963,6 +971,8 @@ def session_response(request: Request, view) -> HTMLResponse:
             "view": view,
             "relative_time": relative_time,
             "attach_command": attach_command,
+            "tmux_commands": tmux_quick_commands(view),
+            "initial_token_usage": initial_token_usage_payload(view),
         },
     )
 
@@ -979,6 +989,70 @@ def dashboard_stats(node_views, views):
         "active": sum(1 for view in views if view.status in {"active", "attached"}),
         "idle": sum(1 for view in views if view.status == "idle"),
     }
+
+
+def initial_token_usage_payload(view) -> dict[str, str] | None:
+    if not getattr(view, "is_agent_session", False):
+        return None
+    try:
+        state = node_transcript_state(view.node_id, view.name, lines=500)
+    except (KeyError, RuntimeError, OSError, urllib.error.URLError, json.JSONDecodeError):
+        return None
+    if not state.token_usage:
+        return None
+    usage = state.token_usage.as_dict()
+    rate = " · ".join(
+        item
+        for item in (
+            token_percent_text(usage.get("primary_rate_used_percent"), "primary"),
+            token_percent_text(usage.get("secondary_rate_used_percent"), "weekly"),
+        )
+        if item
+    )
+    source = str(usage.get("source") or "")
+    return {
+        "total": format_token_count(usage.get("total_tokens")),
+        "source": f"{source} native usage" if source else "CLI native usage",
+        "model": str(usage.get("model") or "--"),
+        "reasoning_effort": str(usage.get("reasoning_effort") or "default"),
+        "plan": str(usage.get("plan_type") or "--"),
+        "context": (
+            f"{format_token_count(usage.get('context_window'))} window"
+            if int(usage.get("context_window") or 0)
+            else "--"
+        ),
+        "rate": rate or "--",
+        "last": format_token_count(usage.get("last_total_tokens")),
+        "cached": format_token_count(usage.get("cached_input_tokens")),
+        "output": format_token_count(usage.get("output_tokens")),
+        "reasoning": format_token_count(usage.get("reasoning_output_tokens")),
+    }
+
+
+def token_percent_text(value: object, label: str) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not number:
+        return ""
+    return f"{number:.0f}% {label}"
+
+
+def format_token_count(value: object) -> str:
+    try:
+        count = int(value or 0)
+    except (TypeError, ValueError):
+        return "--"
+    if count <= 0:
+        return "--"
+    if count >= 1_000_000:
+        precision = 1 if count >= 10_000_000 else 2
+        return f"{count / 1_000_000:.{precision}f}M"
+    if count >= 1_000:
+        precision = 1 if count >= 10_000 else 2
+        return f"{count / 1_000:.{precision}f}k"
+    return f"{count:,}"
 
 
 def node_payload(node) -> dict[str, object]:
@@ -1799,26 +1873,21 @@ def chat_fingerprint(text: str) -> str:
     return re.sub(r"\s+", "", text.strip()).lower()
 
 
-def local_attach_command(view) -> str:
+def tmux_attach_command(view) -> str:
     session = view.config.session or view.name
     return f"tmux attach -t {shlex.quote(session)}"
 
 
-def ssh_attach_command(view) -> str:
+def tmux_quick_commands(view) -> list[dict[str, str]]:
     session = view.config.session or view.name
-    node = view.node_id if getattr(view, "node_id", "local") != "local" else ssh_target()
-    remote = f"tmux attach -t {shlex.quote(session)}"
-    return f"ssh -t {shlex.quote(node)} {shlex.quote(remote)}"
-
-
-def ssh_target() -> str:
-    configured = os.environ.get("STARAGENT_SSH_TARGET")
-    if configured:
-        return configured
-    fqdn = socket.getfqdn()
-    if fqdn and not fqdn.startswith("localhost"):
-        return fqdn
-    return socket.gethostname()
+    quoted_session = shlex.quote(session)
+    return [
+        {"label": "List", "command": "tmux ls"},
+        {"label": "Attach", "command": f"tmux attach -t {quoted_session}"},
+        {"label": "Detach", "command": "Ctrl-b d"},
+        {"label": "Kill", "command": f"tmux kill-session -t {quoted_session}"},
+        {"label": "Exit", "command": "exit"},
+    ]
 
 
 SENSITIVE_PATH_PARTS = {".ssh", ".aws", ".gnupg", ".staragent"}

@@ -26,7 +26,8 @@ NODE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 NODE_HEARTBEAT_GRACE_SECONDS = 60.0
 NODE_AUTH_FAILURE_STATUS_CODES = {401, 403}
 NODE_REQUEST_TIMEOUT_SECONDS = 5.0
-NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 2.0
+NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 8.0
+NODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,7 @@ class NodeHeartbeat:
     endpoint: str
     sessions: tuple[HubSession, ...]
     last_success: float
+    last_health_success: float = 0.0
     failures: int = 0
     last_error: str = ""
 
@@ -274,6 +276,14 @@ def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
     if is_remote_auth_failure(exc):
         forget_node_heartbeat(node)
         return NodeView(entry=node, status="disconnected", error=error)
+
+    if remote_node_health_ok(node):
+        heartbeat = remember_node_health(node, error)
+        detail = f"stale: health ok; sessions unavailable: {error}"
+        if heartbeat:
+            return NodeView(entry=node, status="stale", sessions=heartbeat.sessions, error=detail)
+        return NodeView(entry=node, status="stale", error=detail)
+
     heartbeat = remember_node_failure(node, error)
     if heartbeat and node_heartbeat_is_fresh(heartbeat):
         age = max(0, int(time.monotonic() - heartbeat.last_success))
@@ -283,12 +293,33 @@ def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
 
 
 def remember_node_heartbeat(node: NodeEntry, sessions: tuple[HubSession, ...]) -> None:
+    now = time.monotonic()
     with NODE_HEARTBEATS_LOCK:
         NODE_HEARTBEATS[node.name] = NodeHeartbeat(
             endpoint=node_endpoint(node),
             sessions=sessions,
-            last_success=time.monotonic(),
+            last_success=now,
+            last_health_success=now,
         )
+
+
+def remember_node_health(node: NodeEntry, error: str) -> NodeHeartbeat | None:
+    with NODE_HEARTBEATS_LOCK:
+        heartbeat = NODE_HEARTBEATS.get(node.name)
+        if heartbeat is None or heartbeat.endpoint != node_endpoint(node):
+            NODE_HEARTBEATS[node.name] = NodeHeartbeat(
+                endpoint=node_endpoint(node),
+                sessions=(),
+                last_success=0.0,
+                last_health_success=time.monotonic(),
+                failures=1,
+                last_error=error,
+            )
+            return None
+        heartbeat.failures += 1
+        heartbeat.last_error = error
+        heartbeat.last_health_success = time.monotonic()
+        return heartbeat
 
 
 def remember_node_failure(node: NodeEntry, error: str) -> NodeHeartbeat | None:
@@ -321,6 +352,14 @@ def node_endpoint(node: NodeEntry) -> str:
 
 def is_remote_auth_failure(exc: Exception) -> bool:
     return isinstance(exc, urllib.error.HTTPError) and exc.code in NODE_AUTH_FAILURE_STATUS_CODES
+
+
+def remote_node_health_ok(node: NodeEntry) -> bool:
+    try:
+        request_json(node, "GET", "/api/health", timeout=remote_node_health_timeout())
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return False
+    return True
 
 
 def session_payloads_to_views(node: NodeEntry, payload: dict) -> list[HubSession]:
@@ -390,6 +429,16 @@ def remote_node_status_timeout() -> float:
         return max(0.1, float(raw))
     except ValueError:
         return NODE_STATUS_REQUEST_TIMEOUT_SECONDS
+
+
+def remote_node_health_timeout() -> float:
+    raw = os.environ.get("STARAGENT_NODE_HEALTH_TIMEOUT", "").strip()
+    if not raw:
+        return NODE_HEALTH_REQUEST_TIMEOUT_SECONDS
+    try:
+        return max(0.1, float(raw))
+    except ValueError:
+        return NODE_HEALTH_REQUEST_TIMEOUT_SECONDS
 
 
 def websocket_url(node: NodeEntry, path: str) -> str:

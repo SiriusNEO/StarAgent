@@ -3,8 +3,13 @@ from __future__ import annotations
 import json
 import urllib.error
 
+from typer.testing import CliRunner
+
 from staragent import hub
+from staragent import main as staragent_main
 from staragent.hub import NodeEntry
+
+runner = CliRunner()
 
 
 def remote_node(name: str = "worker") -> NodeEntry:
@@ -115,6 +120,50 @@ def test_remote_node_uses_cached_heartbeat_during_transient_failure(monkeypatch)
     assert "timed out" in stale.error
 
 
+def test_remote_node_keeps_cached_sessions_when_health_is_ok(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    monkeypatch.setattr(hub, "request_json", lambda *args, **kwargs: session_payload())
+    hub.collect_node_view(node)
+
+    calls: list[str] = []
+
+    def slow_sessions_healthy_node(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        calls.append(path)
+        if path == "/api/health":
+            return {"status": "ok"}
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(hub, "request_json", slow_sessions_healthy_node)
+
+    stale = hub.collect_node_view(node)
+
+    assert calls == ["/api/sessions", "/api/health"]
+    assert stale.status == "stale"
+    assert stale.session_count == 1
+    assert stale.sessions[0].name == "dev"
+    assert "health ok" in stale.error
+    assert "sessions unavailable" in stale.error
+
+
+def test_remote_node_reports_stale_without_sessions_when_health_is_ok(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+
+    def slow_sessions_healthy_node(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        if path == "/api/health":
+            return {"status": "ok"}
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(hub, "request_json", slow_sessions_healthy_node)
+
+    stale = hub.collect_node_view(node)
+
+    assert stale.status == "stale"
+    assert stale.session_count == 0
+    assert "health ok" in stale.error
+
+
 def test_remote_node_drops_stale_cache_after_grace_period(monkeypatch) -> None:
     hub.clear_node_heartbeat_cache()
     node = remote_node()
@@ -157,3 +206,53 @@ def test_remote_node_auth_failure_is_not_hidden_by_heartbeat_cache(monkeypatch) 
     assert disconnected.status == "disconnected"
     assert disconnected.session_count == 0
     assert "401" in disconnected.error
+
+
+def test_verify_node_command_checks_health_and_sessions(monkeypatch) -> None:
+    calls: list[tuple[str, str, float, str, str]] = []
+
+    def fake_request_json(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        calls.append((node.url, method, timeout, node.mode, path))
+        if path == "/api/health":
+            return {"status": "ok"}
+        if path == "/api/sessions":
+            return {"sessions": [{"name": "dev"}, {"name": "docs"}]}
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(staragent_main, "request_json", fake_request_json)
+
+    result = runner.invoke(
+        staragent_main.app,
+        ["verify-node", "worker", "--timeout", "2.5"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("http://worker:8081", "GET", 2.5, "lan", "/api/health"),
+        ("http://worker:8081", "GET", 2.5, "lan", "/api/sessions"),
+    ]
+    assert "Health: ok" in result.output
+    assert "Sessions: ok (2 sessions)" in result.output
+    assert "http://worker:8081" in result.output
+
+
+def test_verify_node_command_reports_auth_failure(monkeypatch) -> None:
+    def fake_request_json(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        if path == "/api/health":
+            return {"status": "ok"}
+        raise urllib.error.HTTPError(
+            url=node.url or "",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=None,
+        )
+
+    monkeypatch.setattr(staragent_main, "request_json", fake_request_json)
+
+    result = runner.invoke(staragent_main.app, ["verify-node", "http://worker:8081"])
+
+    assert result.exit_code == 1
+    assert "Health: ok" in result.output
+    assert "Sessions: failed" in result.output
+    assert "Check STARAGENT_AUTH_TOKEN or STARAGENT_NODE_TOKEN" in result.output

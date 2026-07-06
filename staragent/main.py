@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 import shlex
 import shutil
@@ -22,7 +23,13 @@ from staragent.auth import (
     write_stored_auth_token,
 )
 from staragent.dependencies import ensure_dependencies
-from staragent.hub import node_by_name, request_json
+from staragent.hub import (
+    NodeEntry,
+    node_by_name,
+    normalize_node_mode,
+    normalize_node_url,
+    request_json,
+)
 from staragent.presets import COMMAND_PRESETS, preset_command, preset_names
 from staragent.runtime import (
     ensure_tmux_session,
@@ -195,6 +202,58 @@ def node(
 ) -> None:
     """Start a StarAgent remote node API for this machine."""
     run_node(bind, port, reload)
+
+
+@app.command("verify-node")
+def verify_node(
+    target: str = typer.Argument(..., help="Node host/IP or http(s) endpoint to verify."),
+    mode: str = typer.Option(
+        "lan",
+        "--mode",
+        "-m",
+        help="Connection mode. Use lan for LAN/Tailscale endpoints; remote keeps proxy handling.",
+    ),
+    timeout: float = typer.Option(5.0, "--timeout", help="Request timeout in seconds."),
+) -> None:
+    """Verify that the Hub machine can reach a remote StarAgent node endpoint."""
+    try:
+        node = NodeEntry(
+            name="verify",
+            url=normalize_node_url(target),
+            mode=normalize_node_mode(mode),
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    timeout = max(0.1, timeout)
+    console.print(f"Endpoint: {node.url}")
+    console.print(f"Mode: {node.mode}")
+
+    try:
+        health = request_json(node, "GET", "/api/health", timeout=timeout)
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"Health: failed ({exc})", style="red")
+        raise typer.Exit(1) from exc
+    console.print(f"Health: ok ({health.get('status', 'ok')})", style="green")
+
+    try:
+        payload = request_json(node, "GET", "/api/sessions", timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        console.print(f"Sessions: failed ({exc})", style="red")
+        if exc.code in {401, 403}:
+            console.print(
+                "Check STARAGENT_AUTH_TOKEN or STARAGENT_NODE_TOKEN on this Hub shell.",
+                style="yellow",
+            )
+        raise typer.Exit(1) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"Sessions: failed ({exc})", style="red")
+        raise typer.Exit(1) from exc
+
+    sessions = payload.get("sessions", [])
+    count = len(sessions) if isinstance(sessions, list) else 0
+    console.print(f"Sessions: ok ({count} sessions)", style="green")
+    console.print(f"Add this endpoint in the Hub dashboard: {node.url}", style="bold")
 
 
 @app.command()

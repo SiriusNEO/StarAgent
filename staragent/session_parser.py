@@ -11,7 +11,12 @@ def tmux_transcript_state(session: str, lines: int = 500) -> TranscriptState:
     output = strip_ansi(capture_tmux_pane_ansi(session, lines=max(20, min(lines, 500))))
     adopted = adopted_session(session)
     if adopted:
-        return parse_transcript(output, adopted.cli, cli_pid=adopted.cli_pid)
+        cli, cli_pid = infer_cli_from_pane("", adopted.pane_pid)
+        return parse_transcript(
+            output,
+            cli if cli != "unknown" else adopted.cli,
+            cli_pid=cli_pid or adopted.cli_pid,
+        )
     pane = tmux_active_pane(session)
     cli, cli_pid = infer_cli_from_pane(
         str(pane.get("current_command") or ""), int(pane.get("pane_pid") or 0)
