@@ -1505,6 +1505,45 @@ dd {
   min-height: 44px;
 }
 
+.tmux-command-box {
+  font-size: 12px;
+  display: grid;
+  gap: 2px;
+  margin-top: 0;
+  overflow: hidden;
+  padding: 8px 10px;
+  white-space: normal;
+}
+
+.tmux-help-row {
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  line-height: 1.25;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.tmux-help-row:last-child {
+  border-bottom: 0;
+}
+
+.tmux-help-row span {
+  color: #bdb8b0;
+  font-size: 11px;
+  font-weight: 800;
+  min-width: 0;
+}
+
+.tmux-help-row code {
+  color: #f5f3ef;
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .copy-command {
   max-width: 100%;
   min-width: 0;
@@ -1528,6 +1567,13 @@ dd {
 
 .copy-button:hover {
   background: #342f2a;
+}
+
+.inline-copy {
+  font-size: 11px;
+  padding: 3px 6px;
+  position: static;
+  justify-self: end;
 }
 
 .danger-button {
@@ -3062,6 +3108,16 @@ dd {
 
   .chat-actions button {
     width: 100%;
+  }
+
+  .tmux-help-row {
+    gap: 6px;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+  }
+
+  .tmux-help-row code {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .worker-fields .send-actions {

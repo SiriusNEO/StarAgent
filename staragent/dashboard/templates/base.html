@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}StarAgent{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
-    <script src="{{ url_for('static', path='explorer.js') }}"></script>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ static_version('styles.css') }}">
+    <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
     {% block head_extra %}{% endblock %}
   </head>
   <body>

@@ -40,12 +40,21 @@
       {% endif %}
       <div class="session-attach">
         <div class="section-title compact-title">
-          <h2>Attach</h2>
+          <h2>tmux Tips</h2>
           <span>from shell</span>
         </div>
-        <div class="copy-command">
-          <pre class="command attach-command">{{ attach_command }}</pre>
-          <button type="button" class="copy-button" data-copy="{{ attach_command }}">Copy</button>
+        <div class="command tmux-command-box">
+          {% for item in tmux_commands %}
+            <div class="tmux-help-row">
+              <span>{{ item.label }}</span>
+              <code>{{ item.command }}</code>
+              {% if item.command.startswith("tmux ") %}
+                <button type="button" class="copy-button inline-copy" data-copy="{{ item.command }}">Copy</button>
+              {% else %}
+                <span></span>
+              {% endif %}
+            </div>
+          {% endfor %}
         </div>
       </div>
     </div>
@@ -53,18 +62,18 @@
     {% if view.is_agent_session %}
       <div class="panel token-panel" data-token-panel>
         <h2>CLI Metadata</h2>
-        <div class="token-total" data-token-total>--</div>
-        <div class="token-subtitle" data-token-source>Waiting for CLI usage</div>
+        <div class="token-total" data-token-total>{{ initial_token_usage.total if initial_token_usage else "--" }}</div>
+        <div class="token-subtitle" data-token-source>{{ initial_token_usage.source if initial_token_usage else "Waiting for CLI usage" }}</div>
         <dl class="token-stats">
-          <dt>Model</dt><dd data-token-model>--</dd>
-          <dt>Reasoning</dt><dd data-token-effort>--</dd>
-          <dt>Plan</dt><dd data-token-plan>--</dd>
-          <dt>Context</dt><dd data-token-context>--</dd>
-          <dt>Rate</dt><dd data-token-rate>--</dd>
-          <dt>Last Turn</dt><dd data-token-last>--</dd>
-          <dt>Cached</dt><dd data-token-cached>--</dd>
-          <dt>Output</dt><dd data-token-output>--</dd>
-          <dt>Reasoning Tokens</dt><dd data-token-reasoning>--</dd>
+          <dt>Model</dt><dd data-token-model>{{ initial_token_usage.model if initial_token_usage else "--" }}</dd>
+          <dt>Reasoning</dt><dd data-token-effort>{{ initial_token_usage.reasoning_effort if initial_token_usage else "--" }}</dd>
+          <dt>Plan</dt><dd data-token-plan>{{ initial_token_usage.plan if initial_token_usage else "--" }}</dd>
+          <dt>Context</dt><dd data-token-context>{{ initial_token_usage.context if initial_token_usage else "--" }}</dd>
+          <dt>Rate</dt><dd data-token-rate>{{ initial_token_usage.rate if initial_token_usage else "--" }}</dd>
+          <dt>Last Turn</dt><dd data-token-last>{{ initial_token_usage.last if initial_token_usage else "--" }}</dd>
+          <dt>Cached</dt><dd data-token-cached>{{ initial_token_usage.cached if initial_token_usage else "--" }}</dd>
+          <dt>Output</dt><dd data-token-output>{{ initial_token_usage.output if initial_token_usage else "--" }}</dd>
+          <dt>Reasoning Tokens</dt><dd data-token-reasoning>{{ initial_token_usage.reasoning if initial_token_usage else "--" }}</dd>
         </dl>
       </div>
     {% endif %}

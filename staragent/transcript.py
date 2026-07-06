@@ -212,6 +212,14 @@ def codex_events_from_pid(pid: int) -> list[dict[str, object]]:
 def find_codex_rollout_by_pid(pid: int) -> str:
     if pid <= 0:
         return ""
+    for candidate in (pid, *process_descendant_pids(pid, max_depth=4)):
+        path = find_codex_rollout_in_process(candidate)
+        if path:
+            return path
+    return ""
+
+
+def find_codex_rollout_in_process(pid: int) -> str:
     fd_dir = Path(f"/proc/{pid}/fd")
     if fd_dir.exists():
         try:
@@ -225,6 +233,40 @@ def find_codex_rollout_by_pid(pid: int) -> str:
         except OSError:
             return ""
     return ""
+
+
+def process_descendant_pids(root_pid: int, max_depth: int = 4) -> list[int]:
+    if root_pid <= 0:
+        return []
+    children: dict[int, list[int]] = {}
+    for stat_path in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            content = stat_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        ppid = ppid_from_proc_stat(content)
+        if ppid > 0:
+            children.setdefault(ppid, []).append(int(stat_path.parent.name))
+
+    descendants: list[int] = []
+    frontier = [(root_pid, 0)]
+    while frontier:
+        pid, depth = frontier.pop(0)
+        if depth >= max_depth:
+            continue
+        for child in children.get(pid, []):
+            descendants.append(child)
+            frontier.append((child, depth + 1))
+    return descendants
+
+
+def ppid_from_proc_stat(content: str) -> int:
+    try:
+        _, after_name = content.rsplit(") ", 1)
+        fields = after_name.split()
+        return int(fields[1])
+    except (ValueError, IndexError):
+        return 0
 
 
 def is_codex_rollout_path(path: str) -> bool:

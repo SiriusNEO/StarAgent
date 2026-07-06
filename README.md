@@ -41,7 +41,7 @@ Each session includes a lightweight chat console for interacting with agents, pl
 
 ![](assets/chat.png)
 
-**NOTCE:** None of this gets in the way of manually SSHing into the server and attaching to the corresponding tmux session for development. The web interface is implemented entirely as a parser — the tmux CLI sessions on the server are always the ground truth.
+**NOTICE:** None of this gets in the way of manually SSHing into the server and attaching to the corresponding tmux session for development. The web interface is implemented entirely as a parser — the tmux CLI sessions on the server are always the ground truth.
 
 ## Hub
 
@@ -63,11 +63,24 @@ Run this on each machine that should run agent sessions:
 
 ```bash
 pip install -e '.[dev]'
-export STARAGENT_NODE_TOKEN="<same token as .staragent/auth_token on the Hub>"
+export STARAGENT_NODE_TOKEN="<same token as the Hub>"
 tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
 ```
 
-Expose `127.0.0.1:8081` through your network layer, then add that reachable endpoint in the Hub dashboard.
+Expose `127.0.0.1:8081` through your network layer, then add that reachable endpoint in the Hub dashboard. For example, with Tailscale:
+
+```bash
+sudo tailscale serve --bg --tcp=8081 tcp://127.0.0.1:8081
+tailscale ip -4
+```
+
+Before adding the Node, verify it from the Hub machine:
+
+```bash
+staragent verify-node <node-host-or-100.x-ip>
+```
+
+Add the exact working endpoint, such as `http://100.x.x.x:8081`, in the Hub dashboard.
 
 ## Acknowledgements
 
