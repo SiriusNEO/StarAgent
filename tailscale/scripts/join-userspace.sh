@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SESSION="${TAILSCALE_TMUX_SESSION:-staragent-tailscaled}"
-SOCKET="${TAILSCALE_SOCKET:-/tmp/staragent-tailscaled.sock}"
-STATE_DIR="${TAILSCALE_STATE_DIR:-/var/lib/tailscale}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SOCKET="${TAILSCALE_SOCKET:-${REPO_DIR}/.staragent/tailscaled.sock}"
+STATE_DIR="${TAILSCALE_STATE_DIR:-${REPO_DIR}/.staragent/tailscale-state}"
 
 run_root() {
   if [[ "${EUID}" -eq 0 ]]; then
@@ -22,7 +24,7 @@ if ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
 
-run_root mkdir -p "$STATE_DIR"
+run_root mkdir -p "$(dirname "$SOCKET")" "$STATE_DIR"
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
   echo "tmux session already exists: $SESSION"

@@ -42,13 +42,16 @@ Start the Hub:
 staragent hub --host 0.0.0.0 --port 8080
 ```
 
+`staragent hub` creates the `staragent-hub` tmux system session by default.
+
 Start a remote Node:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
+staragent node-ts
 ```
 
+Use `staragent node` instead when LAN or another network layer already exposes the Node.
 Add the node endpoint from the dashboard Nodes page after it is reachable from the Hub.
 
 ## Sessions
@@ -113,10 +116,10 @@ Validate remote Node connectivity from the Hub machine, not from the browser dev
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
+staragent node-ts
 ```
 
-2. Expose `127.0.0.1:8081` through LAN or Tailscale. If the Node only binds to `127.0.0.1`, another machine cannot reach it unless a tunnel or `tailscale serve` forwards to it.
+2. For LAN or another network layer that does not need `tailscale serve`, use `staragent node` instead.
 
 3. From the Hub machine, verify network reachability:
 
@@ -156,9 +159,9 @@ tailscale ip -4
 For userspace Tailscale:
 
 ```bash
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock status
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock ping <node-name-or-100.x-ip>
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock ip -4
+sudo tailscale --socket=.staragent/tailscaled.sock status
+sudo tailscale --socket=.staragent/tailscaled.sock ping <node-name-or-100.x-ip>
+sudo tailscale --socket=.staragent/tailscaled.sock ip -4
 ```
 
 ## Runtime Checks

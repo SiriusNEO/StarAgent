@@ -6,8 +6,12 @@ import os
 import shlex
 import shutil
 import socket
+import subprocess
+import tomllib
 import urllib.error
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 import typer
@@ -42,6 +46,12 @@ from staragent.status import collect_session_views
 
 app = typer.Typer(help="Monitor and control AI coding-agent sessions.")
 console = Console()
+
+
+@app.command()
+def version() -> None:
+    """Print the StarAgent version."""
+    console.print(project_version())
 
 
 @app.command()
@@ -146,13 +156,13 @@ def ps() -> None:
     console.print(table)
 
 
-@app.command()
+@app.command(hidden=True)
 def dashboard(
     bind: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8080, "--port"),
     reload: bool = typer.Option(False, "--reload"),
 ) -> None:
-    """Start the local web dashboard."""
+    """Internal foreground dashboard runner."""
     ensure_dependencies()
     ensure_hub_auth_for_bind(bind)
     console.print(f"StarAgent dashboard: http://{bind}:{port}")
@@ -198,10 +208,45 @@ def run_node(bind: str, port: int, reload: bool) -> None:
 def node(
     bind: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8081, "--port"),
+    session: str = typer.Option("staragent-node", "--session"),
     reload: bool = typer.Option(False, "--reload"),
 ) -> None:
-    """Start a StarAgent remote node API for this machine."""
-    run_node(bind, port, reload)
+    """Run a StarAgent node inside a supervised tmux session."""
+    if os.environ.get("STARAGENT_TMUX_CHILD") == "node":
+        run_node(bind, port, reload)
+        return
+    start_node_tmux_session(bind=bind, port=port, session=session, reload=reload)
+
+
+@app.command("node-ts")
+def node_ts(
+    bind: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8081, "--port"),
+    session: str = typer.Option("staragent-node", "--session"),
+    reload: bool = typer.Option(False, "--reload"),
+    serve_port: int | None = typer.Option(
+        None,
+        "--serve-port",
+        help="Tailscale TCP port to expose. Defaults to --port.",
+    ),
+    socket_path: str = typer.Option(
+        "",
+        "--tailscale-socket",
+        help="Optional tailscale userspace socket, e.g. .staragent/tailscaled.sock.",
+    ),
+    sudo: bool = typer.Option(False, "--sudo", help="Run tailscale through sudo."),
+) -> None:
+    """Run a tmux-backed StarAgent node and expose it through Tailscale serve."""
+    start_node_tmux_session(bind=bind, port=port, session=session, reload=reload)
+    exposed_port = serve_port or port
+    run_tailscale_serve(
+        serve_port=exposed_port,
+        target_host=bind,
+        target_port=port,
+        socket_path=socket_path,
+        sudo=sudo,
+    )
+    console.print(f"Tailscale serve: tcp/{exposed_port} -> {bind}:{port}", style="green")
 
 
 @app.command("verify-node")
@@ -322,6 +367,15 @@ def resolve_preset_command(name: str) -> str:
         raise typer.BadParameter(f"Unknown preset: {name}. Available: {preset_names()}") from exc
 
 
+def project_version() -> str:
+    try:
+        return package_version("staragent")
+    except PackageNotFoundError:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        with pyproject.open("rb") as file:
+            return str(tomllib.load(file)["project"]["version"])
+
+
 def relative_time(value: datetime | None) -> str:
     if value is None:
         return "-"
@@ -354,7 +408,6 @@ def tmux_child_command(kind: str, args: list[str]) -> str:
     for name in (
         "STARAGENT_STATE_DIR",
         "STARAGENT_NODES",
-        "STARAGENT_NODE_TOKEN",
         "STARAGENT_SSH_TARGET",
         "http_proxy",
         "https_proxy",
@@ -369,6 +422,68 @@ def tmux_child_command(kind: str, args: list[str]) -> str:
         if value:
             env_parts.append(f"{name}={shlex.quote(value)}")
     return f"{' '.join(env_parts)} {shlex.quote(str(executable))} {shlex.join(args[1:])}"
+
+
+def start_node_tmux_session(bind: str, port: int, session: str, reload: bool = False) -> None:
+    ensure_dependencies()
+    env_auth_token = os.environ.get("STARAGENT_AUTH_TOKEN", "").strip()
+    env_node_token = os.environ.get("STARAGENT_NODE_TOKEN", "").strip()
+    if env_node_token:
+        write_stored_auth_token(env_node_token)
+    elif env_auth_token:
+        write_stored_auth_token(env_auth_token)
+    if not remote_node_token():
+        console.print(
+            "STARAGENT_NODE_TOKEN or STARAGENT_AUTH_TOKEN is required before starting a node.",
+            style="red",
+        )
+        raise typer.Exit(1)
+    args = ["staragent", "node", "--host", bind, "--port", str(port)]
+    if reload:
+        args.append("--reload")
+    command = tmux_child_command("node", args)
+    try:
+        ensure_tmux_session(session, str(Path.cwd()), command)
+    except (ValueError, RuntimeError) as exc:
+        console.print(str(exc), style="red")
+        raise typer.Exit(1) from exc
+    console.print(f"StarAgent node: tmux session {session} -> http://{bind}:{port}", style="green")
+    console.print(f"Attach: tmux attach -t {shlex.quote(session)}")
+
+
+def run_tailscale_serve(
+    serve_port: int,
+    target_host: str,
+    target_port: int,
+    socket_path: str = "",
+    sudo: bool = False,
+) -> None:
+    executable = shutil.which("tailscale")
+    if not executable:
+        console.print("tailscale command not found.", style="red")
+        raise typer.Exit(1)
+    command = [executable]
+    if sudo:
+        sudo_executable = shutil.which("sudo")
+        if not sudo_executable:
+            console.print("sudo command not found.", style="red")
+            raise typer.Exit(1)
+        command = [sudo_executable, executable]
+    if socket_path:
+        command.extend(["--socket", socket_path])
+    command.extend(
+        [
+            "serve",
+            "--bg",
+            f"--tcp={serve_port}",
+            f"tcp://{target_host}:{target_port}",
+        ]
+    )
+    result = subprocess.run(command, check=False, text=True, capture_output=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "tailscale serve failed"
+        console.print(detail, style="red")
+        raise typer.Exit(result.returncode)
 
 
 def staragent_executable() -> Path:

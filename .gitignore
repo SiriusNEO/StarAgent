@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
 .venv/
 .conda/
 .staragent/

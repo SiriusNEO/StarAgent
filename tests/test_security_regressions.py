@@ -19,7 +19,12 @@ from staragent.dashboard.app import (
     lark_connection_test_payload,
 )
 from staragent.dashboard.app import create_app as create_dashboard_app
-from staragent.main import ensure_hub_auth_for_bind, is_loopback_bind, tmux_child_command
+from staragent.main import (
+    ensure_hub_auth_for_bind,
+    is_loopback_bind,
+    start_node_tmux_session,
+    tmux_child_command,
+)
 from staragent.node.app import create_app
 from staragent.paths import PROJECT_ROOT, state_dir
 from staragent.pty_terminal import (
@@ -141,6 +146,46 @@ def test_hub_tmux_child_reads_stored_auth_without_inlining_it(monkeypatch, tmp_p
     assert read_stored_auth_token() == "secret"
     assert "STARAGENT_AUTH_TOKEN=" not in command
     assert "secret" not in command
+
+
+def test_node_tmux_persists_auth_without_inlining_it(monkeypatch, tmp_path) -> None:
+    commands: list[str] = []
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "secret")
+    monkeypatch.delenv("STARAGENT_NODE_TOKEN", raising=False)
+    monkeypatch.setattr("staragent.main.ensure_dependencies", lambda: None)
+    monkeypatch.setattr("staragent.main.staragent_executable", lambda: "/bin/staragent")
+    monkeypatch.setattr(
+        "staragent.main.ensure_tmux_session",
+        lambda _session, _cwd, command: commands.append(command),
+    )
+
+    start_node_tmux_session("127.0.0.1", 8081, "staragent-node")
+
+    assert read_stored_auth_token() == "secret"
+    assert commands
+    assert "STARAGENT_AUTH_TOKEN=" not in commands[0]
+    assert "secret" not in commands[0]
+
+
+def test_node_tmux_persists_node_token_without_inlining_it(monkeypatch, tmp_path) -> None:
+    commands: list[str] = []
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("STARAGENT_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("STARAGENT_NODE_TOKEN", "node-secret")
+    monkeypatch.setattr("staragent.main.ensure_dependencies", lambda: None)
+    monkeypatch.setattr("staragent.main.staragent_executable", lambda: "/bin/staragent")
+    monkeypatch.setattr(
+        "staragent.main.ensure_tmux_session",
+        lambda _session, _cwd, command: commands.append(command),
+    )
+
+    start_node_tmux_session("127.0.0.1", 8081, "staragent-node")
+
+    assert read_stored_auth_token() == "node-secret"
+    assert commands
+    assert "STARAGENT_NODE_TOKEN=" not in commands[0]
+    assert "node-secret" not in commands[0]
 
 
 def test_state_dir_uses_project_state_dir_by_default(monkeypatch) -> None:

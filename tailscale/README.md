@@ -40,8 +40,7 @@ Start the StarAgent node locally and expose it to the tailnet:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
-sudo tailscale serve --bg --tcp=8081 tcp://127.0.0.1:8081
+staragent node-ts
 tailscale ip -4
 ```
 
@@ -53,18 +52,17 @@ Run `tailscaled` in userspace networking mode:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
-sudo mkdir -p /var/lib/tailscale
-tmux new -ds staragent-tailscaled "sudo tailscaled --tun=userspace-networking --socket=/tmp/staragent-tailscaled.sock --statedir=/var/lib/tailscale"
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock up --ssh
+mkdir -p .staragent/tailscale-state
+tmux new -ds staragent-tailscaled "sudo tailscaled --tun=userspace-networking --socket=.staragent/tailscaled.sock --statedir=.staragent/tailscale-state"
+sudo tailscale --socket=.staragent/tailscaled.sock up --ssh
 ```
 
 Start the StarAgent node locally and expose it to the tailnet:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock serve --bg --tcp=8081 tcp://127.0.0.1:8081
-sudo tailscale --socket=/tmp/staragent-tailscaled.sock ip -4
+staragent node-ts --tailscale-socket .staragent/tailscaled.sock
+sudo tailscale --socket=.staragent/tailscaled.sock ip -4
 ```
 
 Add the printed `100.x` address in the Hub dashboard as a Remote node.

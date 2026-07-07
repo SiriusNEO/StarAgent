@@ -52,6 +52,39 @@
       </div>
       <div class="tailscale-peers"></div>
     </div>
+    <div class="tailscale-tips">
+      <div class="section-title compact-title">
+        <h2>Tailscale Tips</h2>
+        <span>from shell</span>
+      </div>
+      <div class="command tmux-command-box tips-command-box">
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>Status</span>
+          <code>tailscale status</code>
+          <button type="button" class="copy-button inline-copy" data-copy="tailscale status">Copy</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>IP</span>
+          <code>tailscale ip -4</code>
+          <button type="button" class="copy-button inline-copy" data-copy="tailscale ip -4">Copy</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>Start</span>
+          <code>staragent node</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent node">Copy</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>Start+TS</span>
+          <code>staragent node-ts</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent node-ts">Copy</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>Verify</span>
+          <code>staragent verify-node &lt;node-host-or-100.x-ip&gt;</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent verify-node &lt;node-host-or-100.x-ip&gt;">Copy</button>
+        </div>
+      </div>
+    </div>
     <form class="node-form">
       <div class="node-grid">
         <label>
@@ -309,6 +342,25 @@
           return;
         }
         window.location.reload();
+      });
+    }
+
+    for (const button of document.querySelectorAll(".copy-button")) {
+      button.addEventListener("click", async () => {
+        const text = button.dataset.copy || "";
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = "Copied";
+        } catch {
+          const area = document.createElement("textarea");
+          area.value = text;
+          document.body.appendChild(area);
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+          button.textContent = "Copied";
+        }
+        setTimeout(() => { button.textContent = "Copy"; }, 1200);
       });
     }
   </script>

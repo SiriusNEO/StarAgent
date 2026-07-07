@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import urllib.error
 
 from typer.testing import CliRunner
@@ -256,3 +257,91 @@ def test_verify_node_command_reports_auth_failure(monkeypatch) -> None:
     assert "Health: ok" in result.output
     assert "Sessions: failed" in result.output
     assert "Check STARAGENT_AUTH_TOKEN or STARAGENT_NODE_TOKEN" in result.output
+
+
+def test_version_command_prints_project_version() -> None:
+    result = runner.invoke(staragent_main.app, ["version"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "0.1.0"
+
+
+def test_dashboard_command_is_hidden_from_public_help() -> None:
+    result = runner.invoke(staragent_main.app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "hub" in result.output
+    assert "│ dashboard" not in result.output
+
+
+def test_node_command_starts_node_in_tmux(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
+    monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
+    monkeypatch.setattr(staragent_main, "staragent_executable", lambda: "/bin/staragent")
+
+    def fake_ensure_tmux_session(session, cwd, command):  # type: ignore[no-untyped-def]
+        calls.append((session, cwd, command))
+
+    monkeypatch.setattr(staragent_main, "ensure_tmux_session", fake_ensure_tmux_session)
+
+    result = runner.invoke(
+        staragent_main.app,
+        ["node", "--host", "127.0.0.1", "--port", "8082", "--session", "node-a"],
+    )
+
+    assert result.exit_code == 0
+    assert calls
+    session, _cwd, command = calls[0]
+    assert session == "node-a"
+    assert "/bin/staragent node --host 127.0.0.1 --port 8082" in command
+    assert "StarAgent node: tmux session node-a" in result.output
+
+
+def test_node_ts_command_starts_tmux_and_serves(monkeypatch) -> None:
+    tmux_calls: list[tuple[str, str, str]] = []
+    run_calls: list[list[str]] = []
+
+    monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
+    monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
+    monkeypatch.setattr(staragent_main, "staragent_executable", lambda: "/bin/staragent")
+    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+
+    def fake_which(name):  # type: ignore[no-untyped-def]
+        return f"/usr/bin/{name}"
+
+    def fake_run(command, check, text, capture_output):  # type: ignore[no-untyped-def]
+        run_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(staragent_main.shutil, "which", fake_which)
+    monkeypatch.setattr(staragent_main.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        staragent_main.app,
+        [
+            "node-ts",
+            "--port",
+            "8082",
+            "--serve-port",
+            "18082",
+            "--tailscale-socket",
+            ".staragent/tailscaled.sock",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert tmux_calls
+    assert run_calls == [
+        [
+            "/usr/bin/tailscale",
+            "--socket",
+            ".staragent/tailscaled.sock",
+            "serve",
+            "--bg",
+            "--tcp=18082",
+            "tcp://127.0.0.1:8082",
+        ]
+    ]
+    assert "Tailscale serve: tcp/18082 -> 127.0.0.1:8082" in result.output

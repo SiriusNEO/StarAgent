@@ -18,10 +18,6 @@ run_root() {
   fi
 }
 
-shell_quote() {
-  printf "%q" "$1"
-}
-
 if [[ "$STARAGENT_CMD" == "staragent" && ! $(command -v staragent || true) && -x "${REPO_DIR}/.conda/bin/staragent" ]]; then
   STARAGENT_CMD="${REPO_DIR}/.conda/bin/staragent"
 fi
@@ -42,8 +38,8 @@ if [[ -z "${STARAGENT_NODE_TOKEN:-}" && -z "${STARAGENT_AUTH_TOKEN:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "$SOCKET" && -S /tmp/staragent-tailscaled.sock ]]; then
-  SOCKET="/tmp/staragent-tailscaled.sock"
+if [[ -z "$SOCKET" && -S "${REPO_DIR}/.staragent/tailscaled.sock" ]]; then
+  SOCKET="${REPO_DIR}/.staragent/tailscaled.sock"
 fi
 
 ts=(tailscale)
@@ -51,21 +47,20 @@ if [[ -n "$SOCKET" ]]; then
   ts+=(--socket="$SOCKET")
 fi
 
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "tmux session already exists: $SESSION"
-else
-  env_prefix=""
-  if [[ -n "${STARAGENT_NODE_TOKEN:-}" ]]; then
-    env_prefix="STARAGENT_NODE_TOKEN=$(shell_quote "$STARAGENT_NODE_TOKEN") "
-  elif [[ -n "${STARAGENT_AUTH_TOKEN:-}" ]]; then
-    env_prefix="STARAGENT_AUTH_TOKEN=$(shell_quote "$STARAGENT_AUTH_TOKEN") "
-  fi
-  cmd="cd $(shell_quote "$STARAGENT_DIR") && ${env_prefix}$(shell_quote "$STARAGENT_CMD") node --host 127.0.0.1 --port $(shell_quote "$PORT")"
-  tmux new -ds "$SESSION" "$cmd"
-  sleep 1
+cmd=("$STARAGENT_CMD" node-ts --host 127.0.0.1 --port "$PORT" --session "$SESSION")
+if [[ -n "$SOCKET" ]]; then
+  cmd+=(--tailscale-socket "$SOCKET")
+fi
+if [[ "${EUID}" -ne 0 ]]; then
+  cmd+=(--sudo)
 fi
 
-run_root "${ts[@]}" serve --bg --tcp="$PORT" "tcp://127.0.0.1:${PORT}"
+(cd "$STARAGENT_DIR" && "${cmd[@]}")
+
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  echo "StarAgent node session did not start: $SESSION"
+  exit 1
+fi
 
 echo
 echo "Remote Node endpoint:"
