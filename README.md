@@ -52,6 +52,7 @@ pip install -e '.[dev]'
 staragent hub --host 0.0.0.0 --port 8080
 ```
 
+`staragent hub` creates the `staragent-hub` tmux system session by default.
 Open `http://<hub-node>:8080` and log in with the token printed by `staragent hub`.
 Hub auth is saved in `<staragent-source>/.staragent/auth_token`; set `STARAGENT_AUTH_TOKEN`
 before starting the Hub if you want to choose the token yourself.
@@ -64,14 +65,13 @@ Run this on each machine that should run agent sessions:
 ```bash
 pip install -e '.[dev]'
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-tmux new -ds staragent-node "staragent node --host 127.0.0.1 --port 8081"
+staragent node-ts
 ```
 
-Expose `127.0.0.1:8081` through your network layer, then add that reachable endpoint in the Hub dashboard. For example, with Tailscale:
+For LAN or another network layer that does not need `tailscale serve`, use:
 
 ```bash
-sudo tailscale serve --bg --tcp=8081 tcp://127.0.0.1:8081
-tailscale ip -4
+staragent node
 ```
 
 Before adding the Node, verify it from the Hub machine:

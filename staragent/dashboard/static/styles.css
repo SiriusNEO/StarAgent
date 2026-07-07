@@ -1544,6 +1544,14 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.tips-command-box {
+  margin-bottom: 14px;
+}
+
+.tailscale-tip-row {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+}
+
 .copy-command {
   max-width: 100%;
   min-width: 0;

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SOCKET="${TAILSCALE_SOCKET:-}"
 PORT="${STARAGENT_NODE_PORT:-8081}"
 
-if [[ -z "$SOCKET" && -S /tmp/staragent-tailscaled.sock ]]; then
-  SOCKET="/tmp/staragent-tailscaled.sock"
+if [[ -z "$SOCKET" && -S "${REPO_DIR}/.staragent/tailscaled.sock" ]]; then
+  SOCKET="${REPO_DIR}/.staragent/tailscaled.sock"
 fi
 
 if ! command -v tailscale >/dev/null 2>&1; then
