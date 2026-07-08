@@ -1633,20 +1633,12 @@ dd {
 }
 
 .changed-panel {
-  background: var(--surface-subtle);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
-  min-width: 0;
-  min-height: 0;
-  padding: 14px;
 }
 
 .changed-panel .explorer-list {
   min-height: 0;
-  overflow: auto;
 }
 
 .compact-title {
@@ -1757,6 +1749,19 @@ dd {
 }
 
 .markdown-preview[hidden] {
+  display: none;
+}
+
+.pdf-preview {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.pdf-preview[hidden] {
   display: none;
 }
 
@@ -2005,6 +2010,7 @@ dd {
 }
 
 .terminal-screen {
+  isolation: isolate;
   min-height: 0;
   overflow: hidden;
   padding: 8px 24px 8px 10px;
@@ -2013,6 +2019,8 @@ dd {
 
 .terminal-screen .xterm {
   height: 100%;
+  position: relative;
+  z-index: 0;
 }
 
 .terminal-screen .xterm-viewport {
@@ -2038,7 +2046,7 @@ dd {
   right: 7px;
   top: 8px;
   width: 10px;
-  z-index: 20;
+  z-index: 2;
 }
 
 .terminal-scrollbar-thumb {

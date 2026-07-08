@@ -14,6 +14,7 @@ from staragent.dashboard.app import (
     create_directory_payload,
     directory_listing,
     file_preview_payload,
+    file_raw_info_payload,
     file_raw_payload,
     stream_pty_to_websocket,
 )
@@ -157,6 +158,13 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=body, media_type=media_type)
+
+    @app.get("/api/files/raw-info")
+    def file_raw_info(path: str, root: str | None = None) -> dict[str, object]:
+        try:
+            return file_raw_info_payload(path, root=root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.websocket("/ws/sessions/{name}/terminal")
     async def terminal_socket(websocket: WebSocket, name: str) -> None:

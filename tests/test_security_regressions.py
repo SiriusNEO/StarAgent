@@ -15,6 +15,7 @@ from staragent.dashboard.app import (
     cleanup_http_terminals,
     directory_listing,
     file_preview_payload,
+    file_raw_info_payload,
     file_raw_payload,
     http_terminals,
     lark_connection_test_payload,
@@ -73,11 +74,13 @@ def test_file_preview_is_limited_to_workspace_root(tmp_path) -> None:
         raise AssertionError("outside file preview should fail")
 
 
-def test_file_raw_images_are_limited_to_safe_workspace_files(tmp_path) -> None:
+def test_file_raw_assets_are_limited_to_safe_workspace_files(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     image = workspace / "logo.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    pdf = workspace / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.7\n")
     text = workspace / "README.md"
     text.write_text("# no raw access\n", encoding="utf-8")
     outside = tmp_path / "outside.png"
@@ -90,9 +93,18 @@ def test_file_raw_images_are_limited_to_safe_workspace_files(tmp_path) -> None:
     body, media_type = file_raw_payload(str(image), root=str(workspace))
     assert body == b"\x89PNG\r\n\x1a\n"
     assert media_type == "image/png"
+    body, media_type = file_raw_payload(str(pdf), root=str(workspace))
+    assert body == b"%PDF-1.7\n"
+    assert media_type == "application/pdf"
+    assert file_raw_info_payload(str(pdf), root=str(workspace)) == {
+        "path": str(pdf),
+        "name": "paper.pdf",
+        "size": len(b"%PDF-1.7\n"),
+        "media_type": "application/pdf",
+    }
 
     for path, expected in [
-        (text, "only supported for images"),
+        (text, "only supported for images and PDFs"),
         (outside, "outside workspace"),
         (secret, "sensitive path"),
     ]:

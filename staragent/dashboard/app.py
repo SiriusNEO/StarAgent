@@ -730,14 +730,40 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")
-                raise HTTPException(status_code=exc.code, detail=detail or exc.reason) from exc
+                raise HTTPException(
+                    status_code=exc.code,
+                    detail=remote_file_error_detail(exc),
+                ) from exc
             return Response(content=body, media_type=media_type)
         try:
             body, media_type = file_raw_payload(path, root=root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return Response(content=body, media_type=media_type)
+
+    @app.get("/api/files/raw-info")
+    def file_raw_info(path: str, node: str = "local", root: str | None = None) -> dict[str, object]:
+        try:
+            node_entry = node_by_name(node)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"node not found: {node}") from exc
+        if not node_entry.is_local:
+            suffix = f"/api/files/raw-info?path={urllib.parse.quote(path)}"
+            if root:
+                suffix += f"&root={urllib.parse.quote(root)}"
+            try:
+                return request_json(node_entry, "GET", suffix)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except urllib.error.HTTPError as exc:
+                raise HTTPException(
+                    status_code=exc.code,
+                    detail=remote_file_error_detail(exc),
+                ) from exc
+        try:
+            return file_raw_info_payload(path, root=root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
 
@@ -2050,9 +2076,12 @@ def file_preview_payload(
     }
 
 
-def file_raw_payload(
-    path: str, max_bytes: int = 5 * 1024 * 1024, root: str | None = None
-) -> tuple[bytes, str]:
+def raw_file_metadata(
+    path: str,
+    max_image_bytes: int = 5 * 1024 * 1024,
+    max_pdf_bytes: int = 20 * 1024 * 1024,
+    root: str | None = None,
+) -> tuple[Path, str, int]:
     root_path = resolve_root(root)
     file_path = secure_resolve_path(path, root_path)
     if not file_path.exists():
@@ -2062,18 +2091,53 @@ def file_raw_payload(
     if is_sensitive_path(file_path):
         raise ValueError(f"Raw file access is blocked for sensitive path: {file_path.name}")
     media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    if not media_type.startswith("image/"):
-        raise ValueError("Raw file access is only supported for images.")
+    is_image = media_type.startswith("image/")
+    is_pdf = media_type == "application/pdf"
+    if not is_image and not is_pdf:
+        raise ValueError("Raw file access is only supported for images and PDFs.")
     try:
         size = file_path.stat().st_size
     except OSError as exc:
         raise ValueError(str(exc)) from exc
+    max_bytes = max_pdf_bytes if is_pdf else max_image_bytes
     if size > max_bytes:
-        raise ValueError(f"Image is larger than {max_bytes // 1024 // 1024} MiB.")
+        kind = "PDF" if is_pdf else "Image"
+        raise ValueError(f"{kind} is larger than {max_bytes // 1024 // 1024} MiB.")
+    return file_path, media_type, size
+
+
+def file_raw_info_payload(path: str, root: str | None = None) -> dict[str, object]:
+    file_path, media_type, size = raw_file_metadata(path, root=root)
+    return {
+        "path": str(file_path),
+        "name": file_path.name,
+        "size": size,
+        "media_type": media_type,
+    }
+
+
+def file_raw_payload(path: str, root: str | None = None) -> tuple[bytes, str]:
+    file_path, media_type, _size = raw_file_metadata(path, root=root)
     try:
         return file_path.read_bytes(), media_type
     except OSError as exc:
         raise ValueError(str(exc)) from exc
+
+
+def remote_file_error_detail(exc: urllib.error.HTTPError) -> str:
+    text = exc.read().decode("utf-8", errors="replace")
+    detail = text.strip() or exc.reason
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        detail_value = payload.get("detail")
+        if isinstance(detail_value, str) and detail_value:
+            detail = detail_value
+    if exc.code == 404 and detail == "Not Found":
+        return "Remote node does not support raw file previews yet. Restart or update the StarAgent node process."
+    return detail
 
 
 def resolve_root(root: str | None) -> Path | None:
