@@ -50,9 +50,6 @@
               <td><span class="pill status-{{ view.status }}">{{ view.status }}</span></td>
               <td>
                 <div class="working-dir" title="{{ view.repo or '-' }}">{{ view.repo or "-" }}</div>
-                {% if view.branch %}
-                  <div class="working-branch">{{ view.branch }}</div>
-                {% endif %}
               </td>
               <td>{{ relative_time(view.last_updated) }}</td>
               <td onclick="event.stopPropagation()">
