@@ -93,7 +93,7 @@ staragent verify-node <node-host-or-100.x-ip>
 
 ## 致谢
 
-StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
+StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Markdown Preview 遵循 [GitHub Flavored Markdown](https://github.github.com/gfm/) 的常见约定。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
 
 ## License
 

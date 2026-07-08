@@ -410,6 +410,24 @@ def request_json(
         return json.loads(response.read().decode("utf-8"))
 
 
+def request_raw(
+    node: NodeEntry,
+    method: str,
+    path: str,
+    timeout: float = NODE_REQUEST_TIMEOUT_SECONDS,
+) -> tuple[bytes, str]:
+    if node.is_local:
+        raise ValueError("local node does not use remote node requests")
+    request = urllib.request.Request(
+        urllib.parse.urljoin(node.url.rstrip("/") + "/", path.lstrip("/")),
+        headers=remote_node_headers(),
+        method=method,
+    )
+    with open_node_request(node, request, timeout=timeout) as response:
+        media_type = response.headers.get_content_type() or "application/octet-stream"
+        return response.read(), media_type
+
+
 def open_node_request(
     node: NodeEntry,
     request: urllib.request.Request,
