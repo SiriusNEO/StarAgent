@@ -4,6 +4,10 @@
   <img src="assets/logo.png" alt="StarAgent logo" width="256">
 </p>
 
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 > ⚠️ This project is currently intended for personal use and is under active development. A stable version will be released later.
 
 > ⚠️ This project was primarily built with vibe coding and may contain potential bugs. Please keep this in mind before using it.

@@ -544,16 +544,6 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
-.working-branch {
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 4px;
-  max-width: min(360px, 34vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 th {
   background: var(--surface-subtle);
   color: var(--muted);
@@ -3106,8 +3096,7 @@ dd {
     width: 100%;
   }
 
-  .working-dir,
-  .working-branch {
+  .working-dir {
     max-width: 220px;
   }
 

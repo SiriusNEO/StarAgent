@@ -31,7 +31,6 @@
         <dt>Type</dt><dd>{{ view.session_type }}</dd>
         <dt>Backend</dt><dd>{{ view.backend }}</dd>
         <dt>Repo</dt><dd>{{ view.repo }}</dd>
-        <dt>Branch</dt><dd>{{ view.branch or "-" }}</dd>
         <dt>Last updated</dt><dd>{{ relative_time(view.last_updated) }}</dd>
         <dt>Source</dt><dd>{{ view.status_report.source if view.status_report else "config" }}</dd>
       </dl>
