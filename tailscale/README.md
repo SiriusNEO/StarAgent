@@ -28,7 +28,7 @@ tailscale/scripts/expose-agent.sh
 
 ## Normal Linux or VM
 
-Run Tailscale normally:
+Install and start `tailscaled` normally:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -40,11 +40,17 @@ Start the StarAgent node locally and expose it to the tailnet:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-staragent node-ts
+staragent node-ts --sudo
 tailscale ip -4
 ```
 
-Add the printed `100.x` address in the Hub dashboard as a Remote node.
+`staragent node-ts` checks that the `tailscale` CLI exists and is connected, then
+starts the `staragent-node` tmux session and runs `tailscale serve`. If Tailscale
+is missing or not connected, it prints the `tailscale up --ssh` command to run first
+and the Node tmux session is not started.
+
+Add the printed `100.x` address and port in the Hub dashboard as a Remote node.
+If the Node uses a non-default port, enter that port explicitly, for example `8082`.
 
 ## No systemd or Container Shell
 
@@ -61,8 +67,9 @@ Start the StarAgent node locally and expose it to the tailnet:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-staragent node-ts --tailscale-socket .staragent/tailscaled.sock
+staragent node-ts --tailscale-socket .staragent/tailscaled.sock --sudo
 sudo tailscale --socket=.staragent/tailscaled.sock ip -4
 ```
 
-Add the printed `100.x` address in the Hub dashboard as a Remote node.
+Add the printed `100.x` address and port in the Hub dashboard as a Remote node.
+If the Node uses a non-default port, enter that port explicitly, for example `8082`.

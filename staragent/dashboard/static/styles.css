@@ -2147,7 +2147,7 @@ dd {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(120px, 0.45fr) minmax(140px, 0.65fr) minmax(240px, 1.4fr) auto;
+  grid-template-columns: minmax(110px, 0.42fr) minmax(130px, 0.58fr) minmax(220px, 1.35fr) minmax(86px, 0.32fr) auto;
 }
 
 .node-grid label {
@@ -2163,7 +2163,8 @@ dd {
 }
 
 .node-grid input,
-.node-grid select {
+.node-grid select,
+.tailscale-port-input {
   background: white;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2176,7 +2177,8 @@ dd {
 }
 
 .node-grid input:focus,
-.node-grid select:focus {
+.node-grid select:focus,
+.tailscale-port-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(102, 8, 116, 0.12);
   outline: none;
@@ -2247,7 +2249,7 @@ dd {
   border-radius: 8px;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(160px, 1.2fr) auto minmax(180px, 0.9fr) auto;
+  grid-template-columns: minmax(160px, 1.1fr) auto minmax(220px, 1fr) auto;
   min-width: 0;
   padding: 10px 12px;
 }
@@ -2260,6 +2262,19 @@ dd {
 
 .tailscale-peer .inline-command {
   max-width: 100%;
+}
+
+.tailscale-add-fields {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  min-width: 0;
+}
+
+.tailscale-port-input {
+  font-size: 13px;
+  padding: 8px 10px;
 }
 
 .node-remove:hover {

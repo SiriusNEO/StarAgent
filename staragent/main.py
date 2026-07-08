@@ -234,9 +234,10 @@ def node_ts(
         "--tailscale-socket",
         help="Optional tailscale userspace socket, e.g. .staragent/tailscaled.sock.",
     ),
-    sudo: bool = typer.Option(False, "--sudo", help="Run tailscale through sudo."),
+    sudo: bool = typer.Option(False, "--sudo", help="Run tailscale status/serve through sudo."),
 ) -> None:
     """Run a tmux-backed StarAgent node and expose it through Tailscale serve."""
+    ensure_tailscale_ready(socket_path=socket_path, sudo=sudo)
     start_node_tmux_session(bind=bind, port=port, session=session, reload=reload)
     exposed_port = serve_port or port
     run_tailscale_serve(
@@ -451,16 +452,14 @@ def start_node_tmux_session(bind: str, port: int, session: str, reload: bool = F
     console.print(f"Attach: tmux attach -t {shlex.quote(session)}")
 
 
-def run_tailscale_serve(
-    serve_port: int,
-    target_host: str,
-    target_port: int,
-    socket_path: str = "",
-    sudo: bool = False,
-) -> None:
+def tailscale_command(socket_path: str = "", sudo: bool = False) -> list[str]:
     executable = shutil.which("tailscale")
     if not executable:
-        console.print("tailscale command not found.", style="red")
+        console.print(
+            "tailscale command not found. Install Tailscale first: "
+            "curl -fsSL https://tailscale.com/install.sh | sh",
+            style="red",
+        )
         raise typer.Exit(1)
     command = [executable]
     if sudo:
@@ -471,6 +470,36 @@ def run_tailscale_serve(
         command = [sudo_executable, executable]
     if socket_path:
         command.extend(["--socket", socket_path])
+    return command
+
+
+def ensure_tailscale_ready(socket_path: str = "", sudo: bool = False) -> None:
+    command = tailscale_command(socket_path=socket_path, sudo=sudo)
+    result = subprocess.run(
+        [*command, "status"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "tailscale status failed"
+        console.print("Tailscale is not ready.", style="red")
+        console.print(detail, style="red")
+        console.print("Run this first, then retry StarAgent:", style="yellow")
+        up_command = tailscale_command(socket_path=socket_path, sudo=sudo)
+        console.print(shlex.join([*up_command, "up", "--ssh"]), style="yellow")
+        raise typer.Exit(result.returncode)
+    console.print("Tailscale: ready", style="green")
+
+
+def run_tailscale_serve(
+    serve_port: int,
+    target_host: str,
+    target_port: int,
+    socket_path: str = "",
+    sudo: bool = False,
+) -> None:
+    command = tailscale_command(socket_path=socket_path, sudo=sudo)
     command.extend(
         [
             "serve",

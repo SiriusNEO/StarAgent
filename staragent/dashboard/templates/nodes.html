@@ -75,8 +75,8 @@
         </div>
         <div class="tmux-help-row tailscale-tip-row">
           <span>Start+TS</span>
-          <code>staragent node-ts</code>
-          <button type="button" class="copy-button inline-copy" data-copy="staragent node-ts">Copy</button>
+          <code>staragent node-ts --sudo</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent node-ts --sudo">Copy</button>
         </div>
         <div class="tmux-help-row tailscale-tip-row">
           <span>Verify</span>
@@ -99,12 +99,16 @@
           <input name="name" placeholder="w1" autocomplete="off">
         </label>
         <label>
-          <span>Node or URL</span>
-          <input name="url" placeholder="192.168.1.20, 100.x.x.x, or http://node:8081" autocomplete="off">
+          <span>Host</span>
+          <input name="host" placeholder="192.168.1.20, 100.x.x.x, or node.tailnet.ts.net" autocomplete="off">
+        </label>
+        <label>
+          <span>Port</span>
+          <input name="port" type="number" min="1" max="65535" value="8081" inputmode="numeric">
         </label>
         <button type="submit">Add Node</button>
       </div>
-      <p class="form-hint">Run a StarAgent node on the target machine, then add the endpoint that the Hub can reach.</p>
+      <p class="form-hint">Run a StarAgent node on the target machine, then add the host and port that the Hub can reach.</p>
       <div class="node-status" aria-live="polite"></div>
     </form>
     <div class="node-table">
@@ -213,7 +217,7 @@
         const payload = {
           mode: String(form.get("mode") || "lan").trim(),
           name: String(form.get("name") || "").trim(),
-          url: String(form.get("url") || "").trim()
+          url: endpointFromHostPort(String(form.get("host") || ""), String(form.get("port") || "8081"))
         };
         if (!payload.name || !payload.url) {
           status.textContent = "Name and node are required.";
@@ -242,6 +246,21 @@
         statusEl.textContent = "Added.";
       }
       window.location.reload();
+    }
+
+    function endpointFromHostPort(host, port) {
+      const target = String(host || "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      const selectedPort = String(port || "").trim();
+      if (!target || !selectedPort) {
+        return target;
+      }
+      if (/[/?#]/.test(target)) {
+        return target;
+      }
+      if (target.includes(":") && !target.startsWith("[") && target.split(":").length === 2) {
+        return target;
+      }
+      return `${target}:${selectedPort}`;
     }
 
     const tailscaleDashboard = document.querySelector(".tailscale-dashboard");
@@ -295,19 +314,35 @@
         const state = document.createElement("span");
         state.className = `pill node-status-${peer.online ? "connected" : "disconnected"}`;
         state.textContent = peer.online ? "online" : "offline";
-        const endpoint = document.createElement("code");
-        endpoint.className = "inline-command";
-        endpoint.textContent = peer.endpoint || "";
+        const addFields = document.createElement("div");
+        addFields.className = "tailscale-add-fields";
+        const hostCode = document.createElement("code");
+        hostCode.className = "inline-command";
+        hostCode.textContent = peer.preferred_node || "";
+        const portInput = document.createElement("input");
+        portInput.className = "tailscale-port-input";
+        portInput.type = "number";
+        portInput.min = "1";
+        portInput.max = "65535";
+        portInput.value = "8081";
+        portInput.inputMode = "numeric";
+        portInput.ariaLabel = "Node port";
+        addFields.append(hostCode, portInput);
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = "Add Remote";
         button.disabled = !peer.preferred_node;
         button.addEventListener("click", async () => {
+          const endpointValue = endpointFromHostPort(peer.preferred_node, portInput.value);
+          if (!endpointValue) {
+            portInput.focus();
+            return;
+          }
           button.disabled = true;
           button.textContent = "Adding";
           try {
             await addNode(
-              {mode: "remote", name: peer.name || peer.preferred_node, url: peer.preferred_node},
+              {mode: "remote", name: peer.name || peer.preferred_node, url: endpointValue.trim()},
               document.querySelector(".node-status")
             );
           } catch (error) {
@@ -316,7 +351,7 @@
             document.querySelector(".node-status").textContent = error.message;
           }
         });
-        row.append(info, state, endpoint, button);
+        row.append(info, state, addFields, button);
         return row;
       };
 

@@ -51,6 +51,13 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
         current_command = str(pane.get("current_command") or "")
         adopted = adopted_session(session["name"])
         detected_cli, _ = infer_cli_from_pane(current_command, int(pane.get("pane_pid") or 0))
+        if not should_include_tmux_session(
+            session["name"],
+            current_command=current_command,
+            detected_cli=detected_cli,
+            adopted=adopted,
+        ):
+            continue
         session_type = infer_session_type(session["name"], output, current_command)
         needs_attention = looks_like_attention(output)
         status = classify_tmux_status(session, needs_attention)
@@ -371,6 +378,19 @@ def infer_agent(name: str, current_command: str = "", detected_cli: str = "") ->
     if direct_cli != "unknown":
         return direct_cli
     return "unknown"
+
+
+def should_include_tmux_session(
+    name: str,
+    current_command: str = "",
+    detected_cli: str = "",
+    adopted=None,
+) -> bool:
+    if is_staragent_system_session(name, "", current_command):
+        return True
+    if detected_cli and detected_cli != "unknown":
+        return True
+    return bool(adopted and getattr(adopted, "cli", "") not in {"", "unknown"})
 
 
 def infer_session_type(name: str, output: str, current_command: str = "") -> str:
