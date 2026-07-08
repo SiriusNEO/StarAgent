@@ -150,19 +150,17 @@
                 <span>{{ view.status_report.changed_files|length }} files</span>
               </div>
               {% if view.status_report.changed_files %}
-                <ul class="file-list changed-file-list">
+                <div class="explorer-list changed-file-list">
                   {% for file in view.status_report.changed_files %}
-                    <li>
-                      <button type="button" class="directory-row changed-file-row" data-file="{{ file }}">
-                        <span class="change-badge">...</span>
-                        <span class="explorer-entry-text">
-                          <strong class="changed-file-name">{{ file }}</strong>
-                          <small class="changed-file-dir"></small>
-                        </span>
-                      </button>
-                    </li>
+                    <button type="button" class="directory-row file-row" data-file="{{ file }}">
+                      <span class="file-icon"></span>
+                      <span class="explorer-entry-text">
+                        <strong class="explorer-entry-name changed-file-name">{{ file }}</strong>
+                        <small class="explorer-entry-detail changed-file-dir"></small>
+                      </span>
+                    </button>
                   {% endfor %}
-                </ul>
+                </div>
               {% else %}
                 <p class="empty">No git changes in this workspace.</p>
               {% endif %}
@@ -171,9 +169,18 @@
           <div class="preview-panel">
             <div class="section-title compact-title">
               <h2>Preview</h2>
-              <span class="preview-meta">No file selected</span>
+              <div class="preview-title-actions">
+                <span class="preview-meta">No file selected</span>
+                <div class="preview-actions" hidden>
+                  <button type="button" class="preview-mode-button is-active" data-preview-mode="preview">Preview</button>
+                  <button type="button" class="preview-mode-button" data-preview-mode="source">Source</button>
+                </div>
+              </div>
             </div>
-            <pre class="file-preview"><code class="file-preview-code">Select a file from Explorer or Changed Files.</code></pre>
+            <div class="preview-content">
+              <pre class="file-preview"><code class="file-preview-code">Select a file from Explorer or Changed Files.</code></pre>
+              <div class="markdown-preview" hidden></div>
+            </div>
           </div>
         </div>
       </section>
@@ -232,8 +239,14 @@
       const workspaceRoot = sessionExplorer.dataset.path;
       const previewPanel = document.querySelector(".preview-panel");
       const previewMeta = previewPanel?.querySelector(".preview-meta");
+      const previewSource = previewPanel?.querySelector(".file-preview");
       const previewBody = previewPanel?.querySelector(".file-preview-code");
+      const previewMarkdown = previewPanel?.querySelector(".markdown-preview");
+      const previewActions = previewPanel?.querySelector(".preview-actions");
+      const previewModeButtons = previewPanel ? Array.from(previewPanel.querySelectorAll(".preview-mode-button")) : [];
       let highlightedPath = "";
+      let previewMode = "preview";
+      let currentMarkdownText = "";
       const workspaceExplorer = window.StarAgentExplorer.mount(sessionExplorer, {
         node: () => explorerNode,
         rootPath: () => workspaceRoot,
@@ -253,8 +266,15 @@
       });
 
       async function previewFile(path) {
-        if (!previewBody || !previewMeta) {
+        if (!previewBody || !previewMeta || !previewSource) {
           return;
+        }
+        currentMarkdownText = "";
+        setMarkdownControls(false);
+        previewSource.hidden = false;
+        if (previewMarkdown) {
+          previewMarkdown.hidden = true;
+          previewMarkdown.innerHTML = "";
         }
         previewMeta.textContent = "Loading";
         previewBody.textContent = "";
@@ -272,10 +292,28 @@
           previewBody.textContent = body.error;
           return;
         }
-        renderHighlightedPreview(body.text || "", previewLanguage(body.name || path));
+        const language = previewLanguage(body.name || path);
+        if (language === "markdown") {
+          renderMarkdownFile(body.text || "", path);
+          return;
+        }
+        renderHighlightedPreview(body.text || "", language);
       }
 
       function renderHighlightedPreview(text, language) {
+        currentMarkdownText = "";
+        setMarkdownControls(false);
+        if (previewSource) {
+          previewSource.hidden = false;
+        }
+        if (previewMarkdown) {
+          previewMarkdown.hidden = true;
+          previewMarkdown.innerHTML = "";
+        }
+        renderHighlightedSource(text, language);
+      }
+
+      function renderHighlightedSource(text, language) {
         previewBody.className = language ? `file-preview-code hljs language-${language}` : "file-preview-code hljs";
         const local = localHighlight(text, language);
         if (local) {
@@ -296,11 +334,429 @@
         }
       }
 
+      function renderMarkdownFile(text, path) {
+        currentMarkdownText = text;
+        previewMode = "preview";
+        setMarkdownControls(true);
+        renderHighlightedSource(text, "markdown");
+        if (previewMarkdown) {
+          previewMarkdown.innerHTML = renderMarkdown(text, path);
+          previewMarkdown.querySelectorAll("pre code").forEach((block) => {
+            if (window.hljs) {
+              try {
+                window.hljs.highlightElement(block);
+              } catch {
+                // Keep escaped code visible if highlighting fails.
+              }
+            }
+          });
+        }
+        applyPreviewMode();
+      }
+
+      function setMarkdownControls(enabled) {
+        if (previewActions) {
+          previewActions.hidden = !enabled;
+        }
+        if (!enabled) {
+          previewModeButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.previewMode === "preview"));
+        }
+      }
+
+      function applyPreviewMode() {
+        previewModeButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.previewMode === previewMode));
+        if (!previewSource || !previewMarkdown) {
+          return;
+        }
+        previewSource.hidden = previewMode !== "source";
+        previewMarkdown.hidden = previewMode !== "preview";
+      }
+
+      previewModeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          previewMode = button.dataset.previewMode || "preview";
+          if (currentMarkdownText) {
+            applyPreviewMode();
+          }
+        });
+      });
+
       function escapeHtml(text) {
         return String(text || "")
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
+      }
+
+      function escapeAttribute(text) {
+        return escapeHtml(text).replace(/"/g, "&quot;");
+      }
+
+      function renderMarkdown(text, markdownPath) {
+        const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+        const html = [];
+        let paragraph = [];
+        let listItems = [];
+        let quoteLines = [];
+        let inFence = false;
+        let fenceLanguage = "";
+        let fenceLines = [];
+
+        const flushParagraph = () => {
+          if (!paragraph.length) return;
+          html.push(`<p>${renderInlineMarkdown(paragraph.join(" "), markdownPath)}</p>`);
+          paragraph = [];
+        };
+        const flushList = () => {
+          if (!listItems.length) return;
+          html.push(`<ul>${listItems.map((item) => `<li>${renderInlineMarkdown(item, markdownPath)}</li>`).join("")}</ul>`);
+          listItems = [];
+        };
+        const flushQuote = () => {
+          if (!quoteLines.length) return;
+          html.push(`<blockquote>${quoteLines.map((item) => `<p>${renderInlineMarkdown(item, markdownPath)}</p>`).join("")}</blockquote>`);
+          quoteLines = [];
+        };
+        const flushFlow = () => {
+          flushParagraph();
+          flushList();
+          flushQuote();
+        };
+        const flushFence = () => {
+          const lang = fenceLanguage ? ` language-${escapeAttribute(fenceLanguage)}` : "";
+          html.push(`<pre><code class="hljs${lang}">${escapeHtml(fenceLines.join("\n"))}</code></pre>`);
+          inFence = false;
+          fenceLanguage = "";
+          fenceLines = [];
+        };
+
+        for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+          const rawLine = lines[lineIndex];
+          const line = rawLine.replace(/\s+$/, "");
+          const fence = line.match(/^```([\w.+-]*)\s*$/);
+          if (fence) {
+            if (inFence) {
+              flushFence();
+            } else {
+              flushFlow();
+              inFence = true;
+              fenceLanguage = fence[1] || "";
+              fenceLines = [];
+            }
+            continue;
+          }
+          if (inFence) {
+            fenceLines.push(rawLine);
+            continue;
+          }
+
+          if (!line.trim()) {
+            flushFlow();
+            continue;
+          }
+
+          const heading = line.match(/^(#{1,6})\s+(.+)$/);
+          if (heading) {
+            flushFlow();
+            const level = heading[1].length;
+            html.push(`<h${level}>${renderInlineMarkdown(heading[2].trim(), markdownPath)}</h${level}>`);
+            continue;
+          }
+
+          if (/^---+$/.test(line.trim())) {
+            flushFlow();
+            html.push("<hr>");
+            continue;
+          }
+
+          if (line.includes("|") && isMarkdownTableDivider(lines[lineIndex + 1] || "")) {
+            flushFlow();
+            const headers = splitMarkdownTableRow(line);
+            const alignments = splitMarkdownTableRow(lines[lineIndex + 1]).map(tableAlignment);
+            const rows = [];
+            lineIndex += 2;
+            while (lineIndex < lines.length && lines[lineIndex].includes("|") && lines[lineIndex].trim()) {
+              rows.push(splitMarkdownTableRow(lines[lineIndex]));
+              lineIndex += 1;
+            }
+            lineIndex -= 1;
+            html.push(renderMarkdownTable(headers, alignments, rows, markdownPath));
+            continue;
+          }
+
+          const list = line.match(/^\s*[-*+]\s+(.+)$/);
+          if (list) {
+            flushParagraph();
+            flushQuote();
+            listItems.push(list[1].trim());
+            continue;
+          }
+
+          const quote = line.match(/^>\s?(.*)$/);
+          if (quote) {
+            flushParagraph();
+            flushList();
+            quoteLines.push(quote[1].trim());
+            continue;
+          }
+
+          if (looksLikeHtmlLine(line)) {
+            flushFlow();
+            html.push(sanitizeHtml(line, markdownPath));
+            continue;
+          }
+
+          flushList();
+          flushQuote();
+          paragraph.push(line.trim());
+        }
+
+        if (inFence) {
+          flushFence();
+        }
+        flushFlow();
+        return html.join("\n") || '<p class="empty">Empty Markdown file.</p>';
+      }
+
+      function isMarkdownTableDivider(line) {
+        const cells = splitMarkdownTableRow(line);
+        return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+      }
+
+      function splitMarkdownTableRow(line) {
+        const value = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+        const cells = [];
+        let current = "";
+        let escaped = false;
+        for (const char of value) {
+          if (escaped) {
+            current += char;
+            escaped = false;
+            continue;
+          }
+          if (char === "\\") {
+            escaped = true;
+            continue;
+          }
+          if (char === "|") {
+            cells.push(current.trim());
+            current = "";
+            continue;
+          }
+          current += char;
+        }
+        cells.push(current.trim());
+        return cells;
+      }
+
+      function tableAlignment(cell) {
+        const value = cell.trim();
+        if (value.startsWith(":") && value.endsWith(":")) return "center";
+        if (value.endsWith(":")) return "right";
+        if (value.startsWith(":")) return "left";
+        return "";
+      }
+
+      function renderMarkdownTable(headers, alignments, rows, markdownPath) {
+        const th = headers.map((cell, index) => {
+          const align = alignments[index] ? ` align="${alignments[index]}"` : "";
+          return `<th${align}>${renderInlineMarkdown(cell, markdownPath)}</th>`;
+        }).join("");
+        const bodyRows = rows.map((row) => {
+          const cells = headers.map((_, index) => {
+            const align = alignments[index] ? ` align="${alignments[index]}"` : "";
+            return `<td${align}>${renderInlineMarkdown(row[index] || "", markdownPath)}</td>`;
+          }).join("");
+          return `<tr>${cells}</tr>`;
+        }).join("");
+        return `<table><thead><tr>${th}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+      }
+
+      function renderInlineMarkdown(text, markdownPath) {
+        const placeholders = [];
+        const store = (html) => {
+          const key = `\u0000${placeholders.length}\u0000`;
+          placeholders.push(html);
+          return key;
+        };
+        let protectedText = String(text || "")
+          .replace(/`([^`]+)`/g, (_, code) => store(`<code>${escapeHtml(code)}</code>`))
+          .replace(/<[^>]+>/g, (tag) => store(sanitizeHtml(tag, markdownPath)))
+          .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, target) => {
+            const parsed = parseMarkdownTarget(target);
+            const src = markdownImageSrc(parsed.url, markdownPath);
+            if (!src) {
+              return escapeHtml(_);
+            }
+            const title = parsed.title ? ` title="${escapeAttribute(parsed.title)}"` : "";
+            return store(`<img src="${escapeAttribute(src)}" alt="${escapeAttribute(alt)}"${title} loading="lazy">`);
+          })
+          .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, target) => {
+            const parsed = parseMarkdownTarget(target);
+            const href = markdownHref(parsed.url, markdownPath);
+            if (!href) {
+              return escapeHtml(label);
+            }
+            const title = parsed.title ? ` title="${escapeAttribute(parsed.title)}"` : "";
+            return store(`<a href="${escapeAttribute(href)}"${title} target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
+          })
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        let output = protectedText
+          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+          .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+          .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+          .replace(/_([^_]+)_/g, "<em>$1</em>");
+        placeholders.forEach((html, index) => {
+          output = output.replace(`\u0000${index}\u0000`, html);
+        });
+        return output;
+      }
+
+      function looksLikeHtmlLine(line) {
+        return /^\s*<\/?[A-Za-z][^>]*>\s*$/.test(line);
+      }
+
+      function sanitizeHtml(html, markdownPath) {
+        const allowedTags = new Set([
+          "a", "b", "blockquote", "br", "code", "dd", "del", "details", "div", "dl", "dt",
+          "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "kbd", "li", "ol",
+          "p", "pre", "s", "span", "strong", "sub", "summary", "sup", "table", "tbody",
+          "td", "th", "thead", "tr", "ul",
+        ]);
+        const source = String(html || "");
+        const tagPattern = /<\/?\s*([A-Za-z][\w:-]*)([^>]*)>/g;
+        let output = "";
+        let lastIndex = 0;
+        for (const match of source.matchAll(tagPattern)) {
+          output += escapeHtml(source.slice(lastIndex, match.index));
+          const [raw, tagName, rawAttrs] = match;
+          const tag = tagName.toLowerCase();
+          if (!allowedTags.has(tag)) {
+            lastIndex = Number(match.index) + raw.length;
+            continue;
+          }
+          const closing = /^<\//.test(raw);
+          if (closing) {
+            output += `</${tag}>`;
+            lastIndex = Number(match.index) + raw.length;
+            continue;
+          }
+          const attrs = sanitizeHtmlAttrs(tag, rawAttrs || "", markdownPath);
+          const selfClosing = /\/\s*>$/.test(raw) || ["br", "hr", "img"].includes(tag);
+          output += `<${tag}${attrs}${selfClosing ? ">" : ">"}`;
+          lastIndex = Number(match.index) + raw.length;
+        }
+        output += escapeHtml(source.slice(lastIndex));
+        return output;
+      }
+
+      function sanitizeHtmlAttrs(tag, rawAttrs, markdownPath) {
+        const attrs = [];
+        const allowed = {
+          a: new Set(["href", "title"]),
+          img: new Set(["src", "alt", "title", "width", "height"]),
+          td: new Set(["colspan", "rowspan", "align"]),
+          th: new Set(["colspan", "rowspan", "align"]),
+          details: new Set(["open"]),
+        };
+        const global = new Set(["title"]);
+        const attrPattern = /([A-Za-z_:][\w:.-]*)(?:\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>/]+)))?/g;
+        for (const match of rawAttrs.matchAll(attrPattern)) {
+          const name = match[1].toLowerCase();
+          if (name.startsWith("on") || name === "style") {
+            continue;
+          }
+          if (!(allowed[tag]?.has(name) || global.has(name))) {
+            continue;
+          }
+          const rawValue = match[3] ?? match[4] ?? match[5] ?? "";
+          if (tag === "a" && name === "href") {
+            const href = markdownHref(rawValue, markdownPath);
+            if (href) attrs.push(`href="${escapeAttribute(href)}" target="_blank" rel="noreferrer"`);
+            continue;
+          }
+          if (tag === "img" && name === "src") {
+            const src = markdownImageSrc(rawValue, markdownPath);
+            if (src) attrs.push(`src="${escapeAttribute(src)}" loading="lazy"`);
+            continue;
+          }
+          if (tag === "details" && name === "open") {
+            attrs.push("open");
+            continue;
+          }
+          if (["width", "height", "colspan", "rowspan"].includes(name) && !/^\d{1,4}$/.test(rawValue)) {
+            continue;
+          }
+          if (name === "align" && !/^(left|center|right)$/i.test(rawValue)) {
+            continue;
+          }
+          attrs.push(`${name}="${escapeAttribute(rawValue)}"`);
+        }
+        return attrs.length ? ` ${attrs.join(" ")}` : "";
+      }
+
+      function parseMarkdownTarget(raw) {
+        const value = String(raw || "").trim();
+        const titled = value.match(/^(\S+)\s+["']([^"']+)["']$/);
+        if (titled) {
+          return {url: titled[1], title: titled[2]};
+        }
+        return {url: value, title: ""};
+      }
+
+      function markdownHref(rawUrl, markdownPath) {
+        const url = String(rawUrl || "").trim();
+        if (!url || /^javascript:/i.test(url) || /^data:/i.test(url)) {
+          return "";
+        }
+        if (/^(https?:|mailto:)/i.test(url) || url.startsWith("#")) {
+          return url;
+        }
+        return resolveMarkdownPath(url, markdownPath);
+      }
+
+      function markdownImageSrc(rawUrl, markdownPath) {
+        const url = String(rawUrl || "").trim();
+        if (!url || /^javascript:/i.test(url)) {
+          return "";
+        }
+        if (/^https?:/i.test(url)) {
+          return url;
+        }
+        if (/^data:image\/(png|gif|jpe?g|webp|svg\+xml);base64,/i.test(url)) {
+          return url;
+        }
+        const filePath = resolveMarkdownPath(url, markdownPath);
+        if (!filePath) {
+          return "";
+        }
+        return `/api/files/raw?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(filePath)}`;
+      }
+
+      function resolveMarkdownPath(rawUrl, markdownPath) {
+        const value = String(rawUrl || "").trim();
+        if (!value || value.startsWith("#")) {
+          return value;
+        }
+        const [pathPart, suffix = ""] = value.split(/(?=[?#])/);
+        const decodedPath = decodeURIComponent(pathPart || "");
+        const base = String(markdownPath || workspaceRoot).split("/");
+        base.pop();
+        const parts = decodedPath.startsWith("/")
+          ? decodedPath.split("/")
+          : [...base, ...decodedPath.split("/")];
+        const normalized = [];
+        for (const part of parts) {
+          if (!part || part === ".") continue;
+          if (part === "..") {
+            normalized.pop();
+            continue;
+          }
+          normalized.push(part);
+        }
+        return `/${normalized.join("/")}${suffix}`;
       }
 
       function localHighlight(text, language) {
@@ -437,18 +893,9 @@
         const parts = parsed.path.split("/").filter(Boolean);
         const name = parts.pop() || parsed.path;
         const directory = parts.join("/");
-        const badge = button.querySelector(".change-badge");
         const fileName = button.querySelector(".changed-file-name");
         const fileDir = button.querySelector(".changed-file-dir");
-        button.classList.add(`change-${parsed.label.toLowerCase()}`);
         button.title = `${parsed.label}: ${parsed.path}`;
-        if (parsed.deleted) {
-          button.classList.add("is-deleted");
-        }
-        if (badge) {
-          badge.textContent = parsed.shortLabel;
-          badge.setAttribute("aria-label", parsed.label);
-        }
         if (fileName) {
           fileName.textContent = name;
         }

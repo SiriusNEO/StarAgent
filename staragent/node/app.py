@@ -5,7 +5,7 @@ import hmac
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
@@ -14,6 +14,7 @@ from staragent.dashboard.app import (
     create_directory_payload,
     directory_listing,
     file_preview_payload,
+    file_raw_payload,
     stream_pty_to_websocket,
 )
 from staragent.pty_terminal import PtyTerminal, parse_client_message
@@ -148,6 +149,14 @@ def create_app() -> FastAPI:
             return file_preview_payload(path, root=root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/files/raw")
+    def file_raw(path: str, root: str | None = None) -> Response:
+        try:
+            body, media_type = file_raw_payload(path, root=root)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(content=body, media_type=media_type)
 
     @app.websocket("/ws/sessions/{name}/terminal")
     async def terminal_socket(websocket: WebSocket, name: str) -> None:

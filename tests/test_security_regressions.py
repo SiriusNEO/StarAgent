@@ -15,6 +15,7 @@ from staragent.dashboard.app import (
     cleanup_http_terminals,
     directory_listing,
     file_preview_payload,
+    file_raw_payload,
     http_terminals,
     lark_connection_test_payload,
 )
@@ -70,6 +71,37 @@ def test_file_preview_is_limited_to_workspace_root(tmp_path) -> None:
         assert "outside workspace" in str(exc)
     else:
         raise AssertionError("outside file preview should fail")
+
+
+def test_file_raw_images_are_limited_to_safe_workspace_files(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    image = workspace / "logo.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n")
+    text = workspace / "README.md"
+    text.write_text("# no raw access\n", encoding="utf-8")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    secret_dir = workspace / ".ssh"
+    secret_dir.mkdir()
+    secret = secret_dir / "secret.png"
+    secret.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    body, media_type = file_raw_payload(str(image), root=str(workspace))
+    assert body == b"\x89PNG\r\n\x1a\n"
+    assert media_type == "image/png"
+
+    for path, expected in [
+        (text, "only supported for images"),
+        (outside, "outside workspace"),
+        (secret, "sensitive path"),
+    ]:
+        try:
+            file_raw_payload(str(path), root=str(workspace))
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"raw file access should fail for {path}")
 
 
 def test_sensitive_paths_are_hidden_and_blocked(tmp_path) -> None:
