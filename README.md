@@ -65,8 +65,14 @@ Run this on each machine that should run agent sessions:
 ```bash
 pip install -e '.[dev]'
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-staragent node-ts
+sudo tailscale up --ssh
+staragent node-ts --sudo
 ```
+
+`staragent node-ts` checks that Tailscale is installed and already connected, then
+starts the `staragent-node` tmux system session and configures `tailscale serve`.
+If Tailscale is not ready, it prints the `tailscale up --ssh` command to run first.
+Use `--sudo` when `tailscale serve` requires root privileges.
 
 For LAN or another network layer that does not need `tailscale serve`, use:
 
@@ -80,7 +86,8 @@ Before adding the Node, verify it from the Hub machine:
 staragent verify-node <node-host-or-100.x-ip>
 ```
 
-Add the exact working endpoint, such as `http://100.x.x.x:8081`, in the Hub dashboard.
+Add the reachable Host and Port in the Hub dashboard, for example `100.x.x.x` and `8081`.
+If the Node uses a non-default port, enter that port explicitly, for example `8082`.
 
 ## Acknowledgements
 

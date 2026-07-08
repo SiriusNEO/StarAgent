@@ -48,8 +48,14 @@ Start a remote Node:
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-staragent node-ts
+sudo tailscale up --ssh
+staragent node-ts --sudo
 ```
+
+`staragent node-ts` checks for Tailscale and confirms it is connected, then starts the
+`staragent-node` tmux system session and configures `tailscale serve`. If Tailscale
+is missing or not connected, it must print the `tailscale up --ssh` command to run first
+and stop before creating the Node tmux session.
 
 Use `staragent node` instead when LAN or another network layer already exposes the Node.
 Add the node endpoint from the dashboard Nodes page after it is reachable from the Hub.
@@ -116,7 +122,8 @@ Validate remote Node connectivity from the Hub machine, not from the browser dev
 
 ```bash
 export STARAGENT_NODE_TOKEN="<same token as the Hub>"
-staragent node-ts
+sudo tailscale up --ssh
+staragent node-ts --sudo
 ```
 
 2. For LAN or another network layer that does not need `tailscale serve`, use `staragent node` instead.
@@ -138,7 +145,8 @@ curl --noproxy '*' \
   http://<node-host-or-100.x-ip>:8081/api/sessions
 ```
 
-5. Add exactly that working endpoint in the dashboard Nodes page, for example `http://100.x.x.x:8081` or `http://node.tailnet-name.ts.net:8081`.
+5. Add that working Host and Port in the dashboard Nodes page, for example host `100.x.x.x` with port `8081`, or host `node.tailnet-name.ts.net` with port `8081`.
+   If the Node uses a non-default port, enter that port explicitly, for example `8082`.
 
 Common failure modes:
 

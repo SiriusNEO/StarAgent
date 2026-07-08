@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from staragent import hub
 from staragent import main as staragent_main
-from staragent.hub import NodeEntry
+from staragent.hub import NodeEntry, normalize_node_url
 
 runner = CliRunner()
 
@@ -29,6 +29,16 @@ def session_payload(name: str = "dev") -> dict[str, list[dict[str, object]]]:
             }
         ]
     }
+
+
+def test_normalize_node_url_defaults_to_8081() -> None:
+    assert normalize_node_url("worker") == "http://worker:8081"
+    assert normalize_node_url("100.64.1.10") == "http://100.64.1.10:8081"
+
+
+def test_normalize_node_url_preserves_explicit_port() -> None:
+    assert normalize_node_url("worker:8082") == "http://worker:8082"
+    assert normalize_node_url("http://100.64.1.10:8082") == "http://100.64.1.10:8082"
 
 
 class FakeResponse:
@@ -338,6 +348,12 @@ def test_node_ts_command_starts_tmux_and_serves(monkeypatch) -> None:
             "/usr/bin/tailscale",
             "--socket",
             ".staragent/tailscaled.sock",
+            "status",
+        ],
+        [
+            "/usr/bin/tailscale",
+            "--socket",
+            ".staragent/tailscaled.sock",
             "serve",
             "--bg",
             "--tcp=18082",
@@ -345,3 +361,43 @@ def test_node_ts_command_starts_tmux_and_serves(monkeypatch) -> None:
         ]
     ]
     assert "Tailscale serve: tcp/18082 -> 127.0.0.1:8082" in result.output
+
+
+def test_node_ts_command_stops_before_tmux_when_tailscale_not_ready(monkeypatch) -> None:
+    tmux_calls: list[tuple[str, str, str]] = []
+    run_calls: list[list[str]] = []
+
+    monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
+    monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
+    monkeypatch.setattr(staragent_main, "staragent_executable", lambda: "/bin/staragent")
+    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+    monkeypatch.setattr(staragent_main.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(command, check, text, capture_output):  # type: ignore[no-untyped-def]
+        run_calls.append(command)
+        return subprocess.CompletedProcess(command, 1, "", "Logged out.")
+
+    monkeypatch.setattr(staragent_main.subprocess, "run", fake_run)
+
+    result = runner.invoke(staragent_main.app, ["node-ts"])
+
+    assert result.exit_code == 1
+    assert run_calls == [["/usr/bin/tailscale", "status"]]
+    assert not tmux_calls
+    assert "Tailscale is not ready." in result.output
+    assert "tailscale up --ssh" in result.output
+
+
+def test_node_ts_command_stops_before_tmux_when_tailscale_missing(monkeypatch) -> None:
+    tmux_calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
+    monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
+    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+    monkeypatch.setattr(staragent_main.shutil, "which", lambda name: None)
+
+    result = runner.invoke(staragent_main.app, ["node-ts"])
+
+    assert result.exit_code == 1
+    assert not tmux_calls
+    assert "tailscale command not found" in result.output
