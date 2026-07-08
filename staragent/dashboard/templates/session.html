@@ -144,10 +144,12 @@
               <div class="explorer-path" aria-label="Current path"></div>
               <div class="explorer-list"></div>
             </div>
-            <div class="changed-panel">
-              <div class="section-title compact-title">
-                <h2>Changed Files</h2>
-                <span>{{ view.status_report.changed_files|length }} files</span>
+            <div class="explorer changed-panel">
+              <div class="explorer-head">
+                <div>
+                  <strong>Changed Files</strong>
+                  <span class="explorer-selected">{{ view.status_report.changed_files|length }} files</span>
+                </div>
               </div>
               {% if view.status_report.changed_files %}
                 <div class="explorer-list changed-file-list">
@@ -180,6 +182,7 @@
             <div class="preview-content">
               <pre class="file-preview"><code class="file-preview-code">Select a file from Explorer or Changed Files.</code></pre>
               <div class="markdown-preview" hidden></div>
+              <iframe class="pdf-preview" title="PDF preview" hidden></iframe>
             </div>
           </div>
         </div>
@@ -242,6 +245,7 @@
       const previewSource = previewPanel?.querySelector(".file-preview");
       const previewBody = previewPanel?.querySelector(".file-preview-code");
       const previewMarkdown = previewPanel?.querySelector(".markdown-preview");
+      const previewPdf = previewPanel?.querySelector(".pdf-preview");
       const previewActions = previewPanel?.querySelector(".preview-actions");
       const previewModeButtons = previewPanel ? Array.from(previewPanel.querySelectorAll(".preview-mode-button")) : [];
       let highlightedPath = "";
@@ -276,9 +280,19 @@
           previewMarkdown.hidden = true;
           previewMarkdown.innerHTML = "";
         }
+        if (previewPdf) {
+          previewPdf.hidden = true;
+          previewPdf.removeAttribute("src");
+        }
         previewMeta.textContent = "Loading";
         previewBody.textContent = "";
         previewBody.className = "file-preview-code";
+        if (previewLanguage(path) === "pdf") {
+          const name = String(path || "").split("/").pop() || "PDF";
+          previewMeta.textContent = name;
+          await renderPdfFile(path);
+          return;
+        }
         const response = await fetch(`/api/files/preview?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`);
         if (!response.ok) {
           const body = await response.json().catch(() => ({}));
@@ -297,6 +311,10 @@
           renderMarkdownFile(body.text || "", path);
           return;
         }
+        if (language === "pdf") {
+          await renderPdfFile(path);
+          return;
+        }
         renderHighlightedPreview(body.text || "", language);
       }
 
@@ -309,6 +327,10 @@
         if (previewMarkdown) {
           previewMarkdown.hidden = true;
           previewMarkdown.innerHTML = "";
+        }
+        if (previewPdf) {
+          previewPdf.hidden = true;
+          previewPdf.removeAttribute("src");
         }
         renderHighlightedSource(text, language);
       }
@@ -339,6 +361,10 @@
         previewMode = "preview";
         setMarkdownControls(true);
         renderHighlightedSource(text, "markdown");
+        if (previewPdf) {
+          previewPdf.hidden = true;
+          previewPdf.removeAttribute("src");
+        }
         if (previewMarkdown) {
           previewMarkdown.innerHTML = renderMarkdown(text, path);
           previewMarkdown.querySelectorAll("pre code").forEach((block) => {
@@ -352,6 +378,40 @@
           });
         }
         applyPreviewMode();
+      }
+
+      async function renderPdfFile(path) {
+        currentMarkdownText = "";
+        setMarkdownControls(false);
+        if (previewSource) {
+          previewSource.hidden = true;
+        }
+        if (previewMarkdown) {
+          previewMarkdown.hidden = true;
+          previewMarkdown.innerHTML = "";
+        }
+        if (!previewPdf) {
+          previewBody.textContent = "PDF preview is not available.";
+          previewSource.hidden = false;
+          return;
+        }
+        const rawUrl = `/api/files/raw?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`;
+        const infoUrl = `/api/files/raw-info?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`;
+        const response = await fetch(infoUrl);
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          previewPdf.hidden = true;
+          previewPdf.removeAttribute("src");
+          previewBody.className = "file-preview-code";
+          previewBody.textContent = body.detail || "PDF preview is not available.";
+          previewSource.hidden = false;
+          previewMeta.textContent = "PDF preview error";
+          return;
+        }
+        const info = await response.json();
+        previewMeta.textContent = `${info.name || "PDF"} · ${formatBytes(Number(info.size || 0))}`;
+        previewPdf.src = rawUrl;
+        previewPdf.hidden = false;
       }
 
       function setMarkdownControls(enabled) {
@@ -821,6 +881,8 @@
           yaml: "yaml",
           yml: "yaml",
           md: "markdown",
+          markdown: "markdown",
+          pdf: "pdf",
           html: "xml",
           css: "css",
           rs: "rust",
