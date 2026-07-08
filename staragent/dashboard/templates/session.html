@@ -1142,6 +1142,22 @@
           .slice(-80);
       };
 
+      const pendingLocalUserMessages = (local, remote) => {
+        const latestRemoteTime = (remote || []).reduce((latest, message) => Math.max(latest, Number(message.time || 0)), 0);
+        const remoteUserFingerprints = new Set((remote || [])
+          .filter((message) => message.role === "user")
+          .map((message) => messageFingerprint(message.text || "")));
+        return (local || []).filter((message) => {
+          if (message.role !== "user") {
+            return false;
+          }
+          if (Number(message.time || 0) <= latestRemoteTime) {
+            return false;
+          }
+          return !remoteUserFingerprints.has(messageFingerprint(message.text || ""));
+        });
+      };
+
       const loadPendingChat = () => {
         try {
           const pending = JSON.parse(localStorage.getItem(chatPendingKey) || "null");
@@ -1179,7 +1195,9 @@
         } catch {
           remote = [];
         }
-        chatHistory = remote.length ? mergeMessages(remote) : mergeMessages(remote, local);
+        chatHistory = remote.length
+          ? mergeMessages(remote, pendingLocalUserMessages(local, remote))
+          : mergeMessages(remote, local);
         saveChatHistory();
         if (!remote.length) {
           for (const message of local) {
