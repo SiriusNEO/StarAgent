@@ -1,6 +1,6 @@
 [project]
 name = "staragent"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "StarAgent dashboard and CLI for coding-agent sessions."
 readme = "README.md"
 requires-python = ">=3.11"
