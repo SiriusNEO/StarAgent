@@ -14,8 +14,10 @@ from typing import Any, Protocol
 
 from staragent.hub import HubSession, collect_hub_sessions, node_by_name, request_json
 from staragent.paths import state_dir
-from staragent.runtime import capture_tmux_pane_ansi, send_tmux_message, strip_ansi
+from staragent.runtime import capture_tmux_pane_ansi, send_tmux_message
 from staragent.session_parser import tmux_transcript_state, transcript_state_from_payload
+from staragent.state import atomic_write_json, file_lock, read_json
+from staragent.text import strip_ansi
 from staragent.transcript import TranscriptMessage, TranscriptState
 
 MAX_REPLY_CHARS = 3600
@@ -77,8 +79,12 @@ class LarkConfig:
             verification_token=verification_token
             or os.environ.get("STARAGENT_LARK_VERIFICATION_TOKEN", "").strip(),
             encrypt_key=encrypt_key or os.environ.get("STARAGENT_LARK_ENCRYPT_KEY", "").strip(),
-            allowed_users=parse_csv(allowed_users or os.environ.get("STARAGENT_LARK_ALLOWED_USERS", "")),
-            allowed_chats=parse_csv(allowed_chats or os.environ.get("STARAGENT_LARK_ALLOWED_CHATS", "")),
+            allowed_users=parse_csv(
+                allowed_users or os.environ.get("STARAGENT_LARK_ALLOWED_USERS", "")
+            ),
+            allowed_chats=parse_csv(
+                allowed_chats or os.environ.get("STARAGENT_LARK_ALLOWED_CHATS", "")
+            ),
             allow_all=bool(configured_allow_all),
             dashboard_url=(dashboard_url or os.environ.get("STARAGENT_DASHBOARD_URL", "")).strip(),
         )
@@ -184,7 +190,7 @@ class LarkPendingReaction:
 class LarkConversationRoutes:
     def __init__(self, path: Path = LARK_ROUTES_PATH) -> None:
         self.path = path
-        self._lock = threading.Lock()
+        self._lock = file_lock(path)
 
     def get(self, message: IncomingLarkMessage) -> LarkSessionRoute | None:
         key = lark_conversation_key(message)
@@ -244,38 +250,24 @@ class LarkConversationRoutes:
         return bindings
 
     def _load(self) -> dict[str, object]:
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return {}
+        data = read_json(self.path, {})
         routes = data.get("routes", data) if isinstance(data, dict) else {}
         return dict(routes) if isinstance(routes, dict) else {}
 
     def _save(self, routes: dict[str, object]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_suffix(".json.tmp")
-        temp_path.write_text(
-            json.dumps({"routes": routes}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temp_path.replace(self.path)
+        atomic_write_json(self.path, {"routes": routes})
 
 
 class StarAgentBackend(Protocol):
-    def list_sessions(self) -> list[HubSession]:
-        ...
+    def list_sessions(self) -> list[HubSession]: ...
 
-    def send_message(self, node_id: str, session: str, text: str) -> None:
-        ...
+    def send_message(self, node_id: str, session: str, text: str) -> None: ...
 
-    def tail_session(self, node_id: str, session: str, lines: int) -> str:
-        ...
+    def tail_session(self, node_id: str, session: str, lines: int) -> str: ...
 
-    def transcript_state(self, node_id: str, session: str, lines: int = 500) -> TranscriptState:
-        ...
+    def transcript_state(self, node_id: str, session: str, lines: int = 500) -> TranscriptState: ...
 
-    def session_url(self, node_id: str, session: str) -> str:
-        ...
+    def session_url(self, node_id: str, session: str) -> str: ...
 
 
 class HubStarAgentBackend:
@@ -307,8 +299,7 @@ class HubStarAgentBackend:
         if node.is_local:
             return tmux_transcript_state(session, lines=lines)
         path = (
-            f"/api/sessions/{urllib.parse.quote(session, safe='')}"
-            f"/transcript-state?lines={lines}"
+            f"/api/sessions/{urllib.parse.quote(session, safe='')}/transcript-state?lines={lines}"
         )
         return transcript_state_from_payload(request_json(node, "GET", path))
 
@@ -325,9 +316,7 @@ class LarkCommandHandler:
         self,
         backend: StarAgentBackend,
         routes: LarkConversationRoutes | None = None,
-        on_agent_message: Callable[
-            [IncomingLarkMessage, LarkSessionRoute, TranscriptState], None
-        ]
+        on_agent_message: Callable[[IncomingLarkMessage, LarkSessionRoute, TranscriptState], None]
         | None = None,
         on_bind: Callable[[IncomingLarkMessage, LarkSessionRoute, TranscriptState | None], None]
         | None = None,
@@ -443,7 +432,9 @@ class LarkCommandHandler:
         route = LarkSessionRoute(node_id=session.node_id, session=session.name)
         self.routes.set(message, route)
         if self.on_bind:
-            self.on_bind(message, route, self.transcript_state_or_none(route.node_id, route.session))
+            self.on_bind(
+                message, route, self.transcript_state_or_none(route.node_id, route.session)
+            )
         return (
             f"Bound this Feishu group chat to {route.target}.\n"
             "Send plain messages in this group to talk to that session. Use /unbind to clear it."
@@ -454,7 +445,9 @@ class LarkCommandHandler:
             return group_required_text(message)
         route = self.routes.get(message)
         if route is None:
-            return "No StarAgent session is bound to this Feishu group chat. Use /use <node/session>."
+            return (
+                "No StarAgent session is bound to this Feishu group chat. Use /use <node/session>."
+            )
         return f"This Feishu group chat is bound to {route.target}."
 
     def unbind_conversation(self, message: IncomingLarkMessage) -> str:
@@ -611,7 +604,9 @@ class LarkTransport:
             .reply_in_thread(bool(message.thread_id or message.root_id))
             .build()
         )
-        request = self.reply_request.builder().message_id(message.message_id).request_body(body).build()
+        request = (
+            self.reply_request.builder().message_id(message.message_id).request_body(body).build()
+        )
         response = self.client.im.v1.message.reply(request)
         ensure_lark_response(response)
 
@@ -624,10 +619,7 @@ class LarkTransport:
             .build()
         )
         request = (
-            self.create_request.builder()
-            .receive_id_type("chat_id")
-            .request_body(body)
-            .build()
+            self.create_request.builder().receive_id_type("chat_id").request_body(body).build()
         )
         response = self.client.im.v1.message.create(request)
         ensure_lark_response(response)
@@ -781,9 +773,7 @@ class BoundSessionReplyBroadcaster:
                 self._last_final.pop(key, None)
             self._observed_working.intersection_update(active_keys)
         with self._reaction_guard:
-            stale_reactions = [
-                key for key in self._pending_reactions if key not in active_keys
-            ]
+            stale_reactions = [key for key in self._pending_reactions if key not in active_keys]
         for key in stale_reactions:
             self._clear_pending_reactions(key)
 
@@ -840,10 +830,7 @@ class BoundSessionReplyBroadcaster:
             self._save_pending_reactions_locked()
 
     def _load_pending_reactions(self) -> dict[str, list[LarkPendingReaction]]:
-        try:
-            data = json.loads(self.pending_reactions_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return {}
+        data = read_json(self.pending_reactions_path, {})
         raw_reactions = data.get("reactions", data) if isinstance(data, dict) else {}
         if not isinstance(raw_reactions, dict):
             return {}
@@ -864,18 +851,12 @@ class BoundSessionReplyBroadcaster:
         return reactions
 
     def _save_pending_reactions_locked(self) -> None:
-        self.pending_reactions_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.pending_reactions_path.with_suffix(".json.tmp")
         rows = {
             key: [reaction.as_dict() for reaction in reactions]
             for key, reactions in self._pending_reactions.items()
             if reactions
         }
-        temp_path.write_text(
-            json.dumps({"reactions": rows}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temp_path.replace(self.pending_reactions_path)
+        atomic_write_json(self.pending_reactions_path, {"reactions": rows})
 
 
 class LarkIntegration:

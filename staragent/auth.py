@@ -5,6 +5,7 @@ import secrets
 from pathlib import Path
 
 from staragent.paths import state_dir
+from staragent.state import atomic_write_text
 
 AUTH_TOKEN_FILE_NAME = "auth_token"
 
@@ -27,12 +28,7 @@ def write_stored_auth_token(token: str) -> None:
     path = auth_token_path()
     if read_stored_auth_token() == token:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(".tmp")
-    temp_path.write_text(token + "\n", encoding="utf-8")
-    temp_path.chmod(0o600)
-    temp_path.replace(path)
-    path.chmod(0o600)
+    atomic_write_text(path, token + "\n", mode=0o600)
 
 
 def create_stored_auth_token() -> str:

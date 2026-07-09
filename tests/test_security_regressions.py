@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import urllib.error
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -14,14 +16,17 @@ from staragent.dashboard.app import (
     HTTP_TERMINAL_IDLE_SECONDS,
     HttpTerminal,
     cleanup_http_terminals,
-    directory_listing,
-    file_preview_payload,
-    file_raw_info_payload,
-    file_raw_payload,
     http_terminals,
     lark_connection_test_payload,
 )
 from staragent.dashboard.app import create_app as create_dashboard_app
+from staragent.files import (
+    directory_listing,
+    file_preview_payload,
+    file_raw_info_payload,
+    file_raw_payload,
+)
+from staragent.hub import NodeEntry
 from staragent.main import (
     ensure_hub_auth_for_bind,
     is_loopback_bind,
@@ -234,12 +239,104 @@ def test_session_heavy_assets_are_loaded_on_demand() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
         encoding="utf-8"
     )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
     head = template.split("{% block head_extra %}", 1)[1].split("{% endblock %}", 1)[0]
 
     assert "xterm.min.js" not in head
     assert "highlight.min.js" not in head
-    assert "const ensureTerminalAssets" in template
-    assert "const ensureHighlightAssets" in template
+    assert "const ensureTerminalAssets" in script
+    assert "const ensureHighlightAssets" in script
+    assert "static_version('session.js')" in template
+
+
+def test_tailscale_dashboard_adds_direct_nodes() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "nodes.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "nodes.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'button.textContent = "Add Tailscale"' in script
+    assert '{mode: "lan", name: peer.name || peer.preferred_node' in script
+    assert '{mode: "remote", name: peer.name || peer.preferred_node' not in script
+    assert "Direct · LAN / Tailscale" in template
+
+
+def test_page_javascript_is_served_as_versioned_static_assets() -> None:
+    template_dir = PROJECT_ROOT / "staragent" / "dashboard" / "templates"
+    static_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static"
+
+    for page in ("base", "index", "nodes", "lark", "session"):
+        template = (template_dir / f"{page}.html").read_text(encoding="utf-8")
+        script = static_dir / f"{page}.js"
+        assert script.is_file()
+        assert f"static_version('{page}.js')" in template
+
+
+def test_sessions_page_defaults_worker_tools_to_local_node() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "index.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'node.name == "local"' in template
+    assert 'cwdInput.value = ""' in script
+    assert 'workerExplorer.load("")' in script
+
+
+def test_remote_transcript_state_falls_back_to_terminal_output(monkeypatch) -> None:
+    node = NodeEntry(name="old-node", url="http://old-node:8081", mode="lan")
+
+    def fake_request_json(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        if "transcript-state" in path:
+            raise urllib.error.HTTPError(path, 404, "Not Found", {}, io.BytesIO(b"Not Found"))
+        assert path.endswith("/output?lines=500")
+        return {"output": "legacy node answer"}
+
+    monkeypatch.setattr(dashboard_app, "node_by_name", lambda name: node)
+    monkeypatch.setattr(dashboard_app, "request_json", fake_request_json)
+    monkeypatch.setattr(
+        dashboard_app,
+        "collect_node_view",
+        lambda node, prefer_cached=False: SimpleNamespace(sessions=()),
+    )
+
+    state = dashboard_app.node_transcript_state("old-node", "dev")
+
+    assert state.reply == "legacy node answer"
+    assert state.final is True
+
+
+def test_remote_request_errors_preserve_upstream_status() -> None:
+    error = urllib.error.HTTPError(
+        "http://node/api/directories",
+        400,
+        "Bad Request",
+        {},
+        io.BytesIO(b'{"detail":"Path does not exist"}'),
+    )
+
+    translated = dashboard_app.remote_request_exception(error)
+
+    assert translated.status_code == 400
+    assert translated.detail == "Path does not exist"
+
+
+def test_session_chat_uses_one_transcript_poll_scheduler() -> None:
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const scheduleTranscriptSync" in script
+    assert "scheduleTranscriptSync(pollDelay)" in script
+    assert "refreshChatOutput" not in script
+    assert "workingTimer" not in script
+    assert "setInterval(() => {\n    syncChatFromTranscript" not in script
 
 
 def test_hub_persists_env_token_for_non_loopback_bind(monkeypatch, tmp_path) -> None:
@@ -255,9 +352,7 @@ def test_hub_tmux_child_reads_stored_auth_without_inlining_it(monkeypatch, tmp_p
     monkeypatch.delenv("STARAGENT_NODE_TOKEN", raising=False)
     ensure_hub_auth_for_bind("0.0.0.0")
 
-    command = tmux_child_command(
-        "hub", ["staragent", "hub", "--host", "0.0.0.0", "--port", "8080"]
-    )
+    command = tmux_child_command("hub", ["staragent", "hub", "--host", "0.0.0.0", "--port", "8080"])
 
     assert read_stored_auth_token() == "secret"
     assert "STARAGENT_AUTH_TOKEN=" not in command

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from staragent.adopt import adopted_session, infer_cli_from_pane
 from staragent.runtime import capture_tmux_pane_ansi, tmux_active_pane, tmux_session_exists
-from staragent.transcript import TokenUsage, TranscriptState, parse_transcript, strip_ansi
+from staragent.text import strip_ansi
+from staragent.transcript import TokenUsage, TranscriptState, parse_transcript
 
 
 def tmux_transcript_state(session: str, lines: int = 500) -> TranscriptState:

@@ -443,7 +443,9 @@ def test_bound_session_broadcaster_sends_first_final_after_starting_while_workin
     backend = FakeBackend([FakeSession("node-a", FakeView("dev"))])
     transport = FakeTransport()
     routes = LarkConversationRoutes(tmp_path / "routes.json")
-    routes.set(make_message("/use node-a/dev", chat_id="oc_group"), LarkSessionRoute("node-a", "dev"))
+    routes.set(
+        make_message("/use node-a/dev", chat_id="oc_group"), LarkSessionRoute("node-a", "dev")
+    )
     broadcaster = BoundSessionReplyBroadcaster(
         backend,
         transport,

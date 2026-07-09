@@ -211,100 +211,6 @@ html[data-surface-mode="clear-glass"] {
   --line-strong: rgba(96, 87, 78, 0.22);
 }
 
-html[data-surface-mode="glass"] .topbar,
-html[data-surface-mode="clear-glass"] .topbar,
-html[data-surface-mode="glass"] .band,
-html[data-surface-mode="clear-glass"] .band,
-html[data-surface-mode="glass"] .panel,
-html[data-surface-mode="clear-glass"] .panel,
-html[data-surface-mode="glass"] .theme-menu,
-html[data-surface-mode="clear-glass"] .theme-menu,
-html[data-surface-mode="glass"] .stat-group,
-html[data-surface-mode="clear-glass"] .stat-group,
-html[data-surface-mode="glass"] .explorer,
-html[data-surface-mode="clear-glass"] .explorer,
-html[data-surface-mode="glass"] .file-preview,
-html[data-surface-mode="clear-glass"] .file-preview,
-html[data-surface-mode="glass"] .preview-panel,
-html[data-surface-mode="clear-glass"] .preview-panel,
-html[data-surface-mode="glass"] .preview-frame,
-html[data-surface-mode="clear-glass"] .preview-frame,
-html[data-surface-mode="glass"] .chat-card,
-html[data-surface-mode="clear-glass"] .chat-card,
-html[data-surface-mode="glass"] .mobile-chat,
-html[data-surface-mode="clear-glass"] .mobile-chat,
-html[data-surface-mode="glass"] .session-meta,
-html[data-surface-mode="clear-glass"] .session-meta {
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: var(--glass-shadow);
-}
-
-html[data-surface-mode="clear-glass"] .topbar,
-html[data-surface-mode="clear-glass"] .band,
-html[data-surface-mode="clear-glass"] .panel,
-html[data-surface-mode="clear-glass"] .theme-menu,
-html[data-surface-mode="clear-glass"] .stat-group,
-html[data-surface-mode="clear-glass"] .explorer,
-html[data-surface-mode="clear-glass"] .file-preview,
-html[data-surface-mode="clear-glass"] .preview-panel,
-html[data-surface-mode="clear-glass"] .preview-frame,
-html[data-surface-mode="clear-glass"] .chat-card,
-html[data-surface-mode="clear-glass"] .mobile-chat,
-html[data-surface-mode="clear-glass"] .session-meta {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  box-shadow: 0 10px 34px rgba(24, 22, 20, 0.06);
-}
-
-html[data-surface-mode="glass"] .topbar {
-  background: rgba(255, 255, 255, 0.54);
-}
-
-html[data-surface-mode="clear-glass"] .topbar {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-html[data-surface-mode="glass"] .band,
-html[data-surface-mode="glass"] .panel,
-html[data-surface-mode="glass"] .stat-group,
-html[data-surface-mode="glass"] .explorer {
-  background: var(--surface-glass);
-}
-
-html[data-surface-mode="clear-glass"] .band,
-html[data-surface-mode="clear-glass"] .panel,
-html[data-surface-mode="clear-glass"] .stat-group,
-html[data-surface-mode="clear-glass"] .explorer {
-  background: var(--surface-clear-glass);
-}
-
-html[data-surface-mode="glass"] .mobile-chat,
-html[data-surface-mode="clear-glass"] .mobile-chat,
-html[data-surface-mode="glass"] .markdown-preview,
-html[data-surface-mode="clear-glass"] .markdown-preview,
-html[data-surface-mode="glass"] .code-preview,
-html[data-surface-mode="clear-glass"] .code-preview,
-html[data-surface-mode="glass"] .file-preview,
-html[data-surface-mode="clear-glass"] .file-preview,
-html[data-surface-mode="glass"] .pdf-preview,
-html[data-surface-mode="clear-glass"] .pdf-preview,
-html[data-surface-mode="glass"] .chat-bubble.agent,
-html[data-surface-mode="clear-glass"] .chat-bubble.agent,
-html[data-surface-mode="glass"] .preview-empty,
-html[data-surface-mode="clear-glass"] .preview-empty,
-html[data-surface-mode="glass"] .explorer-head,
-html[data-surface-mode="clear-glass"] .explorer-head,
-html[data-surface-mode="glass"] .explorer-toolbar,
-html[data-surface-mode="clear-glass"] .explorer-toolbar,
-html[data-surface-mode="glass"] .explorer-path,
-html[data-surface-mode="clear-glass"] .explorer-path,
-html[data-surface-mode="glass"] .directory-row,
-html[data-surface-mode="clear-glass"] .directory-row,
-html[data-surface-mode="glass"] .file-row,
-html[data-surface-mode="clear-glass"] .file-row {
-  background-color: rgba(255, 255, 255, 0.12);
-}
 
 a {
   color: inherit;
@@ -914,37 +820,10 @@ dt {
   font-size: 13px;
 }
 
-.attention-list {
-  display: grid;
-  gap: 10px;
-}
-
-.attention-item {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-}
-
-.attention-item:hover,
 tbody tr:hover {
   background: var(--surface-subtle);
 }
 
-.attention-item div {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.attention-item span {
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.attention-item p,
 .question {
   color: var(--warn);
   font-weight: 600;
@@ -1139,47 +1018,6 @@ dd {
   line-height: 1.5;
   margin-top: 14px;
   padding: 10px 12px;
-}
-
-.onboarding-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.onboarding-step {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 10px;
-  grid-template-rows: auto minmax(0, 1fr);
-  min-width: 0;
-  overflow: hidden;
-  padding: 12px;
-}
-
-.onboarding-step strong {
-  color: var(--text);
-}
-
-.onboarding-step .copy-command {
-  min-width: 0;
-}
-
-.onboarding-step .command {
-  font-size: 12px;
-  line-height: 1.45;
-  margin: 0;
-  max-width: 100%;
-  min-height: 100%;
-  overflow: auto;
-  padding: 12px 58px 12px 12px;
-  white-space: pre;
-}
-
-.onboarding-step .copy-button {
-  right: 8px;
-  top: 8px;
 }
 
 .dependency-panel {
@@ -1934,21 +1772,10 @@ dd {
   word-break: break-word;
 }
 
-.secondary-command {
-  background: #2b2824;
-  margin-top: 8px;
-}
-
 .session-attach {
   border-top: 1px solid var(--line);
   margin-top: 14px;
   padding-top: 14px;
-}
-
-.attach-command {
-  font-size: 12px;
-  margin: 0;
-  min-height: 44px;
 }
 
 .tmux-command-box {
@@ -2400,11 +2227,6 @@ dd {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
-}
-
-.send-status {
-  color: var(--muted);
-  font-size: 14px;
 }
 
 .send-actions button {
@@ -3012,11 +2834,6 @@ dd {
   font-size: 14px;
 }
 
-.node-list {
-  display: grid;
-  gap: 8px;
-}
-
 .node-table {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3097,28 +2914,6 @@ dd {
   background: var(--neutral);
   border-color: var(--line);
   color: var(--neutral-strong);
-}
-
-.node-row {
-  align-items: center;
-  background: var(--surface-subtle);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 10px 12px;
-}
-
-.node-row div {
-  display: grid;
-  gap: 3px;
-}
-
-.node-row span {
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
 }
 
 .node-remove {
@@ -3447,44 +3242,6 @@ dd {
   padding: 12px;
 }
 
-.attention-text {
-  color: var(--warn);
-  font-weight: 800;
-}
-
-.file-list {
-  display: grid;
-  gap: 8px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.file-list li {
-  background: var(--neutral);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.file-list button {
-  background: transparent;
-  border: 0;
-  color: var(--text);
-  cursor: pointer;
-  display: block;
-  font: inherit;
-  overflow-wrap: anywhere;
-  padding: 9px 10px;
-  text-align: left;
-  width: 100%;
-}
-
-.file-list button:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
 @media (max-width: 1080px) {
   .lark-settings-layout,
   .lark-lower-grid {
@@ -3598,14 +3355,6 @@ dd {
   .tailscale-peer button,
   .tailscale-refresh {
     width: 100%;
-  }
-
-  .onboarding-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .onboarding-step {
-    grid-template-rows: auto auto;
   }
 
   .node-grid button {
@@ -3779,12 +3528,6 @@ dd {
     padding: 8px;
   }
 
-  .attention-item div {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
-
   .chat-actions {
     grid-template-columns: 1fr 1fr;
   }
@@ -3911,7 +3654,6 @@ html[data-surface-mode="glass"] :where(
   .markdown-preview,
   .pdf-preview,
   .mobile-chat,
-  .node-row,
   .lark-test-steps,
   .lark-status-grid,
   .lark-config-row,
@@ -3936,7 +3678,6 @@ html[data-surface-mode="clear-glass"] :where(
   .markdown-preview,
   .pdf-preview,
   .mobile-chat,
-  .node-row,
   .lark-test-steps,
   .lark-status-grid,
   .lark-config-row,
@@ -3966,7 +3707,6 @@ html[data-surface-mode="glass"] :where(
   .markdown-preview pre,
   .markdown-preview th,
   .markdown-preview img,
-  .preview-empty,
   .node-status-optional,
   .node-remove,
   .explorer-filter,
@@ -3993,7 +3733,6 @@ html[data-surface-mode="clear-glass"] :where(
   .markdown-preview pre,
   .markdown-preview th,
   .markdown-preview img,
-  .preview-empty,
   .node-status-optional,
   .node-remove,
   .explorer-filter,

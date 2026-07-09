@@ -1,6 +1,6 @@
 [project]
 name = "staragent"
-version = "0.2.0.dev0"
+dynamic = ["version"]
 description = "StarAgent dashboard and CLI for coding-agent sessions."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -53,3 +53,6 @@ ignore = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "staragent/__init__.py"

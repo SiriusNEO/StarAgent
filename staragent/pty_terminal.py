@@ -62,8 +62,7 @@ class TerminalOutputFilter:
                 continue
 
             if any(
-                sequence.startswith(remaining)
-                for sequence in TERMINAL_SCROLLBACK_RESET_SEQUENCES
+                sequence.startswith(remaining) for sequence in TERMINAL_SCROLLBACK_RESET_SEQUENCES
             ):
                 self._tail = remaining
                 break

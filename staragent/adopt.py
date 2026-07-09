@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from staragent.paths import state_dir
+from staragent.state import atomic_write_json, locked_file, read_json
 
 ADOPTIONS_PATH = state_dir() / "adopted_sessions.json"
 
@@ -31,12 +31,14 @@ class AdoptedSession:
 
 
 def load_adoptions() -> dict[str, AdoptedSession]:
+    with locked_file(ADOPTIONS_PATH):
+        return _load_adoptions_unlocked()
+
+
+def _load_adoptions_unlocked() -> dict[str, AdoptedSession]:
     if not ADOPTIONS_PATH.exists():
         return {}
-    try:
-        data = json.loads(ADOPTIONS_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
+    data = read_json(ADOPTIONS_PATH, {})
     entries = data.get("sessions", data)
     if not isinstance(entries, dict):
         return {}
@@ -56,21 +58,19 @@ def load_adoptions() -> dict[str, AdoptedSession]:
     return result
 
 
-def save_adoptions(adoptions: dict[str, AdoptedSession]) -> None:
-    ADOPTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _save_adoptions_unlocked(adoptions: dict[str, AdoptedSession]) -> None:
     payload = {"sessions": {name: item.as_dict() for name, item in sorted(adoptions.items())}}
-    temp_path = ADOPTIONS_PATH.with_suffix(".json.tmp")
-    temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp_path.replace(ADOPTIONS_PATH)
+    atomic_write_json(ADOPTIONS_PATH, payload)
 
 
 def adopt_existing_session(name: str) -> AdoptedSession:
     candidates = {item.name: item for item in discover_adoptable_sessions()}
     if name not in candidates:
         raise ValueError(f"no adoptable tmux session found: {name}")
-    adoptions = load_adoptions()
-    adoptions[name] = candidates[name]
-    save_adoptions(adoptions)
+    with locked_file(ADOPTIONS_PATH):
+        adoptions = _load_adoptions_unlocked()
+        adoptions[name] = candidates[name]
+        _save_adoptions_unlocked(adoptions)
     return candidates[name]
 
 
