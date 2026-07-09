@@ -8,11 +8,35 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 WORKING_STATUS_PATTERN = re.compile(r"^\s*(?:[◦∙·○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\b", re.IGNORECASE)
+MAX_TRANSCRIPT_CACHE_FILES = 32
+
+
+@dataclass
+class _JsonlCacheEntry:
+    identity: tuple[int, int]
+    offset: int
+    line_number: int
+    pending: bytes
+    values: list[dict[str, Any]]
+    mtime_ns: int
+
+
+@dataclass(frozen=True)
+class _CodexRolloutPathEntry:
+    owner_pid: int
+    path: str
+
+
+_TRANSCRIPT_CACHE_LOCK = threading.RLock()
+_JSONL_CACHE: dict[tuple[str, str], _JsonlCacheEntry] = {}
+_CODEX_ROLLOUT_PATH_CACHE: dict[int, _CodexRolloutPathEntry] = {}
 
 
 @dataclass(frozen=True)
@@ -183,38 +207,129 @@ def parse_generic_transcript(text: str) -> TranscriptState:
     )
 
 
+def clear_transcript_caches() -> None:
+    with _TRANSCRIPT_CACHE_LOCK:
+        _JSONL_CACHE.clear()
+        _CODEX_ROLLOUT_PATH_CACHE.clear()
+
+
+def read_cached_jsonl(
+    path: str,
+    namespace: str,
+    transform: Callable[[object, int], dict[str, Any] | None],
+) -> list[dict[str, Any]]:
+    cache_key = (namespace, path)
+    try:
+        path_stat = os.stat(path)
+    except OSError:
+        with _TRANSCRIPT_CACHE_LOCK:
+            _JSONL_CACHE.pop(cache_key, None)
+        return []
+
+    identity = (path_stat.st_dev, path_stat.st_ino)
+    with _TRANSCRIPT_CACHE_LOCK:
+        entry = _JSONL_CACHE.get(cache_key)
+        if (
+            entry is None
+            or entry.identity != identity
+            or path_stat.st_size < entry.offset
+            or (
+                path_stat.st_size == entry.offset
+                and path_stat.st_mtime_ns != entry.mtime_ns
+            )
+        ):
+            entry = _JsonlCacheEntry(identity, 0, 0, b"", [], path_stat.st_mtime_ns)
+        elif path_stat.st_size == entry.offset:
+            remember_jsonl_cache_entry(cache_key, entry)
+            return list(entry.values)
+
+        try:
+            with open(path, "rb") as handle:
+                opened_stat = os.fstat(handle.fileno())
+                opened_identity = (opened_stat.st_dev, opened_stat.st_ino)
+                if opened_identity != entry.identity or opened_stat.st_size < entry.offset:
+                    entry = _JsonlCacheEntry(
+                        opened_identity,
+                        0,
+                        0,
+                        b"",
+                        [],
+                        opened_stat.st_mtime_ns,
+                    )
+                handle.seek(entry.offset)
+                chunk = handle.read()
+                entry.offset = handle.tell()
+                finished_stat = os.fstat(handle.fileno())
+                entry.mtime_ns = finished_stat.st_mtime_ns
+        except OSError:
+            _JSONL_CACHE.pop(cache_key, None)
+            return []
+
+        data = entry.pending + chunk
+        split_lines = data.split(b"\n")
+        if data.endswith(b"\n"):
+            complete_lines = split_lines[:-1]
+            entry.pending = b""
+        else:
+            complete_lines = split_lines[:-1]
+            entry.pending = split_lines[-1]
+
+        for raw_line in complete_lines:
+            entry.line_number += 1
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                obj = json.loads(raw_line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            value = transform(obj, entry.line_number)
+            if value is not None:
+                entry.values.append(value)
+
+        remember_jsonl_cache_entry(cache_key, entry)
+        return list(entry.values)
+
+
+def remember_jsonl_cache_entry(
+    cache_key: tuple[str, str], entry: _JsonlCacheEntry
+) -> None:
+    _JSONL_CACHE.pop(cache_key, None)
+    _JSONL_CACHE[cache_key] = entry
+    while len(_JSONL_CACHE) > MAX_TRANSCRIPT_CACHE_FILES:
+        oldest_key = next(iter(_JSONL_CACHE))
+        _JSONL_CACHE.pop(oldest_key, None)
+
+
 def codex_events_from_pid(pid: int) -> list[dict[str, object]]:
     path = find_codex_rollout_by_pid(pid)
     if not path:
         return []
-    events: list[dict[str, object]] = []
-    line_number = 0
-    try:
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                line_number += 1
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                event = codex_event_from_json(obj)
-                if event:
-                    event["id"] = f"{path}:{line_number}"
-                    events.append(event)
-    except OSError:
-        return []
-    return events
+
+    def transform(obj: object, line_number: int) -> dict[str, Any] | None:
+        event = codex_event_from_json(obj)
+        if event:
+            event["id"] = f"{path}:{line_number}"
+        return event
+
+    return read_cached_jsonl(path, "codex", transform)
 
 
 def find_codex_rollout_by_pid(pid: int) -> str:
     if pid <= 0:
         return ""
+    with _TRANSCRIPT_CACHE_LOCK:
+        cached = _CODEX_ROLLOUT_PATH_CACHE.get(pid)
+    if cached and process_has_open_path(cached.owner_pid, cached.path):
+        return cached.path
+    with _TRANSCRIPT_CACHE_LOCK:
+        _CODEX_ROLLOUT_PATH_CACHE.pop(pid, None)
+
     for candidate in (pid, *process_descendant_pids(pid, max_depth=4)):
         path = find_codex_rollout_in_process(candidate)
         if path:
+            with _TRANSCRIPT_CACHE_LOCK:
+                _CODEX_ROLLOUT_PATH_CACHE[pid] = _CodexRolloutPathEntry(candidate, path)
             return path
     return ""
 
@@ -233,6 +348,23 @@ def find_codex_rollout_in_process(pid: int) -> str:
         except OSError:
             return ""
     return ""
+
+
+def process_has_open_path(pid: int, path: str) -> bool:
+    fd_dir = Path(f"/proc/{pid}/fd")
+    if not fd_dir.exists():
+        return False
+    try:
+        fds = list(fd_dir.iterdir())
+    except OSError:
+        return False
+    for fd in fds:
+        try:
+            if os.readlink(fd) == path:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def process_descendant_pids(root_pid: int, max_depth: int = 4) -> list[int]:
@@ -579,22 +711,10 @@ def read_process_cwd(pid: int) -> str:
 
 
 def read_jsonl_objects(path: str) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-    try:
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(obj, dict):
-                    events.append(obj)
-    except OSError:
-        return []
-    return events
+    def transform(obj: object, _line_number: int) -> dict[str, Any] | None:
+        return obj if isinstance(obj, dict) else None
+
+    return read_cached_jsonl(path, "objects", transform)
 
 
 def latest_claude_turn_start_index(events: list[dict[str, Any]]) -> int:

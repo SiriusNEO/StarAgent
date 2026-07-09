@@ -131,6 +131,25 @@ def test_remote_node_uses_cached_heartbeat_during_transient_failure(monkeypatch)
     assert "timed out" in stale.error
 
 
+def test_preferred_remote_cache_skips_network_request(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    monkeypatch.setattr(hub, "request_json", lambda *args, **kwargs: session_payload())
+    hub.collect_node_view(node)
+
+    monkeypatch.setattr(
+        hub,
+        "remote_sessions",
+        lambda node: (_ for _ in ()).throw(AssertionError("cached view should not hit network")),
+    )
+
+    cached = hub.collect_node_view(node, prefer_cached=True)
+
+    assert cached.status == "connected"
+    assert cached.session_count == 1
+    assert cached.sessions[0].name == "dev"
+
+
 def test_remote_node_keeps_cached_sessions_when_health_is_ok(monkeypatch) -> None:
     hub.clear_node_heartbeat_cache()
     node = remote_node()
@@ -173,6 +192,21 @@ def test_remote_node_reports_stale_without_sessions_when_health_is_ok(monkeypatc
     assert stale.status == "stale"
     assert stale.session_count == 0
     assert "health ok" in stale.error
+
+
+def test_local_session_lookup_does_not_collect_every_session(monkeypatch) -> None:
+    view = object()
+    monkeypatch.setattr(hub, "collect_session_view", lambda name: view if name == "dev" else None)
+    monkeypatch.setattr(
+        hub,
+        "collect_node_view",
+        lambda node: (_ for _ in ()).throw(AssertionError("full node scan should not run")),
+    )
+
+    result = hub.collect_node_session(NodeEntry(name="local", url="local", mode="local"), "dev")
+
+    assert result is not None
+    assert result.view is view
 
 
 def test_remote_node_drops_stale_cache_after_grace_period(monkeypatch) -> None:

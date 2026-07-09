@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import socket
 import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from staragent.adopt import adopted_session, infer_cli_from_pane
+from staragent.adopt import adopted_session, infer_cli_from_pane, process_children
 from staragent.models import SessionStatus
 
 ATTENTION_PATTERNS = (
@@ -26,6 +27,8 @@ SYSTEM_SESSION_NAMES = {
     "staragent-node",
     "staragent-tailscaled",
 }
+STARAGENT_MANAGED_OPTION = "@staragent.managed"
+STARAGENT_AGENT_OPTION = "@staragent.agent"
 
 
 def tmux_env() -> dict[str, str]:
@@ -45,53 +48,99 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
 
     node = socket.gethostname()
     statuses: dict[str, SessionStatus] = {}
+    panes = tmux_active_panes()
+    process_tree = process_children()
+    git_cache: dict[str, tuple[str, list[str]]] = {}
     for session in sessions:
-        pane = tmux_active_pane(session["name"])
-        output = capture_tmux_pane(session["name"], lines=lines)
-        current_command = str(pane.get("current_command") or "")
-        adopted = adopted_session(session["name"])
-        detected_cli, _ = infer_cli_from_pane(current_command, int(pane.get("pane_pid") or 0))
-        if not should_include_tmux_session(
-            session["name"],
-            current_command=current_command,
-            detected_cli=detected_cli,
-            adopted=adopted,
-        ):
-            continue
-        session_type = infer_session_type(session["name"], output, current_command)
-        needs_attention = looks_like_attention(output)
-        status = classify_tmux_status(session, needs_attention)
-        updated = datetime.fromtimestamp(session["activity"], tz=UTC).astimezone()
-        current_path = (
-            adopted.cwd if adopted and adopted.cwd else str(pane.get("current_path") or "")
+        name = str(session["name"])
+        status = local_tmux_status(
+            session,
+            lines=lines,
+            node=node,
+            pane=panes.get(name),
+            process_tree=process_tree,
+            git_cache=git_cache,
         )
+        if status:
+            statuses[status.name] = status
+    return statuses
+
+
+def discover_local_tmux_status(name: str, lines: int = 80) -> SessionStatus | None:
+    session = next(
+        (item for item in list_tmux_sessions() if str(item.get("name") or "") == name),
+        None,
+    )
+    if not session:
+        return None
+    return local_tmux_status(session, lines=lines)
+
+
+def local_tmux_status(
+    session: dict[str, int | str],
+    lines: int = 80,
+    node: str = "",
+    pane: dict[str, str | int] | None = None,
+    process_tree: dict[int, list[tuple[int, str]]] | None = None,
+    git_cache: dict[str, tuple[str, list[str]]] | None = None,
+) -> SessionStatus | None:
+    name = str(session["name"])
+    pane = pane or tmux_active_pane(name)
+    output = capture_tmux_pane(name, lines=lines)
+    current_command = str(pane.get("current_command") or "")
+    adopted = adopted_session(name)
+    pane_pid = int(pane.get("pane_pid") or 0)
+    detected_cli, _ = (
+        infer_cli_from_pane(current_command, pane_pid)
+        if process_tree is None
+        else infer_cli_from_pane(current_command, pane_pid, process_tree=process_tree)
+    )
+    managed_agent = str(session.get("managed_agent") or "")
+    managed_session = str(session.get("managed") or "") == "agent"
+    if not should_include_tmux_session(
+        name,
+        current_command=current_command,
+        detected_cli=detected_cli,
+        managed_session=managed_session,
+        adopted=adopted,
+    ):
+        return None
+    session_type = infer_session_type(name, output, current_command)
+    needs_attention = looks_like_attention(output)
+    status = classify_tmux_status(session, needs_attention)
+    updated = datetime.fromtimestamp(int(session["activity"]), tz=UTC).astimezone()
+    current_path = adopted.cwd if adopted and adopted.cwd else str(pane.get("current_path") or "")
+    if git_cache is not None and current_path in git_cache:
+        branch, changed_files = git_cache[current_path]
+    else:
         branch = git_branch(current_path)
         changed_files = git_changed_files(current_path)
-        statuses[session["name"]] = SessionStatus.from_dict(
-            {
-                "name": session["name"],
-                "agent": adopted.cli
-                if adopted and adopted.cli
-                else infer_agent(session["name"], current_command, detected_cli),
-                "node": node,
-                "repo": current_path,
-                "branch": branch,
-                "task": f"Adopted {adopted.cli} tmux session"
-                if adopted
-                else tmux_task(session, pane),
-                "status": status,
-                "summary": tmux_summary(session, pane, output),
-                "next_step": "",
-                "needs_attention": needs_attention,
-                "question": attention_line(output) if needs_attention else "",
-                "changed_files": changed_files,
-                "recent_output": output,
-                "source": "adopted" if adopted else "tmux",
-                "session_type": session_type,
-                "last_updated": updated.isoformat(),
-            }
-        )
-    return statuses
+        if git_cache is not None:
+            git_cache[current_path] = (branch, changed_files)
+    return SessionStatus.from_dict(
+        {
+            "name": name,
+            "agent": adopted.cli
+            if adopted and adopted.cli
+            else infer_agent(name, current_command, detected_cli, managed_agent),
+            "node": node or socket.gethostname(),
+            "repo": current_path,
+            "branch": branch,
+            "task": f"Adopted {adopted.cli} tmux session"
+            if adopted
+            else tmux_task(session, pane),
+            "status": status,
+            "summary": tmux_summary(session, pane, output),
+            "next_step": "",
+            "needs_attention": needs_attention,
+            "question": attention_line(output) if needs_attention else "",
+            "changed_files": changed_files,
+            "recent_output": output,
+            "source": "adopted" if adopted else "tmux",
+            "session_type": session_type,
+            "last_updated": updated.isoformat(),
+        }
+    )
 
 
 def list_tmux_sessions() -> list[dict[str, int | str]]:
@@ -99,7 +148,7 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
         "tmux",
         "list-sessions",
         "-F",
-        "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_activity}\t#{session_created}",
+        "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_activity}\t#{session_created}\t#{@staragent.managed}\t#{@staragent.agent}",
     ]
     try:
         result = run_tmux(command[1:], check=False, text=True, capture_output=True)
@@ -111,9 +160,14 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
     sessions = []
     for line in result.stdout.splitlines():
         fields = line.split("\t")
-        if len(fields) != 5:
+        if len(fields) == 5:
+            name, windows, attached, activity, created = fields
+            managed = ""
+            managed_agent = ""
+        elif len(fields) == 7:
+            name, windows, attached, activity, created, managed, managed_agent = fields
+        else:
             continue
-        name, windows, attached, activity, created = fields
         sessions.append(
             {
                 "name": name,
@@ -121,6 +175,8 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
                 "attached": safe_int(attached),
                 "activity": safe_int(activity),
                 "created": safe_int(created),
+                "managed": managed,
+                "managed_agent": managed_agent,
             }
         )
     return sessions
@@ -257,7 +313,7 @@ def send_tmux_key(session: str, key: str) -> None:
         raise RuntimeError(detail)
 
 
-def start_tmux_worker(name: str, cwd: str, command: str) -> None:
+def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: bool = True) -> None:
     name = name.strip()
     command = command.strip()
     cwd_path = Path(cwd).expanduser().resolve()
@@ -273,7 +329,15 @@ def start_tmux_worker(name: str, cwd: str, command: str) -> None:
         raise ValueError(f"tmux session already exists: {name}")
 
     result = run_tmux(
-        ["new-session", "-d", "-s", name, "-c", str(cwd_path), command],
+        [
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            str(cwd_path),
+            tmux_worker_shell_command(command) if keep_shell_on_exit else command,
+        ],
         check=False,
         text=True,
         capture_output=True,
@@ -281,6 +345,44 @@ def start_tmux_worker(name: str, cwd: str, command: str) -> None:
     if result.returncode != 0:
         detail = result.stderr.strip() or "tmux new-session failed"
         raise RuntimeError(detail)
+    if keep_shell_on_exit:
+        mark_tmux_worker_session(name, command)
+
+
+def tmux_worker_shell_command(command: str) -> str:
+    script = "\n".join(
+        [
+            "set +e",
+            command,
+            "status=$?",
+            "printf '\\n[StarAgent] agent exited with status %s. Dropping into shell.\\n' \"$status\"",
+            'exec "${SHELL:-/bin/bash}" -l',
+        ]
+    )
+    return f"bash -lc {shlex.quote(script)}"
+
+
+def mark_tmux_worker_session(name: str, command: str) -> None:
+    agent = agent_from_worker_command(command)
+    for key, value in (
+        (STARAGENT_MANAGED_OPTION, "agent"),
+        (STARAGENT_AGENT_OPTION, agent),
+    ):
+        run_tmux(
+            ["set-option", "-t", name, key, value],
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
+
+def agent_from_worker_command(command: str) -> str:
+    try:
+        executable = shlex.split(command)[0]
+    except (IndexError, ValueError):
+        executable = command.split(None, 1)[0] if command.split(None, 1) else ""
+    agent, _ = infer_cli_from_pane(executable, 0)
+    return agent if agent != "unknown" else "unknown"
 
 
 def ensure_tmux_session(name: str, cwd: str, command: str) -> None:
@@ -333,6 +435,37 @@ def kill_tmux_session_if_exists(session: str) -> None:
     kill_tmux_session(session)
 
 
+def tmux_active_panes() -> dict[str, dict[str, str | int]]:
+    result = run_tmux(
+        [
+            "list-panes",
+            "-a",
+            "-F",
+            "#{session_name}\t#{window_active}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return {}
+    panes: dict[str, dict[str, str | int]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split("\t", 5)
+        if len(fields) != 6:
+            continue
+        session, window_active, pane_active, command, path, pane_pid = fields
+        if window_active != "1" or pane_active != "1":
+            continue
+        panes[session] = {
+            "current_command": command,
+            "current_path": path,
+            "pane_pid": safe_int(pane_pid),
+            "window_name": "",
+        }
+    return panes
+
+
 def tmux_active_pane(session: str) -> dict[str, str | int]:
     command = [
         "tmux",
@@ -369,11 +502,18 @@ def classify_tmux_status(session: dict[str, int | str], needs_attention: bool) -
     return "idle"
 
 
-def infer_agent(name: str, current_command: str = "", detected_cli: str = "") -> str:
+def infer_agent(
+    name: str,
+    current_command: str = "",
+    detected_cli: str = "",
+    managed_agent: str = "",
+) -> str:
     if is_staragent_system_session(name, "", current_command):
         return name
     if detected_cli and detected_cli != "unknown":
         return detected_cli
+    if managed_agent and managed_agent != "unknown":
+        return managed_agent
     direct_cli = infer_cli_from_pane(current_command, 0)[0]
     if direct_cli != "unknown":
         return direct_cli
@@ -384,9 +524,12 @@ def should_include_tmux_session(
     name: str,
     current_command: str = "",
     detected_cli: str = "",
+    managed_session: bool = False,
     adopted=None,
 ) -> bool:
     if is_staragent_system_session(name, "", current_command):
+        return True
+    if managed_session:
         return True
     if detected_cli and detected_cli != "unknown":
         return True
@@ -413,6 +556,9 @@ def tmux_task(session: dict[str, int | str], pane: dict[str, str | int]) -> str:
         return "StarAgent remote node"
     if name == "staragent-tailscaled":
         return "Tailscale userspace daemon"
+    if session.get("managed") == "agent":
+        agent = str(session.get("managed_agent") or "agent")
+        return f"StarAgent {agent} worker"
     command = pane.get("current_command")
     path = pane.get("current_path")
     if command and path:

@@ -6,6 +6,7 @@ import contextlib
 import hmac
 import importlib.util
 import inspect
+import io
 import json
 import mimetypes
 import os
@@ -25,7 +26,13 @@ from pathlib import Path
 import websockets
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -39,7 +46,7 @@ from staragent.hub import (
     NodeEntry,
     add_node,
     collect_hub_sessions,
-    collect_node_view,
+    collect_node_session,
     collect_node_views,
     node_by_name,
     refresh_remote_node_heartbeats,
@@ -106,6 +113,25 @@ HTTP_TERMINAL_MAX_AGE_SECONDS = 15 * 60.0
 CHAT_HISTORY_PATH = state_dir() / "chat_history.json"
 CHAT_HISTORY_LOCK = threading.RLock()
 AUTH_COOKIE = "staragent_auth"
+THEME_BACKGROUND_DIR = state_dir() / "theme"
+THEME_BACKGROUND_STEM = "background"
+THEME_BACKGROUND_CONFIG_PATH = THEME_BACKGROUND_DIR / "theme.json"
+THEME_BACKGROUND_LIBRARY_DIR = THEME_BACKGROUND_DIR / "backgrounds"
+THEME_BACKGROUND_MAX_BYTES = 8 * 1024 * 1024
+THEME_BACKGROUND_LIBRARY_LIMIT = 12
+THEME_BACKGROUND_ID_PATTERN = re.compile(r"^[a-f0-9]{12,32}$")
+THEME_BACKGROUND_FULL_MAX_EDGE = 2560
+THEME_BACKGROUND_THUMB_MAX_EDGE = 360
+THEME_BACKGROUND_FULL_QUALITY = 82
+THEME_BACKGROUND_THUMB_QUALITY = 72
+THEME_BACKGROUND_OPTIMIZED_SUFFIX = ".webp"
+THEME_BACKGROUND_THUMB_SUFFIX = ".thumb.webp"
+THEME_BACKGROUND_TYPES = {
+    "image/png": (".png", b"\x89PNG\r\n\x1a\n"),
+    "image/jpeg": (".jpg", b"\xff\xd8\xff"),
+    "image/webp": (".webp", b"RIFF"),
+    "image/gif": (".gif", b"GIF8"),
+}
 LARK_SESSION_NAME = "staragent-lark"
 LARK_CONFIG_PATH = state_dir() / "lark_config.json"
 LARK_CONFIG_LOCK = threading.RLock()
@@ -207,6 +233,80 @@ def create_app() -> FastAPI:
         response.delete_cookie(AUTH_COOKIE)
         return response
 
+    @app.get("/api/theme")
+    def theme_config() -> dict[str, object]:
+        return theme_config_payload()
+
+    @app.get("/api/theme/background")
+    def theme_background() -> FileResponse:
+        selected = selected_theme_background()
+        if not selected:
+            raise HTTPException(status_code=404, detail="No theme background uploaded")
+        background = selected["path"]
+        media_type = mimetypes.guess_type(background.name)[0] or "application/octet-stream"
+        return FileResponse(
+            background,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get("/api/theme/backgrounds/{background_id}")
+    def theme_background_by_id(background_id: str) -> FileResponse:
+        entry = theme_background_by_id_entry(background_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Theme background not found")
+        background = entry["path"]
+        media_type = mimetypes.guess_type(background.name)[0] or "application/octet-stream"
+        return FileResponse(
+            background,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.get("/api/theme/backgrounds/{background_id}/thumb")
+    def theme_background_thumb_by_id(background_id: str) -> FileResponse:
+        entry = theme_background_by_id_entry(background_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Theme background not found")
+        thumb = entry["thumb_path"]
+        media_type = mimetypes.guess_type(thumb.name)[0] or "application/octet-stream"
+        return FileResponse(
+            thumb,
+            media_type=media_type,
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    @app.post("/api/theme/background")
+    async def upload_theme_background(request: Request) -> dict[str, object]:
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        data = await request.body()
+        validate_theme_background(data, content_type)
+        THEME_BACKGROUND_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+        background_id = uuid.uuid4().hex[:12]
+        write_optimized_theme_background(background_id, data)
+        write_theme_config({"selected_background_id": background_id})
+        prune_theme_background_library()
+        return {"ok": True, **theme_config_payload()}
+
+    @app.delete("/api/theme/background")
+    def delete_theme_background() -> dict[str, object]:
+        selected = selected_theme_background()
+        if selected:
+            delete_theme_background_id(str(selected["id"]))
+        return {"ok": True, **theme_config_payload()}
+
+    @app.delete("/api/theme/backgrounds/{background_id}")
+    def delete_theme_background_by_id(background_id: str) -> dict[str, object]:
+        delete_theme_background_id(background_id)
+        return {"ok": True, **theme_config_payload()}
+
+    @app.post("/api/theme/backgrounds/{background_id}/select")
+    def select_theme_background(background_id: str) -> dict[str, object]:
+        if not theme_background_by_id_entry(background_id):
+            raise HTTPException(status_code=404, detail="Theme background not found")
+        write_theme_config({"selected_background_id": background_id})
+        return {"ok": True, **theme_config_payload()}
+
     @app.on_event("startup")
     async def startup_http_terminal_janitor() -> None:
         app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
@@ -235,7 +335,7 @@ def create_app() -> FastAPI:
 
     @app.get("/sessions", response_class=HTMLResponse)
     def sessions_page(request: Request) -> HTMLResponse:
-        node_views = collect_node_views()
+        node_views = collect_node_views(prefer_cached=True)
         views = sorted(
             [session for node in node_views for session in node.sessions],
             key=lambda item: (item.node_id, item.name),
@@ -255,7 +355,7 @@ def create_app() -> FastAPI:
 
     @app.get("/nodes", response_class=HTMLResponse)
     def nodes_page(request: Request) -> HTMLResponse:
-        node_views = collect_node_views()
+        node_views = collect_node_views(prefer_cached=True)
         views = sorted(
             [session for node in node_views for session in node.sessions],
             key=lambda item: (item.node_id, item.name),
@@ -593,7 +693,12 @@ def create_app() -> FastAPI:
                 detail=f"Missing required Lark environment: {', '.join(missing)}",
             )
         try:
-            start_tmux_worker(LARK_SESSION_NAME, str(PROJECT_ROOT), lark_worker_command())
+            start_tmux_worker(
+                LARK_SESSION_NAME,
+                str(PROJECT_ROOT),
+                lark_worker_command(),
+                keep_shell_on_exit=False,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -768,6 +873,292 @@ def create_app() -> FastAPI:
     return app
 
 
+def theme_background_path() -> Path | None:
+    for suffix, _signature in THEME_BACKGROUND_TYPES.values():
+        candidate = THEME_BACKGROUND_DIR / f"{THEME_BACKGROUND_STEM}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def clear_theme_background() -> None:
+    for suffix, _signature in THEME_BACKGROUND_TYPES.values():
+        candidate = THEME_BACKGROUND_DIR / f"{THEME_BACKGROUND_STEM}{suffix}"
+        if candidate.exists():
+            candidate.unlink()
+
+
+def read_theme_config() -> dict[str, str]:
+    try:
+        raw = json.loads(THEME_BACKGROUND_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): str(value) for key, value in raw.items() if isinstance(value, str)}
+
+
+def write_theme_config(config: dict[str, str]) -> None:
+    THEME_BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
+    THEME_BACKGROUND_CONFIG_PATH.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def legacy_theme_background_path() -> Path | None:
+    return theme_background_path()
+
+
+def migrate_legacy_theme_background() -> None:
+    legacy = legacy_theme_background_path()
+    if not legacy:
+        return
+    config = read_theme_config()
+    selected_id = config.get("selected_background_id", "")
+    suffixes = {suffix for suffix, _signature in THEME_BACKGROUND_TYPES.values()}
+    if selected_id and any(
+        (THEME_BACKGROUND_LIBRARY_DIR / f"{selected_id}{suffix}").is_file()
+        for suffix in suffixes
+    ):
+        clear_theme_background()
+        return
+    THEME_BACKGROUND_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    background_id = uuid.uuid4().hex[:12]
+    write_optimized_theme_background(background_id, legacy.read_bytes())
+    write_theme_config({"selected_background_id": background_id})
+    clear_theme_background()
+
+
+def theme_background_full_path(background_id: str) -> Path:
+    return THEME_BACKGROUND_LIBRARY_DIR / f"{background_id}{THEME_BACKGROUND_OPTIMIZED_SUFFIX}"
+
+
+def theme_background_thumb_path(background_id: str) -> Path:
+    return THEME_BACKGROUND_LIBRARY_DIR / f"{background_id}{THEME_BACKGROUND_THUMB_SUFFIX}"
+
+
+def normalize_theme_background_file(path: Path) -> Path | None:
+    if path.name.endswith(THEME_BACKGROUND_THUMB_SUFFIX):
+        return None
+    background_id = path.stem
+    if not THEME_BACKGROUND_ID_PATTERN.fullmatch(background_id):
+        return None
+    full = theme_background_full_path(background_id)
+    thumb = theme_background_thumb_path(background_id)
+    if path == full and thumb.is_file():
+        return full
+    try:
+        write_optimized_theme_background(background_id, path.read_bytes())
+    except HTTPException:
+        return path if path.is_file() else None
+    if path != full:
+        path.unlink(missing_ok=True)
+    return full
+
+
+def theme_background_entries() -> list[dict[str, object]]:
+    migrate_legacy_theme_background()
+    entries: list[dict[str, object]] = []
+    if not THEME_BACKGROUND_LIBRARY_DIR.is_dir():
+        return entries
+    suffixes = {suffix for suffix, _signature in THEME_BACKGROUND_TYPES.values()}
+    seen_ids: set[str] = set()
+    for path in THEME_BACKGROUND_LIBRARY_DIR.iterdir():
+        background_id = path.stem
+        if path.name.endswith(THEME_BACKGROUND_THUMB_SUFFIX):
+            continue
+        if not path.is_file() or path.suffix.lower() not in suffixes:
+            continue
+        if not THEME_BACKGROUND_ID_PATTERN.fullmatch(background_id):
+            continue
+        if background_id in seen_ids:
+            if path.suffix.lower() != THEME_BACKGROUND_OPTIMIZED_SUFFIX:
+                path.unlink(missing_ok=True)
+            continue
+        path = normalize_theme_background_file(path) or path
+        seen_ids.add(background_id)
+        stat = path.stat()
+        thumb_path = theme_background_thumb_path(background_id)
+        entries.append(
+            {
+                "id": background_id,
+                "path": path,
+                "thumb_path": thumb_path if thumb_path.is_file() else path,
+                "url": f"/api/theme/backgrounds/{background_id}",
+                "thumb_url": f"/api/theme/backgrounds/{background_id}/thumb",
+                "mtime": int(stat.st_mtime),
+                "thumb_mtime": int(thumb_path.stat().st_mtime) if thumb_path.is_file() else int(stat.st_mtime),
+                "size": stat.st_size,
+                "content_type": "image/webp",
+            }
+        )
+    entries.sort(key=lambda entry: int(entry["mtime"]), reverse=True)
+    return entries
+
+
+def theme_background_by_id_entry(background_id: str) -> dict[str, object] | None:
+    if not THEME_BACKGROUND_ID_PATTERN.fullmatch(background_id):
+        return None
+    for entry in theme_background_entries():
+        if entry["id"] == background_id:
+            return entry
+    return None
+
+
+def selected_theme_background() -> dict[str, object] | None:
+    config = read_theme_config()
+    selected_id = config.get("selected_background_id", "")
+    if selected_id:
+        selected = theme_background_by_id_entry(selected_id)
+        if selected:
+            return selected
+    entries = theme_background_entries()
+    if not entries:
+        if selected_id:
+            write_theme_config({})
+        return None
+    selected = entries[0]
+    write_theme_config({"selected_background_id": str(selected["id"])})
+    return selected
+
+
+def theme_background_public_payload(entry: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": entry["id"],
+        "url": entry["url"],
+        "thumb_url": entry["thumb_url"],
+        "mtime": entry["mtime"],
+        "thumb_mtime": entry["thumb_mtime"],
+        "size": entry["size"],
+        "content_type": entry["content_type"],
+    }
+
+
+def theme_config_payload() -> dict[str, object]:
+    selected = selected_theme_background()
+    selected_id = str(selected["id"]) if selected else ""
+    return {
+        "background_url": selected["url"] if selected else "",
+        "background_mtime": selected["mtime"] if selected else 0,
+        "selected_background_id": selected_id,
+        "backgrounds": [
+            theme_background_public_payload(entry) for entry in theme_background_entries()
+        ],
+    }
+
+
+def prune_theme_background_library() -> None:
+    selected = selected_theme_background()
+    selected_id = str(selected["id"]) if selected else ""
+    entries = theme_background_entries()
+    for entry in entries[THEME_BACKGROUND_LIBRARY_LIMIT:]:
+        if entry["id"] == selected_id:
+            continue
+        path = entry["path"]
+        if isinstance(path, Path):
+            path.unlink(missing_ok=True)
+        thumb_path = entry.get("thumb_path")
+        if isinstance(thumb_path, Path):
+            thumb_path.unlink(missing_ok=True)
+
+
+def delete_theme_background_id(background_id: str) -> None:
+    entry = theme_background_by_id_entry(background_id)
+    if not entry:
+        return
+    path = entry["path"]
+    if isinstance(path, Path):
+        path.unlink(missing_ok=True)
+    thumb_path = entry.get("thumb_path")
+    if isinstance(thumb_path, Path):
+        thumb_path.unlink(missing_ok=True)
+    selected_id = read_theme_config().get("selected_background_id", "")
+    if selected_id == background_id:
+        remaining = theme_background_entries()
+        if remaining:
+            write_theme_config({"selected_background_id": str(remaining[0]["id"])})
+        else:
+            write_theme_config({})
+
+
+def prepare_theme_image(data: bytes):
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Pillow is required to process theme backgrounds",
+        ) from exc
+    try:
+        image = Image.open(io.BytesIO(data))
+        if getattr(image, "is_animated", False):
+            image.seek(0)
+        image = ImageOps.exif_transpose(image)
+        image.load()
+    except (OSError, UnidentifiedImageError) as exc:
+        raise HTTPException(status_code=400, detail="Uploaded image could not be decoded") from exc
+    if image.mode not in {"RGB", "RGBA"}:
+        image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+    return image
+
+
+def theme_image_to_webp_bytes(image, max_edge: int, quality: int) -> bytes:
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Pillow is required to process theme backgrounds",
+        ) from exc
+    optimized = image.copy()
+    optimized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+    if optimized.mode not in {"RGB", "RGBA"}:
+        optimized = optimized.convert("RGBA" if "A" in optimized.getbands() else "RGB")
+    output = io.BytesIO()
+    optimized.save(output, format="WEBP", quality=quality, method=6)
+    return output.getvalue()
+
+
+def write_optimized_theme_background(background_id: str, data: bytes) -> None:
+    image = prepare_theme_image(data)
+    THEME_BACKGROUND_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    theme_background_full_path(background_id).write_bytes(
+        theme_image_to_webp_bytes(
+            image,
+            THEME_BACKGROUND_FULL_MAX_EDGE,
+            THEME_BACKGROUND_FULL_QUALITY,
+        )
+    )
+    theme_background_thumb_path(background_id).write_bytes(
+        theme_image_to_webp_bytes(
+            image,
+            THEME_BACKGROUND_THUMB_MAX_EDGE,
+            THEME_BACKGROUND_THUMB_QUALITY,
+        )
+    )
+
+
+def validate_theme_background(data: bytes, content_type: str) -> str:
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    if len(data) > THEME_BACKGROUND_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Theme background must be 8 MiB or smaller")
+    if content_type in THEME_BACKGROUND_TYPES:
+        suffix, signature = THEME_BACKGROUND_TYPES[content_type]
+        if not data.startswith(signature):
+            raise HTTPException(status_code=400, detail="Uploaded image does not match its content type")
+        if content_type == "image/webp" and data[8:12] != b"WEBP":
+            raise HTTPException(status_code=400, detail="Uploaded image is not a valid WebP file")
+        return suffix
+    for media_type, (suffix, signature) in THEME_BACKGROUND_TYPES.items():
+        if data.startswith(signature) and (media_type != "image/webp" or data[8:12] == b"WEBP"):
+            return suffix
+    if data.startswith(b"RIFF") and data[8:12] != b"WEBP":
+        raise HTTPException(status_code=400, detail="Uploaded image is not a valid WebP file")
+    raise HTTPException(status_code=400, detail="Use PNG, JPEG, WebP, or GIF")
+
+
 def auth_token() -> str:
     return stored_hub_auth_token()
 
@@ -787,7 +1178,12 @@ def is_public_path(path: str) -> bool:
 
 def add_static_cache_header(request: Request, response) -> None:
     if request.url.path.startswith("/static/") and response.status_code == 200:
-        response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        cache_control = (
+            "public, max-age=31536000, immutable"
+            if request.query_params.get("v")
+            else "public, max-age=86400"
+        )
+        response.headers.setdefault("Cache-Control", cache_control)
 
 
 def bearer_token(header: str | None) -> str:
@@ -907,8 +1303,8 @@ async def http_terminal_janitor() -> None:
 
 async def node_heartbeat_loop() -> None:
     while True:
-        await asyncio.sleep(NODE_HEARTBEAT_INTERVAL_SECONDS)
         await asyncio.to_thread(refresh_remote_node_heartbeats)
+        await asyncio.sleep(NODE_HEARTBEAT_INTERVAL_SECONDS)
 
 
 async def proxy_terminal_socket(websocket: WebSocket, node: NodeEntry, name: str) -> None:
@@ -1007,11 +1403,7 @@ def node_session_view(node_id: str, name: str):
         node = node_by_name(node_id)
     except KeyError:
         return None
-    node_view = collect_node_view(node)
-    for view in node_view.sessions:
-        if view.name == name:
-            return view
-    return None
+    return collect_node_session(node, name)
 
 
 def session_response(request: Request, view) -> HTMLResponse:
@@ -1024,7 +1416,7 @@ def session_response(request: Request, view) -> HTMLResponse:
             "relative_time": relative_time,
             "attach_command": attach_command,
             "tmux_commands": tmux_quick_commands(view),
-            "initial_token_usage": initial_token_usage_payload(view),
+            "initial_token_usage": None,
         },
     )
 
@@ -1041,70 +1433,6 @@ def dashboard_stats(node_views, views):
         "active": sum(1 for view in views if view.status in {"active", "attached"}),
         "idle": sum(1 for view in views if view.status == "idle"),
     }
-
-
-def initial_token_usage_payload(view) -> dict[str, str] | None:
-    if not getattr(view, "is_agent_session", False):
-        return None
-    try:
-        state = node_transcript_state(view.node_id, view.name, lines=500)
-    except (KeyError, RuntimeError, OSError, urllib.error.URLError, json.JSONDecodeError):
-        return None
-    if not state.token_usage:
-        return None
-    usage = state.token_usage.as_dict()
-    rate = " · ".join(
-        item
-        for item in (
-            token_percent_text(usage.get("primary_rate_used_percent"), "primary"),
-            token_percent_text(usage.get("secondary_rate_used_percent"), "weekly"),
-        )
-        if item
-    )
-    source = str(usage.get("source") or "")
-    return {
-        "total": format_token_count(usage.get("total_tokens")),
-        "source": f"{source} native usage" if source else "CLI native usage",
-        "model": str(usage.get("model") or "--"),
-        "reasoning_effort": str(usage.get("reasoning_effort") or "default"),
-        "plan": str(usage.get("plan_type") or "--"),
-        "context": (
-            f"{format_token_count(usage.get('context_window'))} window"
-            if int(usage.get("context_window") or 0)
-            else "--"
-        ),
-        "rate": rate or "--",
-        "last": format_token_count(usage.get("last_total_tokens")),
-        "cached": format_token_count(usage.get("cached_input_tokens")),
-        "output": format_token_count(usage.get("output_tokens")),
-        "reasoning": format_token_count(usage.get("reasoning_output_tokens")),
-    }
-
-
-def token_percent_text(value: object, label: str) -> str:
-    try:
-        number = float(value or 0)
-    except (TypeError, ValueError):
-        return ""
-    if not number:
-        return ""
-    return f"{number:.0f}% {label}"
-
-
-def format_token_count(value: object) -> str:
-    try:
-        count = int(value or 0)
-    except (TypeError, ValueError):
-        return "--"
-    if count <= 0:
-        return "--"
-    if count >= 1_000_000:
-        precision = 1 if count >= 10_000_000 else 2
-        return f"{count / 1_000_000:.{precision}f}M"
-    if count >= 1_000:
-        precision = 1 if count >= 10_000 else 2
-        return f"{count / 1_000:.{precision}f}k"
-    return f"{count:,}"
 
 
 def node_payload(node) -> dict[str, object]:
@@ -1787,8 +2115,7 @@ def sync_chat_from_transcript(node_id: str, session: str) -> dict[str, object]:
     now = int(datetime.now().timestamp() * 1000)
 
     if state.messages:
-        replace_chat_history_from_transcript(node_id, session, state.messages)
-        messages = chat_history(node_id, session)
+        messages = replace_chat_history_from_transcript(node_id, session, state.messages)
         return {
             "messages": messages,
             "working": working,
@@ -1842,7 +2169,9 @@ def node_transcript_state(node_id: str, session: str, lines: int = 500):
     return tmux_transcript_state(session, lines=lines)
 
 
-def replace_chat_history_from_transcript(node_id: str, session: str, transcript_messages) -> None:
+def replace_chat_history_from_transcript(
+    node_id: str, session: str, transcript_messages
+) -> list[dict[str, object]]:
     rows = []
     now = int(datetime.now().timestamp() * 1000)
     for index, message in enumerate(transcript_messages):
@@ -1855,10 +2184,14 @@ def replace_chat_history_from_transcript(node_id: str, session: str, transcript_
         if message.source_id:
             row["id"] = message.source_id
         rows.append(row)
+    messages = sorted_chat_messages(rows)[-80:]
     with CHAT_HISTORY_LOCK:
         data = load_chat_histories()
-        data[chat_key(node_id, session)] = sorted_chat_messages(rows)[-80:]
-        save_chat_histories(data)
+        key = chat_key(node_id, session)
+        if data.get(key) != messages:
+            data[key] = messages
+            save_chat_histories(data)
+    return messages
 
 
 def session_transcript(node_id: str, session: str, lines: int = 500) -> str:

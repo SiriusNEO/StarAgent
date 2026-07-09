@@ -16,7 +16,7 @@ from staragent.auth import node_auth_token
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
-from staragent.status import collect_session_views
+from staragent.status import collect_session_view, collect_session_views
 
 NODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 NODE_MODES = {"lan", "remote"}
@@ -235,12 +235,17 @@ def collect_hub_sessions() -> list[HubSession]:
     return sorted(sessions, key=lambda item: (item.node_id, item.name))
 
 
-def collect_node_views() -> list[NodeView]:
+def collect_node_views(prefer_cached: bool = False) -> list[NodeView]:
     entries = load_nodes()
     if len(entries) <= 1:
-        return [collect_node_view(node) for node in entries]
+        return [collect_node_view(node, prefer_cached=prefer_cached) for node in entries]
     with ThreadPoolExecutor(max_workers=min(len(entries), 8)) as executor:
-        nodes = list(executor.map(collect_node_view, entries))
+        nodes = list(
+            executor.map(
+                lambda node: collect_node_view(node, prefer_cached=prefer_cached),
+                entries,
+            )
+        )
     return sorted(nodes, key=lambda item: item.name)
 
 
@@ -250,13 +255,17 @@ def refresh_remote_node_heartbeats() -> None:
             collect_node_view(node)
 
 
-def collect_node_view(node: NodeEntry) -> NodeView:
+def collect_node_view(node: NodeEntry, prefer_cached: bool = False) -> NodeView:
     sessions: list[HubSession] = []
     if node.is_local:
         sessions.extend(
             HubSession(node_id=node.name, view=view) for view in collect_session_views()
         )
         return NodeView(entry=node, status="connected", sessions=tuple(sessions))
+    if prefer_cached:
+        cached = cached_remote_node_view(node)
+        if cached:
+            return cached
     try:
         sessions.extend(remote_sessions(node))
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
@@ -264,6 +273,32 @@ def collect_node_view(node: NodeEntry) -> NodeView:
     session_tuple = tuple(sessions)
     remember_node_heartbeat(node, session_tuple)
     return NodeView(entry=node, status="connected", sessions=session_tuple)
+
+
+def cached_remote_node_view(node: NodeEntry) -> NodeView | None:
+    with NODE_HEARTBEATS_LOCK:
+        heartbeat = NODE_HEARTBEATS.get(node.name)
+        if heartbeat is None or heartbeat.endpoint != node_endpoint(node):
+            return None
+        age = max(0.0, time.monotonic() - heartbeat.last_success)
+        if heartbeat.last_success <= 0 or age > NODE_HEARTBEAT_GRACE_SECONDS:
+            return NodeView(entry=node, status="disconnected", error=heartbeat.last_error)
+        if heartbeat.failures:
+            detail = heartbeat.last_error or f"stale: last heartbeat {int(age)}s ago"
+            return NodeView(
+                entry=node,
+                status="stale",
+                sessions=heartbeat.sessions,
+                error=detail,
+            )
+        return NodeView(entry=node, status="connected", sessions=heartbeat.sessions)
+
+
+def collect_node_session(node: NodeEntry, name: str) -> HubSession | None:
+    if node.is_local:
+        view = collect_session_view(name)
+        return HubSession(node_id=node.name, view=view) if view else None
+    return next((session for session in collect_node_view(node).sessions if session.name == name), None)
 
 
 def remote_sessions(node: NodeEntry) -> list[HubSession]:

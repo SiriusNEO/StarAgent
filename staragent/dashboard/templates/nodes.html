@@ -29,7 +29,7 @@
     </div>
   </section>
 
-  <section class="band">
+  <section class="band deferred-render">
     <div class="section-title">
       <h2>Nodes</h2>
       <span>{{ stats.connected_nodes }} / {{ stats.nodes }} online</span>
@@ -203,8 +203,10 @@
           ? `Install failed for ${failed.map((item) => item.label).join(", ")}. Run the shown command manually.`
           : "Dependencies installed.";
       };
-      checkDependencies().catch((error) => {
-        status.textContent = error.message || "Dependency check failed.";
+      window.StarAgentAfterPaint(() => {
+        checkDependencies().catch((error) => {
+          status.textContent = error.message || "Dependency check failed.";
+        });
       });
     }
 
@@ -265,6 +267,7 @@
 
     const tailscaleDashboard = document.querySelector(".tailscale-dashboard");
     if (tailscaleDashboard) {
+      let tailscaleLoaded = false;
       const tailnet = tailscaleDashboard.querySelector(".tailscale-tailnet");
       const hubIp = tailscaleDashboard.querySelector(".tailscale-hub-ip");
       const peerCount = tailscaleDashboard.querySelector(".tailscale-peer-count");
@@ -272,6 +275,7 @@
       const peersEl = tailscaleDashboard.querySelector(".tailscale-peers");
 
       const loadTailscale = async () => {
+        tailscaleLoaded = true;
         tailscaleDashboard.hidden = false;
         tailnet.textContent = "Checking Hub Tailscale...";
         hubIp.textContent = "-";
@@ -356,9 +360,14 @@
       };
 
       refresh.addEventListener("click", loadTailscale);
-      loadTailscale().catch((error) => {
-        tailscaleDashboard.hidden = false;
-        tailnet.textContent = error.message || "Tailscale check failed.";
+      window.StarAgentAfterPaint(() => {
+        if (tailscaleLoaded) {
+          return;
+        }
+        loadTailscale().catch((error) => {
+          tailscaleDashboard.hidden = false;
+          tailnet.textContent = error.message || "Tailscale check failed.";
+        });
       });
     }
 

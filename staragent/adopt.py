@@ -135,11 +135,20 @@ def list_tmux_panes() -> list[dict[str, object]]:
     return rows
 
 
-def infer_cli_from_pane(current_command: str, pane_pid: int) -> tuple[str, int]:
+def infer_cli_from_pane(
+    current_command: str,
+    pane_pid: int,
+    process_tree: dict[int, list[tuple[int, str]]] | None = None,
+) -> tuple[str, int]:
     direct = normalize_cli_name(current_command)
     if direct != "unknown":
         return direct, pane_pid
-    for pid, command in descendants(pane_pid, max_depth=3):
+    candidates = (
+        descendants(pane_pid, max_depth=3)
+        if process_tree is None
+        else descendants_from_process_tree(pane_pid, process_tree, max_depth=3)
+    )
+    for pid, command in candidates:
         cli = normalize_cli_name(command)
         if cli != "unknown":
             return cli, pid
@@ -162,6 +171,10 @@ def normalize_cli_name(command: str) -> str:
 def descendants(root_pid: int, max_depth: int = 3) -> list[tuple[int, str]]:
     if root_pid <= 0:
         return []
+    return descendants_from_process_tree(root_pid, process_children(), max_depth=max_depth)
+
+
+def process_children() -> dict[int, list[tuple[int, str]]]:
     try:
         result = subprocess.run(
             ["ps", "-eo", "pid=,ppid=,comm="],
@@ -170,7 +183,7 @@ def descendants(root_pid: int, max_depth: int = 3) -> list[tuple[int, str]]:
             capture_output=True,
         )
     except FileNotFoundError:
-        return []
+        return {}
     children: dict[int, list[tuple[int, str]]] = {}
     for line in result.stdout.splitlines():
         parts = line.strip().split(None, 2)
@@ -180,6 +193,16 @@ def descendants(root_pid: int, max_depth: int = 3) -> list[tuple[int, str]]:
         ppid = safe_int(parts[1])
         command = parts[2]
         children.setdefault(ppid, []).append((pid, command))
+    return children
+
+
+def descendants_from_process_tree(
+    root_pid: int,
+    children: dict[int, list[tuple[int, str]]],
+    max_depth: int = 3,
+) -> list[tuple[int, str]]:
+    if root_pid <= 0:
+        return []
 
     found: list[tuple[int, str]] = []
     frontier = [(root_pid, 0)]

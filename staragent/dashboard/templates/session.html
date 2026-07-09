@@ -1,11 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ view.name }} · StarAgent{% endblock %}
 {% block head_extra %}
-  <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', path='vendor/highlight.js/github.min.css') }}">
-  <script src="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}"></script>
-  <script src="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"></script>
-  <script src="{{ url_for('static', path='vendor/highlight.js/highlight.min.js') }}"></script>
+  <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}?v={{ static_version('vendor/xterm/xterm.css') }}">
 {% endblock %}
 {% block content %}
   <section class="page-head">
@@ -116,13 +113,22 @@
       <div class="terminal-wrap">
         <div class="web-terminal" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
           <div class="terminal-screen"></div>
-          <div class="terminal-status" aria-live="polite"></div>
+          <div class="terminal-status">
+            <span class="terminal-connection-meta" aria-label="Terminal connection method">
+              <span class="terminal-connection-label">Backend</span>
+              <strong class="terminal-connection-value">PTY</strong>
+              <span class="terminal-connection-divider" aria-hidden="true">·</span>
+              <span class="terminal-connection-label">Transport</span>
+              <strong class="terminal-connection-value terminal-transport-value">WebSocket</strong>
+            </span>
+            <span class="terminal-connection-state" aria-live="polite">Initializing</span>
+          </div>
         </div>
       </div>
     </section>
 
     {% if view.is_agent_session and view.repo %}
-      <section class="band workspace-band">
+      <section class="band workspace-band deferred-render">
         <div class="section-title">
           <h2>Workspace</h2>
           <span>{{ view.repo }}</span>
@@ -195,6 +201,66 @@
     </section>
   {% endif %}
   <script>
+    const loadScriptAsset = (url) => new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-staragent-src="${CSS.escape(url)}"]`);
+      if (existing) {
+        if (existing.dataset.loaded === "true") {
+          resolve();
+        } else {
+          existing.addEventListener("load", resolve, {once: true});
+          existing.addEventListener("error", reject, {once: true});
+        }
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = url;
+      script.async = true;
+      script.dataset.staragentSrc = url;
+      script.addEventListener("load", () => {
+        script.dataset.loaded = "true";
+        resolve();
+      }, {once: true});
+      script.addEventListener("error", reject, {once: true});
+      document.head.appendChild(script);
+    });
+    const loadStyleAsset = (url) => new Promise((resolve) => {
+      const existing = Array.from(document.styleSheets).find((sheet) => sheet.href === new URL(url, window.location.href).href);
+      if (existing) {
+        resolve();
+        return;
+      }
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = url;
+      link.addEventListener("load", resolve, {once: true});
+      link.addEventListener("error", resolve, {once: true});
+      document.head.appendChild(link);
+    });
+    let terminalAssetsPromise = null;
+    const ensureTerminalAssets = () => {
+      if (window.Terminal && window.FitAddon) {
+        return Promise.resolve();
+      }
+      if (!terminalAssetsPromise) {
+        terminalAssetsPromise = loadScriptAsset("{{ url_for('static', path='vendor/xterm/xterm.min.js') }}?v={{ static_version('vendor/xterm/xterm.min.js') }}")
+          .then(() => loadScriptAsset("{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}?v={{ static_version('vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"));
+      }
+      return terminalAssetsPromise;
+    };
+    let highlightAssetsPromise = null;
+    const ensureHighlightAssets = () => {
+      if (window.hljs) {
+        return Promise.resolve();
+      }
+      if (!highlightAssetsPromise) {
+        highlightAssetsPromise = Promise.all([
+          loadStyleAsset("{{ url_for('static', path='vendor/highlight.js/github.min.css') }}?v={{ static_version('vendor/highlight.js/github.min.css') }}"),
+          loadScriptAsset("{{ url_for('static', path='vendor/highlight.js/highlight.min.js') }}?v={{ static_version('vendor/highlight.js/highlight.min.js') }}"),
+        ]);
+      }
+      return highlightAssetsPromise;
+    };
+
     for (const button of document.querySelectorAll(".copy-button")) {
       button.addEventListener("click", async () => {
         const text = button.dataset.copy || "";
@@ -301,6 +367,9 @@
           return;
         }
         const body = await response.json();
+        if (highlightedPath !== path) {
+          return;
+        }
         previewMeta.textContent = `${body.name || "file"} · ${formatBytes(Number(body.size || 0))}`;
         if (body.error) {
           previewBody.textContent = body.error;
@@ -308,17 +377,17 @@
         }
         const language = previewLanguage(body.name || path);
         if (language === "markdown") {
-          renderMarkdownFile(body.text || "", path);
+          await renderMarkdownFile(body.text || "", path);
           return;
         }
         if (language === "pdf") {
           await renderPdfFile(path);
           return;
         }
-        renderHighlightedPreview(body.text || "", language);
+        await renderHighlightedPreview(body.text || "", language, path);
       }
 
-      function renderHighlightedPreview(text, language) {
+      async function renderHighlightedPreview(text, language, path) {
         currentMarkdownText = "";
         setMarkdownControls(false);
         if (previewSource) {
@@ -332,18 +401,23 @@
           previewPdf.hidden = true;
           previewPdf.removeAttribute("src");
         }
-        renderHighlightedSource(text, language);
+        await renderHighlightedSource(text, language, path);
       }
 
-      function renderHighlightedSource(text, language) {
+      async function renderHighlightedSource(text, language, path = highlightedPath) {
         previewBody.className = language ? `file-preview-code hljs language-${language}` : "file-preview-code hljs";
         const local = localHighlight(text, language);
         if (local) {
           previewBody.innerHTML = local;
           return;
         }
-        if (!window.hljs) {
-          previewBody.textContent = text;
+        previewBody.textContent = text;
+        try {
+          await ensureHighlightAssets();
+        } catch {
+          return;
+        }
+        if (highlightedPath !== path || !window.hljs) {
           return;
         }
         try {
@@ -356,18 +430,32 @@
         }
       }
 
-      function renderMarkdownFile(text, path) {
+      async function renderMarkdownFile(text, path) {
         currentMarkdownText = text;
         previewMode = "preview";
         setMarkdownControls(true);
-        renderHighlightedSource(text, "markdown");
+        await renderHighlightedSource(text, "markdown", path);
+        if (highlightedPath !== path) {
+          return;
+        }
         if (previewPdf) {
           previewPdf.hidden = true;
           previewPdf.removeAttribute("src");
         }
         if (previewMarkdown) {
           previewMarkdown.innerHTML = renderMarkdown(text, path);
-          previewMarkdown.querySelectorAll("pre code").forEach((block) => {
+          const codeBlocks = Array.from(previewMarkdown.querySelectorAll("pre code"));
+          if (codeBlocks.length) {
+            try {
+              await ensureHighlightAssets();
+            } catch {
+              // Keep escaped code visible if highlighting assets fail.
+            }
+          }
+          if (highlightedPath !== path) {
+            return;
+          }
+          codeBlocks.forEach((block) => {
             if (window.hljs) {
               try {
                 window.hljs.highlightElement(block);
@@ -992,7 +1080,7 @@
         });
       }
 
-      workspaceExplorer.load(sessionExplorer.dataset.path);
+      window.StarAgentAfterPaint(() => workspaceExplorer.load(sessionExplorer.dataset.path));
     }
 
     const chat = document.querySelector(".mobile-chat");
@@ -1209,9 +1297,23 @@
       };
 
       const messageTitle = (message) => {
-        const firstLine = (message.text || "").split("\n").find((line) => line.trim()) || "(empty)";
+        const value = String(message.text || "");
+        let firstLine = "";
+        let offset = 0;
+        while (offset <= value.length) {
+          const newline = value.indexOf("\n", offset);
+          const line = value.slice(offset, newline < 0 ? value.length : newline).trim();
+          if (line) {
+            firstLine = line;
+            break;
+          }
+          if (newline < 0) {
+            break;
+          }
+          offset = newline + 1;
+        }
         const compact = firstLine.trim().slice(0, 72);
-        return `${messageLabel(message.role)} · ${compact}`;
+        return `${messageLabel(message.role)} · ${compact || "(empty)"}`;
       };
 
       const messageLabel = (role) => {
@@ -1226,23 +1328,46 @@
 
       const isLongMessage = (text) => {
         const value = String(text || "");
-        return value.length > longMessageChars || value.split("\n").length > longMessageLines;
+        if (value.length > longMessageChars) {
+          return true;
+        }
+        let offset = 0;
+        for (let line = 0; line < longMessageLines; line += 1) {
+          const newline = value.indexOf("\n", offset);
+          if (newline < 0) {
+            return false;
+          }
+          offset = newline + 1;
+        }
+        return offset < value.length;
       };
 
       const compactMessageText = (text) => {
-        const lines = String(text || "").trim().split("\n");
-        const compactLines = lines.slice(0, longMessageLines);
-        let compact = compactLines.join("\n");
+        const value = String(text || "").trim();
+        let offset = 0;
+        for (let line = 0; line < longMessageLines; line += 1) {
+          const newline = value.indexOf("\n", offset);
+          if (newline < 0) {
+            offset = value.length;
+            break;
+          }
+          offset = newline + 1;
+        }
+        const linesTruncated = offset < value.length;
+        let compact = value.slice(0, offset || value.length);
         if (compact.length > longMessageChars) {
           compact = `${compact.slice(0, longMessageChars).trimEnd()}...`;
         }
-        if (lines.length > compactLines.length) {
+        if (linesTruncated) {
           compact = `${compact.trimEnd()}\n...`;
         }
         return compact || "(empty)";
       };
 
-      const messageKey = (message) => `${message.role}:${message.time || 0}:${normalizeMessageText(message.text).slice(0, 120)}`;
+      const messageKey = (message) => {
+        const prefix = String(message.text || "").slice(0, 512);
+        return `${message.role}:${message.time || 0}:${normalizeMessageText(prefix).slice(0, 120)}`;
+      };
 
       const chatRenderSignature = (visibleHistory) => {
         const messages = visibleHistory
@@ -1257,7 +1382,7 @@
           .filter(Boolean)
       );
 
-      const appendMessageBody = (bodyWrap, message, key) => {
+      const appendMessageBody = (bodyWrap, message, key, opened) => {
         const text = (message.text || "").trim() || "(empty)";
         if (!isLongMessage(text)) {
           const body = document.createElement("pre");
@@ -1273,9 +1398,25 @@
         full.dataset.detailKey = `${key}:full`;
         const summary = document.createElement("summary");
         summary.textContent = "Show full message";
-        const body = document.createElement("pre");
-        body.textContent = text;
-        full.append(summary, body);
+        const appendFullBody = () => {
+          if (full.dataset.bodyLoaded) {
+            return;
+          }
+          full.dataset.bodyLoaded = "true";
+          const body = document.createElement("pre");
+          body.textContent = text;
+          full.appendChild(body);
+        };
+        full.appendChild(summary);
+        full.open = opened.has(full.dataset.detailKey);
+        if (full.open) {
+          appendFullBody();
+        }
+        full.addEventListener("toggle", () => {
+          if (full.open) {
+            appendFullBody();
+          }
+        });
         bodyWrap.append(preview, full);
       };
 
@@ -1367,17 +1508,32 @@
             summary.textContent = messageTitle(message);
             item.appendChild(summary);
           }
-          const bodyWrap = document.createElement("div");
-          bodyWrap.className = "chat-bubble";
-          if (!collapsed) {
-            const label = document.createElement("strong");
-            label.textContent = messageLabel(message.role);
-            bodyWrap.appendChild(label);
-          }
-          appendMessageBody(bodyWrap, message, key);
-          item.appendChild(bodyWrap);
-          for (const detail of item.querySelectorAll("details[data-detail-key]")) {
-            detail.open = opened.has(detail.dataset.detailKey);
+          const appendBody = () => {
+            if (item.dataset.bodyLoaded) {
+              return;
+            }
+            item.dataset.bodyLoaded = "true";
+            const bodyWrap = document.createElement("div");
+            bodyWrap.className = "chat-bubble";
+            if (!collapsed) {
+              const label = document.createElement("strong");
+              label.textContent = messageLabel(message.role);
+              bodyWrap.appendChild(label);
+            }
+            appendMessageBody(bodyWrap, message, key, opened);
+            item.appendChild(bodyWrap);
+          };
+          if (collapsed) {
+            if (item.open) {
+              appendBody();
+            }
+            item.addEventListener("toggle", () => {
+              if (item.open) {
+                appendBody();
+              }
+            });
+          } else {
+            appendBody();
           }
           chatLog.appendChild(item);
         });
@@ -1647,15 +1803,17 @@
         }, 1800);
       };
 
-      loadChatHistory().then(() => {
-        const pending = loadPendingChat();
-        if (pending) {
-          monitorAgentReply(pending.baseline, Number(pending.startedAt));
-        } else {
-          chatStatus.textContent = "Loaded";
-        }
-        scheduleTranscriptSync();
-      });
+      window.StarAgentAfterPaint(() => {
+        loadChatHistory().then(() => {
+          const pending = loadPendingChat();
+          if (pending) {
+            monitorAgentReply(pending.baseline, Number(pending.startedAt));
+          } else {
+            chatStatus.textContent = "Loaded";
+          }
+          scheduleTranscriptSync();
+        });
+      }, 500);
 
       chatForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -1703,10 +1861,36 @@
 
     const terminal = document.querySelector(".web-terminal");
     if (terminal) {
+      const initializeTerminal = async () => {
+      await ensureTerminalAssets();
       const session = terminal.dataset.session;
       const node = terminal.dataset.node;
       const screenEl = terminal.querySelector(".terminal-screen");
-      const status = terminal.querySelector(".terminal-status");
+      const status = terminal.querySelector(".terminal-connection-state");
+      const transportValue = terminal.querySelector(".terminal-transport-value");
+      const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+      const terminalTheme = () => ({
+        background: cssVar("--terminal-bg", "#1e1e1e"),
+        foreground: cssVar("--terminal-fg", "#d4d4d4"),
+        cursor: cssVar("--terminal-cursor", "#aeafad"),
+        selectionBackground: cssVar("--terminal-selection", "#264f78"),
+        black: "#000000",
+        red: "#f14c4c",
+        green: "#23d18b",
+        yellow: "#f5f543",
+        blue: "#3b8eea",
+        magenta: "#d670d6",
+        cyan: "#29b8db",
+        white: "#e5e5e5",
+        brightBlack: "#666666",
+        brightRed: "#f14c4c",
+        brightGreen: "#23d18b",
+        brightYellow: "#f5f543",
+        brightBlue: "#3b8eea",
+        brightMagenta: "#d670d6",
+        brightCyan: "#29b8db",
+        brightWhite: "#ffffff"
+      });
       const term = new Terminal({
         allowProposedApi: false,
         convertEol: true,
@@ -1719,28 +1903,10 @@
         fastScrollSensitivity: 5,
         scrollSensitivity: 1.2,
         scrollback: 10000,
-        theme: {
-          background: "#1e1e1e",
-          foreground: "#d4d4d4",
-          cursor: "#aeafad",
-          selectionBackground: "#264f78",
-          black: "#000000",
-          red: "#f14c4c",
-          green: "#23d18b",
-          yellow: "#f5f543",
-          blue: "#3b8eea",
-          magenta: "#d670d6",
-          cyan: "#29b8db",
-          white: "#e5e5e5",
-          brightBlack: "#666666",
-          brightRed: "#f14c4c",
-          brightGreen: "#23d18b",
-          brightYellow: "#f5f543",
-          brightBlue: "#3b8eea",
-          brightMagenta: "#d670d6",
-          brightCyan: "#29b8db",
-          brightWhite: "#ffffff"
-        }
+        theme: terminalTheme()
+      });
+      window.addEventListener("staragent:themechange", () => {
+        term.options.theme = terminalTheme();
       });
       const fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
@@ -1770,6 +1936,10 @@
       const terminalDecoder = new TextDecoder("utf-8");
       const terminalResetPattern = /\x1b\[\?(?:47|1047|1048|1049)[hl]|\x1b\[(?:22|23);0;0t|\x1b\[3J|\x1b\[(?:H|1;1H)\x1b\[2J|\x1b\[2J|\x1bc/g;
       const preferHttpTerminal = window.matchMedia("(max-width: 820px)").matches;
+      const updateTerminalTransport = () => {
+        transportValue.textContent = transport === "http" ? "HTTP polling" : "WebSocket";
+      };
+      updateTerminalTransport();
 
       const sendTerminalMessage = (payload) => {
         if (transport === "websocket" && socket && socket.readyState === WebSocket.OPEN) {
@@ -2067,6 +2237,7 @@
           return;
         }
         transport = "http";
+        updateTerminalTransport();
         clearKeepalive();
         if (reconnectTimer) {
           clearTimeout(reconnectTimer);
@@ -2081,6 +2252,7 @@
             const body = await response.json().catch(() => ({}));
             status.textContent = body.detail || "HTTP terminal failed";
             transport = "websocket";
+            updateTerminalTransport();
             return;
           }
           const body = await response.json();
@@ -2092,6 +2264,7 @@
         } catch {
           status.textContent = "HTTP terminal connection error";
           transport = "websocket";
+          updateTerminalTransport();
         }
       };
 
@@ -2163,6 +2336,7 @@
           httpTerminalId = "";
         }
         transport = "websocket";
+        updateTerminalTransport();
         httpPolling = false;
         reconnectAttempts = 0;
         status.textContent = "Collapsed · terminal paused";
@@ -2207,6 +2381,15 @@
           }
         });
       }
+      };
+      window.StarAgentAfterPaint(() => {
+        initializeTerminal().catch((error) => {
+          const status = terminal.querySelector(".terminal-connection-state");
+          if (status) {
+            status.textContent = error?.message || "Terminal assets failed to load";
+          }
+        });
+      }, 500);
     }
   </script>
 {% endblock %}
