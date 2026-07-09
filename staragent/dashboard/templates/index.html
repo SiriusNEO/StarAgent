@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Sessions · StarAgent{% endblock %}
+{% block head_extra %}
+  <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
+{% endblock %}
 {% block content %}
   <section class="page-head">
     <div class="page-title">
@@ -73,7 +76,7 @@
     </div>
   </section>
 
-  <section class="band">
+  <section class="band deferred-render">
     <div class="section-title">
       <h2>Create Worker</h2>
       <span>tmux new-session</span>
@@ -137,7 +140,7 @@
     </form>
   </section>
 
-  <section class="band">
+  <section class="band deferred-render">
     <div class="section-title">
       <h2>Adopt Existing Tmux</h2>
       <span>register a live CLI session</span>
@@ -223,7 +226,7 @@
 
       cwdInput.addEventListener("change", () => workerExplorer.load(cwdInput.value));
       nodeSelect.addEventListener("change", () => workerExplorer.load(cwdInput.value));
-      workerExplorer.load(cwdInput.value);
+      window.StarAgentAfterPaint(() => workerExplorer.load(cwdInput.value));
 
       workerForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -256,6 +259,7 @@
 
     const adoptForm = document.querySelector(".adopt-form");
     if (adoptForm) {
+      let initialAdoptScanDone = false;
       const status = adoptForm.querySelector(".adopt-status");
       const sessionSelect = adoptForm.querySelector('select[name="name"]');
       const nodeSelect = adoptForm.querySelector('select[name="node"]');
@@ -263,6 +267,7 @@
       const scanButton = adoptForm.querySelector(".adopt-scan");
 
       async function scanAdoptableSessions() {
+        initialAdoptScanDone = true;
         status.textContent = "Scanning...";
         sessionSelect.innerHTML = '<option value="">Scanning...</option>';
         list.innerHTML = "";
@@ -326,7 +331,11 @@
         status.textContent = "Adopted.";
         setTimeout(() => window.location.reload(), 500);
       });
-      scanAdoptableSessions();
+      window.StarAgentAfterPaint(() => {
+        if (!initialAdoptScanDone) {
+          scanAdoptableSessions();
+        }
+      });
     }
   </script>
 {% endblock %}

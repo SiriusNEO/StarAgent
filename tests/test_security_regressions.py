@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from datetime import datetime
 
@@ -34,6 +35,7 @@ from staragent.pty_terminal import (
     TerminalOutputFilter,
     parse_client_message,
 )
+from staragent.transcript import TranscriptMessage
 
 
 def test_parse_client_message_rejects_invalid_json() -> None:
@@ -56,6 +58,23 @@ def test_terminal_output_filter_keeps_scrollback_buffer() -> None:
     assert filtered == b"history\r\nlive\r\n"
 
 
+def test_terminal_output_filter_emits_regular_output_immediately() -> None:
+    output_filter = TerminalOutputFilter()
+
+    assert output_filter.feed(b"x") == b"x"
+    assert output_filter.feed(b"short prompt") == b"short prompt"
+    assert output_filter.flush() == b""
+
+
+def test_terminal_output_filter_only_buffers_partial_control_sequences() -> None:
+    output_filter = TerminalOutputFilter()
+
+    assert output_filter.feed(b"before\x1b[?10") == b"before"
+    assert output_filter.feed(b"49hafter") == b"after"
+    assert output_filter.feed(b"\x1b[") == b""
+    assert output_filter.feed(b"31mred") == b"\x1b[31mred"
+
+
 def test_file_preview_is_limited_to_workspace_root(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -72,6 +91,35 @@ def test_file_preview_is_limited_to_workspace_root(tmp_path) -> None:
         assert "outside workspace" in str(exc)
     else:
         raise AssertionError("outside file preview should fail")
+
+
+def test_theme_background_processing_creates_thumbnail(tmp_path, monkeypatch) -> None:
+    from PIL import Image
+
+    monkeypatch.setattr(dashboard_app, "THEME_BACKGROUND_DIR", tmp_path / "theme")
+    monkeypatch.setattr(
+        dashboard_app,
+        "THEME_BACKGROUND_CONFIG_PATH",
+        tmp_path / "theme" / "theme.json",
+    )
+    monkeypatch.setattr(
+        dashboard_app,
+        "THEME_BACKGROUND_LIBRARY_DIR",
+        tmp_path / "theme" / "backgrounds",
+    )
+
+    image = Image.new("RGB", (1800, 1000), (102, 8, 116))
+    data = io.BytesIO()
+    image.save(data, format="PNG")
+
+    dashboard_app.write_optimized_theme_background("abcdefabcdef", data.getvalue())
+    entries = dashboard_app.theme_background_entries()
+
+    assert len(entries) == 1
+    assert entries[0]["path"].name == "abcdefabcdef.webp"
+    assert entries[0]["thumb_path"].name == "abcdefabcdef.thumb.webp"
+    assert entries[0]["thumb_url"] == "/api/theme/backgrounds/abcdefabcdef/thumb"
+    assert entries[0]["thumb_path"].stat().st_size < entries[0]["path"].stat().st_size
 
 
 def test_file_raw_assets_are_limited_to_safe_workspace_files(tmp_path) -> None:
@@ -168,6 +216,30 @@ def test_hub_generates_token_for_non_loopback_bind(monkeypatch, tmp_path) -> Non
 
     token = read_stored_auth_token()
     assert len(token) >= 32
+
+
+def test_versioned_static_assets_are_immutable() -> None:
+    client = TestClient(create_dashboard_app())
+
+    versioned = client.get("/static/styles.css?v=123")
+    unversioned = client.get("/static/styles.css")
+
+    assert versioned.status_code == 200
+    assert versioned.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert unversioned.status_code == 200
+    assert unversioned.headers["cache-control"] == "public, max-age=86400"
+
+
+def test_session_heavy_assets_are_loaded_on_demand() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
+        encoding="utf-8"
+    )
+    head = template.split("{% block head_extra %}", 1)[1].split("{% endblock %}", 1)[0]
+
+    assert "xterm.min.js" not in head
+    assert "highlight.min.js" not in head
+    assert "const ensureTerminalAssets" in template
+    assert "const ensureHighlightAssets" in template
 
 
 def test_hub_persists_env_token_for_non_loopback_bind(monkeypatch, tmp_path) -> None:
@@ -306,6 +378,27 @@ def test_http_terminal_input_writes_to_terminal(monkeypatch, tmp_path) -> None:
         assert terminal.writes == ["ls\r"]
     finally:
         http_terminals.pop(row.terminal_id, None)
+
+
+def test_unchanged_transcript_history_is_not_rewritten(monkeypatch, tmp_path) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    writes = 0
+    original_save = dashboard_app.save_chat_histories
+
+    def tracking_save(data):  # type: ignore[no-untyped-def]
+        nonlocal writes
+        writes += 1
+        original_save(data)
+
+    monkeypatch.setattr(dashboard_app, "save_chat_histories", tracking_save)
+    messages = (TranscriptMessage("user", "hello", 123, "message-1"),)
+
+    first = dashboard_app.replace_chat_history_from_transcript("local", "dev", messages)
+    second = dashboard_app.replace_chat_history_from_transcript("local", "dev", messages)
+
+    assert first == second
+    assert writes == 1
 
 
 def test_lark_connection_test_fails_fast_without_credentials(monkeypatch, tmp_path) -> None:

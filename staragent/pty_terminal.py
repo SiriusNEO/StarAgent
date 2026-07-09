@@ -14,15 +14,18 @@ import termios
 from dataclasses import dataclass
 
 MAX_TERMINAL_INPUT_BYTES = 64 * 1024
-TERMINAL_FILTER_TAIL_BYTES = 32
-
+TERMINAL_SCROLLBACK_RESET_SEQUENCES = (
+    *(f"\x1b[?{mode}{state}".encode() for mode in (47, 1047, 1048, 1049) for state in "hl"),
+    b"\x1b[22;0;0t",
+    b"\x1b[23;0;0t",
+    b"\x1b[3J",
+    b"\x1b[H\x1b[2J",
+    b"\x1b[1;1H\x1b[2J",
+    b"\x1b[2J",
+    b"\x1bc",
+)
 TERMINAL_SCROLLBACK_RESET_PATTERN = re.compile(
-    rb"\x1b\[\?(?:47|1047|1048|1049)[hl]"
-    rb"|\x1b\[(?:22|23);0;0t"
-    rb"|\x1b\[3J"
-    rb"|\x1b\[(?:H|1;1H)\x1b\[2J"
-    rb"|\x1b\[2J"
-    rb"|\x1bc"
+    b"|".join(re.escape(sequence) for sequence in TERMINAL_SCROLLBACK_RESET_SEQUENCES)
 )
 
 
@@ -34,12 +37,41 @@ class TerminalOutputFilter:
         if not data:
             return b""
         combined = self._tail + data
-        if len(combined) <= TERMINAL_FILTER_TAIL_BYTES:
-            self._tail = combined
-            return b""
-        ready = combined[:-TERMINAL_FILTER_TAIL_BYTES]
-        self._tail = combined[-TERMINAL_FILTER_TAIL_BYTES:]
-        return TERMINAL_SCROLLBACK_RESET_PATTERN.sub(b"", ready)
+        self._tail = b""
+        output = bytearray()
+        cursor = 0
+
+        while cursor < len(combined):
+            escape = combined.find(b"\x1b", cursor)
+            if escape < 0:
+                output.extend(combined[cursor:])
+                break
+
+            output.extend(combined[cursor:escape])
+            remaining = combined[escape:]
+            blocked = next(
+                (
+                    sequence
+                    for sequence in TERMINAL_SCROLLBACK_RESET_SEQUENCES
+                    if remaining.startswith(sequence)
+                ),
+                None,
+            )
+            if blocked is not None:
+                cursor = escape + len(blocked)
+                continue
+
+            if any(
+                sequence.startswith(remaining)
+                for sequence in TERMINAL_SCROLLBACK_RESET_SEQUENCES
+            ):
+                self._tail = remaining
+                break
+
+            output.append(0x1B)
+            cursor = escape + 1
+
+        return bytes(output)
 
     def flush(self) -> bytes:
         data = TERMINAL_SCROLLBACK_RESET_PATTERN.sub(b"", self._tail)

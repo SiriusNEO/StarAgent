@@ -29,7 +29,7 @@ from staragent.runtime import (
 )
 from staragent.schemas import CreateDirectory, CreateWorker, SendMessage, TerminalInput
 from staragent.session_parser import tmux_transcript_state, transcript_state_payload
-from staragent.status import collect_session_views
+from staragent.status import collect_session_view, collect_session_views
 
 
 def create_app() -> FastAPI:
@@ -55,6 +55,13 @@ def create_app() -> FastAPI:
     @app.get("/api/sessions")
     def sessions() -> dict[str, list[dict[str, object]]]:
         return {"sessions": [session_payload(view) for view in collect_session_views()]}
+
+    @app.get("/api/sessions/{name}")
+    def session(name: str) -> dict[str, object]:
+        view = collect_session_view(name)
+        if not view:
+            raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
+        return session_payload(view)
 
     @app.post("/api/workers")
     def create_worker(payload: CreateWorker) -> dict[str, str]:
@@ -241,7 +248,5 @@ def session_payload(view) -> dict[str, object]:
 
 
 def is_agent_session(name: str) -> bool:
-    for view in collect_session_views():
-        if view.name == name:
-            return view.session_type == "agent"
-    return True
+    view = collect_session_view(name)
+    return view.session_type == "agent" if view else True
