@@ -39,7 +39,13 @@ def test_staragent_managed_worker_is_included_after_agent_exits() -> None:
     assert infer_agent("dev", current_command="bash", managed_agent="codex") == "codex"
     assert (
         tmux_task(
-            {"name": "dev", "windows": 1, "attached": 0, "managed": "agent", "managed_agent": "codex"},
+            {
+                "name": "dev",
+                "windows": 1,
+                "attached": 0,
+                "managed": "agent",
+                "managed_agent": "codex",
+            },
             {"current_command": "bash", "current_path": "/repo"},
         )
         == "StarAgent codex worker"
@@ -89,8 +95,10 @@ def test_single_session_status_only_inspects_requested_session(monkeypatch) -> N
     monkeypatch.setattr(
         runtime,
         "tmux_active_pane",
-        lambda name: inspected.append(name)
-        or {"current_command": "bash", "current_path": "/repo", "pane_pid": 10},
+        lambda name: (
+            inspected.append(name)
+            or {"current_command": "bash", "current_path": "/repo", "pane_pid": 10}
+        ),
     )
     monkeypatch.setattr(runtime, "capture_tmux_pane", lambda name, lines=80: "ready")
     monkeypatch.setattr(runtime, "adopted_session", lambda name: None)

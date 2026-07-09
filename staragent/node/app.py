@@ -10,13 +10,12 @@ from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.auth import node_auth_token
-from staragent.dashboard.app import (
+from staragent.files import (
     create_directory_payload,
     directory_listing,
     file_preview_payload,
     file_raw_info_payload,
     file_raw_payload,
-    stream_pty_to_websocket,
 )
 from staragent.pty_terminal import PtyTerminal, parse_client_message
 from staragent.runtime import (
@@ -30,6 +29,7 @@ from staragent.runtime import (
 from staragent.schemas import CreateDirectory, CreateWorker, SendMessage, TerminalInput
 from staragent.session_parser import tmux_transcript_state, transcript_state_payload
 from staragent.status import collect_session_view, collect_session_views
+from staragent.web_terminal import stream_pty_to_websocket
 
 
 def create_app() -> FastAPI:

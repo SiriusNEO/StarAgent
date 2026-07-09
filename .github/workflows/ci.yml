@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check staragent tests
+
+      - name: Format check
+        run: ruff format --check staragent tests
+
+      - name: Test
+        run: pytest
+
+      - name: JavaScript syntax
+        run: |
+          for file in staragent/dashboard/static/*.js; do
+            node --check "$file"
+          done
+
+      - name: Build package
+        run: python -m build

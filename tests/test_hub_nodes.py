@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import subprocess
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 
 from typer.testing import CliRunner
 
-from staragent import hub
+from staragent import __version__, hub
 from staragent import main as staragent_main
 from staragent.hub import NodeEntry, normalize_node_url
 
@@ -39,6 +40,24 @@ def test_normalize_node_url_defaults_to_8081() -> None:
 def test_normalize_node_url_preserves_explicit_port() -> None:
     assert normalize_node_url("worker:8082") == "http://worker:8082"
     assert normalize_node_url("http://100.64.1.10:8082") == "http://100.64.1.10:8082"
+
+
+def test_concurrent_node_updates_are_atomic(monkeypatch, tmp_path) -> None:
+    nodes_path = tmp_path / "nodes.json"
+    monkeypatch.setattr(hub, "NODES_PATH", nodes_path)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(
+            executor.map(
+                lambda index: hub.add_node(f"worker-{index}", f"worker-{index}:8081"),
+                range(20),
+            )
+        )
+
+    names = {node.name for node in hub.persisted_nodes()}
+    assert names == {"local", *(f"worker-{index}" for index in range(20))}
+    assert json.loads(nodes_path.read_text(encoding="utf-8"))["nodes"]
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 class FakeResponse:
@@ -307,7 +326,7 @@ def test_version_command_prints_project_version() -> None:
     result = runner.invoke(staragent_main.app, ["version"])
 
     assert result.exit_code == 0
-    assert result.output.strip() == "0.1.0"
+    assert result.output.strip() == __version__
 
 
 def test_dashboard_command_is_hidden_from_public_help() -> None:
@@ -350,7 +369,9 @@ def test_node_ts_command_starts_tmux_and_serves(monkeypatch) -> None:
     monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
     monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
     monkeypatch.setattr(staragent_main, "staragent_executable", lambda: "/bin/staragent")
-    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+    monkeypatch.setattr(
+        staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args)
+    )
 
     def fake_which(name):  # type: ignore[no-untyped-def]
         return f"/usr/bin/{name}"
@@ -392,7 +413,7 @@ def test_node_ts_command_starts_tmux_and_serves(monkeypatch) -> None:
             "--bg",
             "--tcp=18082",
             "tcp://127.0.0.1:8082",
-        ]
+        ],
     ]
     assert "Tailscale serve: tcp/18082 -> 127.0.0.1:8082" in result.output
 
@@ -404,7 +425,9 @@ def test_node_ts_command_stops_before_tmux_when_tailscale_not_ready(monkeypatch)
     monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
     monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
     monkeypatch.setattr(staragent_main, "staragent_executable", lambda: "/bin/staragent")
-    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+    monkeypatch.setattr(
+        staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args)
+    )
     monkeypatch.setattr(staragent_main.shutil, "which", lambda name: f"/usr/bin/{name}")
 
     def fake_run(command, check, text, capture_output):  # type: ignore[no-untyped-def]
@@ -427,7 +450,9 @@ def test_node_ts_command_stops_before_tmux_when_tailscale_missing(monkeypatch) -
 
     monkeypatch.setattr(staragent_main, "ensure_dependencies", lambda: None)
     monkeypatch.setattr(staragent_main, "remote_node_token", lambda: "secret")
-    monkeypatch.setattr(staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args))
+    monkeypatch.setattr(
+        staragent_main, "ensure_tmux_session", lambda *args: tmux_calls.append(args)
+    )
     monkeypatch.setattr(staragent_main.shutil, "which", lambda name: None)
 
     result = runner.invoke(staragent_main.app, ["node-ts"])

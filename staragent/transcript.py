@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from staragent.text import strip_ansi
+
 WORKING_STATUS_PATTERN = re.compile(r"^\s*(?:[◦∙·○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\b", re.IGNORECASE)
 MAX_TRANSCRIPT_CACHE_FILES = 32
 
@@ -233,10 +235,7 @@ def read_cached_jsonl(
             entry is None
             or entry.identity != identity
             or path_stat.st_size < entry.offset
-            or (
-                path_stat.st_size == entry.offset
-                and path_stat.st_mtime_ns != entry.mtime_ns
-            )
+            or (path_stat.st_size == entry.offset and path_stat.st_mtime_ns != entry.mtime_ns)
         ):
             entry = _JsonlCacheEntry(identity, 0, 0, b"", [], path_stat.st_mtime_ns)
         elif path_stat.st_size == entry.offset:
@@ -291,9 +290,7 @@ def read_cached_jsonl(
         return list(entry.values)
 
 
-def remember_jsonl_cache_entry(
-    cache_key: tuple[str, str], entry: _JsonlCacheEntry
-) -> None:
+def remember_jsonl_cache_entry(cache_key: tuple[str, str], entry: _JsonlCacheEntry) -> None:
     _JSONL_CACHE.pop(cache_key, None)
     _JSONL_CACHE[cache_key] = entry
     while len(_JSONL_CACHE) > MAX_TRANSCRIPT_CACHE_FILES:
@@ -1129,7 +1126,3 @@ def is_status_line(line: str) -> bool:
     return stripped.startswith(
         ("• Ran ", "• Edited ", "• Explored", "• Read ", "◦ Working", "Working")
     )
-
-
-def strip_ansi(text: str) -> str:
-    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)

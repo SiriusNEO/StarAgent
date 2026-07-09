@@ -11,6 +11,7 @@ from pathlib import Path
 
 from staragent.adopt import adopted_session, infer_cli_from_pane, process_children
 from staragent.models import SessionStatus
+from staragent.text import strip_ansi
 
 ATTENTION_PATTERNS = (
     re.compile(r"\b(continue|proceed)\?", re.IGNORECASE),
@@ -126,9 +127,7 @@ def local_tmux_status(
             "node": node or socket.gethostname(),
             "repo": current_path,
             "branch": branch,
-            "task": f"Adopted {adopted.cli} tmux session"
-            if adopted
-            else tmux_task(session, pane),
+            "task": f"Adopted {adopted.cli} tmux session" if adopted else tmux_task(session, pane),
             "status": status,
             "summary": tmux_summary(session, pane, output),
             "next_step": "",
@@ -429,12 +428,6 @@ def kill_tmux_session(session: str) -> None:
         raise RuntimeError(detail)
 
 
-def kill_tmux_session_if_exists(session: str) -> None:
-    if not tmux_session_exists(session):
-        return
-    kill_tmux_session(session)
-
-
 def tmux_active_panes() -> dict[str, dict[str, str | int]]:
     result = run_tmux(
         [
@@ -624,10 +617,6 @@ def attention_line(output: str) -> str:
         if any(pattern.search(line) for pattern in ATTENTION_PATTERNS):
             return line.strip()
     return ""
-
-
-def strip_ansi(text: str) -> str:
-    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
 
 
 def safe_int(value: str) -> int:

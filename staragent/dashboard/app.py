@@ -14,7 +14,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,12 +40,20 @@ from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
 from staragent.dependencies import dependencies_status, ensure_dependencies
+from staragent.files import (
+    create_directory_payload,
+    directory_listing,
+    file_preview_payload,
+    file_raw_info_payload,
+    file_raw_payload,
+)
 from staragent.hub import (
     NODE_HEARTBEAT_INTERVAL_SECONDS,
     NodeEntry,
     add_node,
     collect_hub_sessions,
     collect_node_session,
+    collect_node_view,
     collect_node_views,
     node_by_name,
     refresh_remote_node_heartbeats,
@@ -77,8 +84,11 @@ from staragent.session_parser import (
     transcript_state_from_payload,
     transcript_state_payload,
 )
+from staragent.state import atomic_write_bytes, atomic_write_json, file_lock, locked_file, read_json
 from staragent.tailscale import tailscale_hub_payload
-from staragent.transcript import strip_ansi
+from staragent.text import strip_ansi
+from staragent.transcript import parse_transcript
+from staragent.web_terminal import stream_pty_to_websocket
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
@@ -111,11 +121,12 @@ http_terminals: dict[str, HttpTerminal] = {}
 HTTP_TERMINAL_IDLE_SECONDS = 45.0
 HTTP_TERMINAL_MAX_AGE_SECONDS = 15 * 60.0
 CHAT_HISTORY_PATH = state_dir() / "chat_history.json"
-CHAT_HISTORY_LOCK = threading.RLock()
+CHAT_HISTORY_LOCK = file_lock(CHAT_HISTORY_PATH)
 AUTH_COOKIE = "staragent_auth"
 THEME_BACKGROUND_DIR = state_dir() / "theme"
 THEME_BACKGROUND_STEM = "background"
 THEME_BACKGROUND_CONFIG_PATH = THEME_BACKGROUND_DIR / "theme.json"
+THEME_BACKGROUND_CONFIG_LOCK = file_lock(THEME_BACKGROUND_CONFIG_PATH)
 THEME_BACKGROUND_LIBRARY_DIR = THEME_BACKGROUND_DIR / "backgrounds"
 THEME_BACKGROUND_MAX_BYTES = 8 * 1024 * 1024
 THEME_BACKGROUND_LIBRARY_LIMIT = 12
@@ -134,7 +145,7 @@ THEME_BACKGROUND_TYPES = {
 }
 LARK_SESSION_NAME = "staragent-lark"
 LARK_CONFIG_PATH = state_dir() / "lark_config.json"
-LARK_CONFIG_LOCK = threading.RLock()
+LARK_CONFIG_LOCK = file_lock(LARK_CONFIG_PATH)
 LARK_ENV_NAMES = (
     "STARAGENT_LARK_APP_ID",
     "STARAGENT_LARK_APP_SECRET",
@@ -179,11 +190,42 @@ PROXY_ENV_NAMES = (
 TRUE_VALUES = {"1", "true", "yes"}
 
 
+@contextlib.asynccontextmanager
+async def dashboard_lifespan(app: FastAPI):
+    app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
+    app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
+    try:
+        yield
+    finally:
+        for task_name in ("http_terminal_janitor", "node_heartbeat"):
+            task = getattr(app.state, task_name, None)
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        for terminal_id in list(http_terminals):
+            terminal = http_terminals.pop(terminal_id, None)
+            if terminal:
+                await close_http_terminal(terminal)
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="StarAgent")
+    app = FastAPI(title="StarAgent", lifespan=dashboard_lifespan)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
 
+    register_auth_routes(app)
+    register_theme_routes(app)
+    register_pages_routes(app)
+    register_terminal_routes(app)
+    register_sessions_routes(app)
+    register_nodes_routes(app)
+    register_lark_routes(app)
+    register_workspace_routes(app)
+    return app
+
+
+def register_auth_routes(app: FastAPI) -> None:
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
         if not auth_enabled() or is_public_path(request.url.path):
@@ -233,11 +275,13 @@ def create_app() -> FastAPI:
         response.delete_cookie(AUTH_COOKIE)
         return response
 
+
+def register_theme_routes(app: FastAPI) -> None:
     @app.get("/api/theme")
     def theme_config() -> dict[str, object]:
         return theme_config_payload()
 
-    @app.get("/api/theme/background")
+    @app.get("/api/theme/background", deprecated=True)
     def theme_background() -> FileResponse:
         selected = selected_theme_background()
         if not selected:
@@ -307,28 +351,8 @@ def create_app() -> FastAPI:
         write_theme_config({"selected_background_id": background_id})
         return {"ok": True, **theme_config_payload()}
 
-    @app.on_event("startup")
-    async def startup_http_terminal_janitor() -> None:
-        app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
-        app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
 
-    @app.on_event("shutdown")
-    async def shutdown_http_terminals() -> None:
-        janitor = getattr(app.state, "http_terminal_janitor", None)
-        if janitor:
-            janitor.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await janitor
-        heartbeat = getattr(app.state, "node_heartbeat", None)
-        if heartbeat:
-            heartbeat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat
-        for terminal_id in list(http_terminals):
-            terminal = http_terminals.pop(terminal_id, None)
-            if terminal:
-                await close_http_terminal(terminal)
-
+def register_pages_routes(app: FastAPI) -> None:
     @app.get("/")
     def index() -> RedirectResponse:
         return RedirectResponse("/sessions", status_code=303)
@@ -391,6 +415,9 @@ def create_app() -> FastAPI:
             return session_response(request, view)
         raise HTTPException(status_code=404, detail="Session not found")
 
+
+def register_terminal_routes(app: FastAPI) -> None:
+    # Compatibility route for pre-node-aware clients. New UI code uses /ws/nodes/... exclusively.
     @app.websocket("/ws/sessions/{name}/terminal")
     async def terminal_socket(websocket: WebSocket, name: str) -> None:
         if not websocket_is_authenticated(websocket):
@@ -438,7 +465,9 @@ def create_app() -> FastAPI:
             reader.cancel()
             terminal.close()
 
-    @app.post("/api/sessions/{name}/send")
+
+def register_sessions_routes(app: FastAPI) -> None:
+    @app.post("/api/sessions/{name}/send", deprecated=True)
     def send_message(name: str, payload: SendMessage) -> dict[str, str]:
         return send_node_message("local", name, payload)
 
@@ -465,7 +494,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"status": "sent"}
 
-    @app.post("/api/sessions/{name}/input")
+    @app.post("/api/sessions/{name}/input", deprecated=True)
     def send_input(name: str, payload: TerminalInput) -> dict[str, str]:
         try:
             send_tmux_input(name, payload.data)
@@ -475,7 +504,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"status": "sent"}
 
-    @app.get("/api/sessions/{name}/output")
+    @app.get("/api/sessions/{name}/output", deprecated=True)
     def session_output(name: str, lines: int = 160) -> dict[str, str]:
         return node_session_output("local", name, lines)
 
@@ -494,7 +523,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
         return {"output": capture_tmux_pane_ansi(name, lines=lines)}
 
-    @app.get("/api/sessions/{name}/transcript-state")
+    @app.get("/api/sessions/{name}/transcript-state", deprecated=True)
     def local_session_transcript_state(name: str, lines: int = 500) -> dict[str, object]:
         try:
             return transcript_state_payload(tmux_transcript_state(name, lines=lines))
@@ -576,6 +605,8 @@ def create_app() -> FastAPI:
             await close_http_terminal(terminal)
         return {"status": "closed"}
 
+
+def register_nodes_routes(app: FastAPI) -> None:
     @app.post("/api/workers")
     def create_worker(payload: CreateWorkerRequest) -> dict[str, str]:
         try:
@@ -617,7 +648,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "adopted", "session": adopted.as_dict()}
 
-    @app.delete("/api/sessions/{name}")
+    @app.delete("/api/sessions/{name}", deprecated=True)
     def stop_session(name: str) -> dict[str, str]:
         return stop_node_session("local", name)
 
@@ -653,11 +684,13 @@ def create_app() -> FastAPI:
     def tailscale_hub_status() -> dict[str, object]:
         return tailscale_hub_payload()
 
+
+def register_lark_routes(app: FastAPI) -> None:
     @app.get("/api/lark/status")
     def lark_status() -> dict[str, object]:
         return lark_status_payload()
 
-    @app.get("/api/lark")
+    @app.get("/api/lark", deprecated=True)
     def lark_status_alias() -> dict[str, object]:
         return lark_status_payload()
 
@@ -728,6 +761,8 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+def register_workspace_routes(app: FastAPI) -> None:
     @app.get("/api/nodes/{node_id}/sessions/{name}/chat-history")
     def get_chat_history(node_id: str, name: str) -> dict[str, list[dict[str, object]]]:
         return {"messages": chat_history(node_id, name)}
@@ -776,7 +811,10 @@ def create_app() -> FastAPI:
                 query.append(f"root={urllib.parse.quote(root)}")
             if query:
                 suffix += "?" + "&".join(query)
-            return request_json(node_entry, "GET", suffix)
+            try:
+                return request_json(node_entry, "GET", suffix)
+            except (OSError, urllib.error.URLError) as exc:
+                raise remote_request_exception(exc) from exc
         try:
             return directory_listing(path, include_files=include_files, root=root)
         except ValueError as exc:
@@ -794,7 +832,10 @@ def create_app() -> FastAPI:
             suffix = "/api/directories"
             if root:
                 suffix += f"?root={urllib.parse.quote(root)}"
-            return request_json(node_entry, "POST", suffix, payload.model_dump())
+            try:
+                return request_json(node_entry, "POST", suffix, payload.model_dump())
+            except (OSError, urllib.error.URLError) as exc:
+                raise remote_request_exception(exc) from exc
         try:
             return create_directory_payload(payload.path, payload.name, root=root)
         except ValueError as exc:
@@ -810,11 +851,10 @@ def create_app() -> FastAPI:
             suffix = f"/api/files/preview?path={urllib.parse.quote(path)}"
             if root:
                 suffix += f"&root={urllib.parse.quote(root)}"
-            return request_json(
-                node_entry,
-                "GET",
-                suffix,
-            )
+            try:
+                return request_json(node_entry, "GET", suffix)
+            except (OSError, urllib.error.URLError) as exc:
+                raise remote_request_exception(exc) from exc
         try:
             return file_preview_payload(path, root=root)
         except ValueError as exc:
@@ -834,11 +874,8 @@ def create_app() -> FastAPI:
                 body, media_type = request_raw(node_entry, "GET", suffix)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except urllib.error.HTTPError as exc:
-                raise HTTPException(
-                    status_code=exc.code,
-                    detail=remote_file_error_detail(exc),
-                ) from exc
+            except (OSError, urllib.error.URLError) as exc:
+                raise remote_request_exception(exc, raw_file=True) from exc
             return Response(content=body, media_type=media_type)
         try:
             body, media_type = file_raw_payload(path, root=root)
@@ -860,20 +897,15 @@ def create_app() -> FastAPI:
                 return request_json(node_entry, "GET", suffix)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except urllib.error.HTTPError as exc:
-                raise HTTPException(
-                    status_code=exc.code,
-                    detail=remote_file_error_detail(exc),
-                ) from exc
+            except (OSError, urllib.error.URLError) as exc:
+                raise remote_request_exception(exc, raw_file=True) from exc
         try:
             return file_raw_info_payload(path, root=root)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return app
 
-
-def theme_background_path() -> Path | None:
+def legacy_theme_background_path() -> Path | None:
     for suffix, _signature in THEME_BACKGROUND_TYPES.values():
         candidate = THEME_BACKGROUND_DIR / f"{THEME_BACKGROUND_STEM}{suffix}"
         if candidate.is_file():
@@ -889,25 +921,16 @@ def clear_theme_background() -> None:
 
 
 def read_theme_config() -> dict[str, str]:
-    try:
-        raw = json.loads(THEME_BACKGROUND_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
+    with locked_file(THEME_BACKGROUND_CONFIG_PATH):
+        raw = read_json(THEME_BACKGROUND_CONFIG_PATH, {})
     if not isinstance(raw, dict):
         return {}
     return {str(key): str(value) for key, value in raw.items() if isinstance(value, str)}
 
 
 def write_theme_config(config: dict[str, str]) -> None:
-    THEME_BACKGROUND_DIR.mkdir(parents=True, exist_ok=True)
-    THEME_BACKGROUND_CONFIG_PATH.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def legacy_theme_background_path() -> Path | None:
-    return theme_background_path()
+    with locked_file(THEME_BACKGROUND_CONFIG_PATH):
+        atomic_write_json(THEME_BACKGROUND_CONFIG_PATH, config)
 
 
 def migrate_legacy_theme_background() -> None:
@@ -918,8 +941,7 @@ def migrate_legacy_theme_background() -> None:
     selected_id = config.get("selected_background_id", "")
     suffixes = {suffix for suffix, _signature in THEME_BACKGROUND_TYPES.values()}
     if selected_id and any(
-        (THEME_BACKGROUND_LIBRARY_DIR / f"{selected_id}{suffix}").is_file()
-        for suffix in suffixes
+        (THEME_BACKGROUND_LIBRARY_DIR / f"{selected_id}{suffix}").is_file() for suffix in suffixes
     ):
         clear_theme_background()
         return
@@ -988,7 +1010,9 @@ def theme_background_entries() -> list[dict[str, object]]:
                 "url": f"/api/theme/backgrounds/{background_id}",
                 "thumb_url": f"/api/theme/backgrounds/{background_id}/thumb",
                 "mtime": int(stat.st_mtime),
-                "thumb_mtime": int(thumb_path.stat().st_mtime) if thumb_path.is_file() else int(stat.st_mtime),
+                "thumb_mtime": int(thumb_path.stat().st_mtime)
+                if thumb_path.is_file()
+                else int(stat.st_mtime),
                 "size": stat.st_size,
                 "content_type": "image/webp",
             }
@@ -1006,14 +1030,16 @@ def theme_background_by_id_entry(background_id: str) -> dict[str, object] | None
     return None
 
 
-def selected_theme_background() -> dict[str, object] | None:
+def selected_theme_background(
+    entries: list[dict[str, object]] | None = None,
+) -> dict[str, object] | None:
     config = read_theme_config()
     selected_id = config.get("selected_background_id", "")
+    entries = theme_background_entries() if entries is None else entries
     if selected_id:
-        selected = theme_background_by_id_entry(selected_id)
+        selected = next((entry for entry in entries if entry["id"] == selected_id), None)
         if selected:
             return selected
-    entries = theme_background_entries()
     if not entries:
         if selected_id:
             write_theme_config({})
@@ -1036,22 +1062,21 @@ def theme_background_public_payload(entry: dict[str, object]) -> dict[str, objec
 
 
 def theme_config_payload() -> dict[str, object]:
-    selected = selected_theme_background()
+    entries = theme_background_entries()
+    selected = selected_theme_background(entries)
     selected_id = str(selected["id"]) if selected else ""
     return {
         "background_url": selected["url"] if selected else "",
         "background_mtime": selected["mtime"] if selected else 0,
         "selected_background_id": selected_id,
-        "backgrounds": [
-            theme_background_public_payload(entry) for entry in theme_background_entries()
-        ],
+        "backgrounds": [theme_background_public_payload(entry) for entry in entries],
     }
 
 
 def prune_theme_background_library() -> None:
-    selected = selected_theme_background()
-    selected_id = str(selected["id"]) if selected else ""
     entries = theme_background_entries()
+    selected = selected_theme_background(entries)
+    selected_id = str(selected["id"]) if selected else ""
     for entry in entries[THEME_BACKGROUND_LIBRARY_LIMIT:]:
         if entry["id"] == selected_id:
             continue
@@ -1123,19 +1148,21 @@ def theme_image_to_webp_bytes(image, max_edge: int, quality: int) -> bytes:
 def write_optimized_theme_background(background_id: str, data: bytes) -> None:
     image = prepare_theme_image(data)
     THEME_BACKGROUND_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
-    theme_background_full_path(background_id).write_bytes(
+    atomic_write_bytes(
+        theme_background_full_path(background_id),
         theme_image_to_webp_bytes(
             image,
             THEME_BACKGROUND_FULL_MAX_EDGE,
             THEME_BACKGROUND_FULL_QUALITY,
-        )
+        ),
     )
-    theme_background_thumb_path(background_id).write_bytes(
+    atomic_write_bytes(
+        theme_background_thumb_path(background_id),
         theme_image_to_webp_bytes(
             image,
             THEME_BACKGROUND_THUMB_MAX_EDGE,
             THEME_BACKGROUND_THUMB_QUALITY,
-        )
+        ),
     )
 
 
@@ -1147,7 +1174,9 @@ def validate_theme_background(data: bytes, content_type: str) -> str:
     if content_type in THEME_BACKGROUND_TYPES:
         suffix, signature = THEME_BACKGROUND_TYPES[content_type]
         if not data.startswith(signature):
-            raise HTTPException(status_code=400, detail="Uploaded image does not match its content type")
+            raise HTTPException(
+                status_code=400, detail="Uploaded image does not match its content type"
+            )
         if content_type == "image/webp" and data[8:12] != b"WEBP":
             raise HTTPException(status_code=400, detail="Uploaded image is not a valid WebP file")
         return suffix
@@ -1221,25 +1250,6 @@ def safe_next_path(value: str) -> str:
     if not value.startswith("/") or value.startswith("//"):
         return "/"
     return value
-
-
-async def stream_pty_to_websocket(terminal: PtyTerminal, websocket: WebSocket) -> None:
-    output_filter = TerminalOutputFilter()
-    try:
-        while terminal.process.poll() is None:
-            data = await terminal.read()
-            if not data:
-                break
-            filtered = output_filter.feed(data)
-            if filtered:
-                await websocket.send_bytes(filtered)
-    except (OSError, RuntimeError, WebSocketDisconnect):
-        pass
-    finally:
-        filtered = output_filter.flush()
-        if filtered:
-            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
-                await websocket.send_bytes(filtered)
 
 
 async def open_http_terminal(node: NodeEntry, name: str) -> HttpTerminal:
@@ -1392,10 +1402,6 @@ class ChatMessageRequest(BaseModel):
     text: str
     time: int | None = None
     id: str = ""
-
-
-def session_views():
-    return collect_hub_sessions()
 
 
 def node_session_view(node_id: str, name: str):
@@ -1849,10 +1855,7 @@ def lark_bot_info(response: dict[str, object]) -> dict[str, object]:
 
 def read_lark_config() -> dict[str, str]:
     with LARK_CONFIG_LOCK:
-        try:
-            data = json.loads(LARK_CONFIG_PATH.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return {}
+        data = read_json(LARK_CONFIG_PATH, {})
     if not isinstance(data, dict):
         return {}
     config: dict[str, str] = {}
@@ -1889,15 +1892,7 @@ def write_lark_config(payload: LarkConfigRequest) -> None:
             next_config.pop("STARAGENT_LARK_ALLOW_ALL", None)
 
         try:
-            LARK_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = LARK_CONFIG_PATH.with_suffix(".json.tmp")
-            temp_path.write_text(
-                json.dumps(next_config, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            temp_path.chmod(0o600)
-            temp_path.replace(LARK_CONFIG_PATH)
-            LARK_CONFIG_PATH.chmod(0o600)
+            atomic_write_json(LARK_CONFIG_PATH, next_config, mode=0o600)
         except OSError as exc:
             raise RuntimeError(f"failed to save Lark config: {exc}") from exc
 
@@ -2046,23 +2041,14 @@ def chat_key(node_id: str, session: str) -> str:
 
 
 def load_chat_histories() -> dict[str, list[dict[str, object]]]:
-    if not CHAT_HISTORY_PATH.exists():
-        return {}
-    try:
-        data = json.loads(CHAT_HISTORY_PATH.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    with CHAT_HISTORY_LOCK:
+        data = read_json(CHAT_HISTORY_PATH, {})
+        return data if isinstance(data, dict) else {}
 
 
 def save_chat_histories(data: dict[str, list[dict[str, object]]]) -> None:
     with CHAT_HISTORY_LOCK:
-        CHAT_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = CHAT_HISTORY_PATH.with_name(f"{CHAT_HISTORY_PATH.name}.{uuid.uuid4().hex}.tmp")
-        temp_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-        temp_path.replace(CHAT_HISTORY_PATH)
+        atomic_write_json(CHAT_HISTORY_PATH, data)
 
 
 def chat_history(node_id: str, session: str) -> list[dict[str, object]]:
@@ -2160,12 +2146,38 @@ def node_transcript_state(node_id: str, session: str, lines: int = 500):
     node = node_by_name(node_id)
     lines = max(20, min(lines, 500))
     if not node.is_local:
-        body = request_json(
-            node,
-            "GET",
-            f"/api/sessions/{urllib.parse.quote(session)}/transcript-state?lines={lines}",
+        try:
+            body = request_json(
+                node,
+                "GET",
+                f"/api/sessions/{urllib.parse.quote(session)}/transcript-state?lines={lines}",
+            )
+            return transcript_state_from_payload(body)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {404, 405}:
+                raise RuntimeError(remote_http_error_detail(exc)) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        try:
+            output = request_json(
+                node,
+                "GET",
+                f"/api/sessions/{urllib.parse.quote(session)}/output?lines={lines}",
+            )
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(remote_http_error_detail(exc)) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise RuntimeError(str(exc)) from exc
+        cached_node = collect_node_view(node, prefer_cached=True)
+        remote_session = next(
+            (item for item in cached_node.sessions if item.name == session),
+            None,
         )
-        return transcript_state_from_payload(body)
+        return parse_transcript(
+            strip_ansi(str(output.get("output") or "")),
+            remote_session.agent if remote_session else "",
+        )
     return tmux_transcript_state(session, lines=lines)
 
 
@@ -2192,19 +2204,6 @@ def replace_chat_history_from_transcript(
             data[key] = messages
             save_chat_histories(data)
     return messages
-
-
-def session_transcript(node_id: str, session: str, lines: int = 500) -> str:
-    node = node_by_name(node_id)
-    lines = max(20, min(lines, 500))
-    if not node.is_local:
-        body = request_json(
-            node, "GET", f"/api/sessions/{urllib.parse.quote(session)}/output?lines={lines}"
-        )
-        return strip_ansi(str(body.get("output") or ""))
-    if not tmux_session_exists(session):
-        raise RuntimeError(f"tmux session not found: {session}")
-    return strip_ansi(capture_tmux_pane_ansi(session, lines=lines))
 
 
 def should_record_external_activity(messages: list[dict[str, object]], now: int) -> bool:
@@ -2250,10 +2249,6 @@ def looks_like_transcript_fragment(text: str) -> bool:
     return first.startswith(("›", "◦ Working"))
 
 
-def normalize_chat_text(text: str) -> str:
-    return " ".join(text.strip().split())
-
-
 def chat_fingerprint(text: str) -> str:
     return re.sub(r"\s+", "", text.strip()).lower()
 
@@ -2275,189 +2270,7 @@ def tmux_quick_commands(view) -> list[dict[str, str]]:
     ]
 
 
-SENSITIVE_PATH_PARTS = {".ssh", ".aws", ".gnupg", ".staragent"}
-SENSITIVE_FILE_NAMES = {".env", "dashboard.env", "id_rsa", "id_ed25519"}
-
-
-def directory_listing(
-    path: str | None = None, include_files: bool = False, root: str | None = None
-) -> dict[str, object]:
-    root_path = resolve_root(root)
-    current = secure_resolve_path(path or str(root_path or Path.cwd()), root_path)
-    if not current.exists():
-        raise ValueError(f"Path does not exist: {path}")
-    if not current.is_dir():
-        current = current.parent
-
-    entries = []
-    try:
-        children = sorted(
-            current.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())
-        )
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-
-    for child in children:
-        is_dir = child.is_dir()
-        if not is_dir and not include_files:
-            continue
-        if is_dir and child.name in {".git", "__pycache__", "node_modules", ".venv", "venv"}:
-            continue
-        if is_sensitive_path(child):
-            continue
-        entries.append(
-            {
-                "name": child.name,
-                "path": str(child),
-                "hidden": child.name.startswith("."),
-                "type": "directory" if is_dir else "file",
-            }
-        )
-
-    if root_path:
-        roots = [{"label": "Workspace", "path": str(root_path)}]
-    else:
-        home = Path.home()
-        roots = [
-            {"label": "Current", "path": str(Path.cwd())},
-            {"label": "Home", "path": str(home)},
-        ]
-        if home != Path("/root") and Path("/root").exists():
-            roots.append({"label": "Root Home", "path": "/root"})
-
-    return {
-        "path": str(current),
-        "parent": parent_path(current, root_path),
-        "entries": entries,
-        "roots": roots,
-    }
-
-
-def create_directory_payload(path: str, name: str, root: str | None = None) -> dict[str, object]:
-    root_path = resolve_root(root)
-    parent = secure_resolve_path(path or str(root_path or Path.cwd()), root_path)
-    if not parent.exists() or not parent.is_dir():
-        raise ValueError(f"Parent directory does not exist: {path}")
-    clean_name = name.strip()
-    if not clean_name:
-        raise ValueError("Folder name is required")
-    if clean_name in {".", ".."} or "/" in clean_name or "\\" in clean_name:
-        raise ValueError("Folder name cannot contain path separators")
-    target = (parent / clean_name).resolve()
-    if target.parent != parent:
-        raise ValueError("Folder must be created under the current directory")
-    try:
-        target.mkdir()
-    except FileExistsError as exc:
-        raise ValueError(f"Path already exists: {target}") from exc
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-    return {"status": "created", "path": str(target), "name": target.name}
-
-
-def file_preview_payload(
-    path: str, max_bytes: int = 256 * 1024, root: str | None = None
-) -> dict[str, object]:
-    root_path = resolve_root(root)
-    file_path = secure_resolve_path(path, root_path)
-    if not file_path.exists():
-        raise ValueError(f"Path does not exist: {path}")
-    if not file_path.is_file():
-        raise ValueError(f"Path is not a file: {path}")
-    if is_sensitive_path(file_path):
-        raise ValueError(f"Preview is blocked for sensitive path: {file_path.name}")
-    try:
-        size = file_path.stat().st_size
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-    if size > max_bytes:
-        return {
-            "path": str(file_path),
-            "name": file_path.name,
-            "size": size,
-            "text": "",
-            "truncated": True,
-            "binary": False,
-            "error": f"File is larger than {max_bytes // 1024} KiB.",
-        }
-    try:
-        raw = file_path.read_bytes()
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-    if b"\x00" in raw:
-        return {
-            "path": str(file_path),
-            "name": file_path.name,
-            "size": size,
-            "text": "",
-            "truncated": False,
-            "binary": True,
-            "error": "Binary file preview is not supported.",
-        }
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
-    return {
-        "path": str(file_path),
-        "name": file_path.name,
-        "size": size,
-        "text": text,
-        "truncated": False,
-        "binary": False,
-        "error": "",
-    }
-
-
-def raw_file_metadata(
-    path: str,
-    max_image_bytes: int = 5 * 1024 * 1024,
-    max_pdf_bytes: int = 20 * 1024 * 1024,
-    root: str | None = None,
-) -> tuple[Path, str, int]:
-    root_path = resolve_root(root)
-    file_path = secure_resolve_path(path, root_path)
-    if not file_path.exists():
-        raise ValueError(f"Path does not exist: {path}")
-    if not file_path.is_file():
-        raise ValueError(f"Path is not a file: {path}")
-    if is_sensitive_path(file_path):
-        raise ValueError(f"Raw file access is blocked for sensitive path: {file_path.name}")
-    media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    is_image = media_type.startswith("image/")
-    is_pdf = media_type == "application/pdf"
-    if not is_image and not is_pdf:
-        raise ValueError("Raw file access is only supported for images and PDFs.")
-    try:
-        size = file_path.stat().st_size
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-    max_bytes = max_pdf_bytes if is_pdf else max_image_bytes
-    if size > max_bytes:
-        kind = "PDF" if is_pdf else "Image"
-        raise ValueError(f"{kind} is larger than {max_bytes // 1024 // 1024} MiB.")
-    return file_path, media_type, size
-
-
-def file_raw_info_payload(path: str, root: str | None = None) -> dict[str, object]:
-    file_path, media_type, size = raw_file_metadata(path, root=root)
-    return {
-        "path": str(file_path),
-        "name": file_path.name,
-        "size": size,
-        "media_type": media_type,
-    }
-
-
-def file_raw_payload(path: str, root: str | None = None) -> tuple[bytes, str]:
-    file_path, media_type, _size = raw_file_metadata(path, root=root)
-    try:
-        return file_path.read_bytes(), media_type
-    except OSError as exc:
-        raise ValueError(str(exc)) from exc
-
-
-def remote_file_error_detail(exc: urllib.error.HTTPError) -> str:
+def remote_http_error_detail(exc: urllib.error.HTTPError) -> str:
     text = exc.read().decode("utf-8", errors="replace")
     detail = text.strip() or exc.reason
     try:
@@ -2468,44 +2281,25 @@ def remote_file_error_detail(exc: urllib.error.HTTPError) -> str:
         detail_value = payload.get("detail")
         if isinstance(detail_value, str) and detail_value:
             detail = detail_value
+    return str(detail)
+
+
+def remote_file_error_detail(exc: urllib.error.HTTPError) -> str:
+    detail = remote_http_error_detail(exc)
     if exc.code == 404 and detail == "Not Found":
         return "Remote node does not support raw file previews yet. Restart or update the StarAgent node process."
     return detail
 
 
-def resolve_root(root: str | None) -> Path | None:
-    if not root:
-        return None
-    root_path = Path(root).expanduser().resolve()
-    if not root_path.exists() or not root_path.is_dir():
-        raise ValueError(f"Workspace root does not exist: {root}")
-    return root_path
-
-
-def secure_resolve_path(path: str, root: Path | None) -> Path:
-    resolved = Path(path).expanduser().resolve()
-    if root and resolved != root and root not in resolved.parents:
-        raise ValueError(f"Path is outside workspace: {path}")
-    return resolved
-
-
-def parent_path(path: Path, root: Path | None) -> str:
-    if root and path == root:
-        return ""
-    parent = path.parent
-    if root and parent != root and root not in parent.parents:
-        return str(root)
-    return str(parent) if parent != path else ""
-
-
-def is_sensitive_path(path: Path) -> bool:
-    parts = set(path.parts)
-    if parts & SENSITIVE_PATH_PARTS:
-        return True
-    name = path.name.lower()
-    if name in SENSITIVE_FILE_NAMES:
-        return True
-    return name.endswith((".pem", ".key")) or name.endswith(".env")
+def remote_request_exception(
+    exc: OSError | urllib.error.URLError,
+    *,
+    raw_file: bool = False,
+) -> HTTPException:
+    if isinstance(exc, urllib.error.HTTPError):
+        detail = remote_file_error_detail(exc) if raw_file else remote_http_error_detail(exc)
+        return HTTPException(status_code=exc.code, detail=detail)
+    return HTTPException(status_code=502, detail=str(exc))
 
 
 def relative_time(value: datetime | None) -> str:

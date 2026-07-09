@@ -7,11 +7,8 @@ import shlex
 import shutil
 import socket
 import subprocess
-import tomllib
 import urllib.error
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from pathlib import Path
 
 import typer
@@ -19,6 +16,7 @@ import uvicorn
 from rich.console import Console
 from rich.table import Table
 
+from staragent import __version__
 from staragent.auth import (
     auth_token_path,
     create_stored_auth_token,
@@ -257,7 +255,7 @@ def verify_node(
         "lan",
         "--mode",
         "-m",
-        help="Connection mode. Use lan for LAN/Tailscale endpoints; remote keeps proxy handling.",
+        help="Connection route. lan connects directly (including Tailscale); remote uses system proxy handling.",
     ),
     timeout: float = typer.Option(5.0, "--timeout", help="Request timeout in seconds."),
 ) -> None:
@@ -369,12 +367,7 @@ def resolve_preset_command(name: str) -> str:
 
 
 def project_version() -> str:
-    try:
-        return package_version("staragent")
-    except PackageNotFoundError:
-        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
-        with pyproject.open("rb") as file:
-            return str(tomllib.load(file)["project"]["version"])
+    return __version__
 
 
 def relative_time(value: datetime | None) -> str:

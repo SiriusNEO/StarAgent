@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
 import threading
 import time
 import urllib.error
@@ -16,6 +15,7 @@ from staragent.auth import node_auth_token
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
+from staragent.state import atomic_write_json, locked_file
 from staragent.status import collect_session_view, collect_session_views
 
 NODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -110,6 +110,11 @@ def load_nodes() -> list[NodeEntry]:
 
 
 def persisted_nodes() -> list[NodeEntry]:
+    with locked_file(NODES_PATH):
+        return _persisted_nodes_unlocked()
+
+
+def _persisted_nodes_unlocked() -> list[NodeEntry]:
     if not NODES_PATH.exists():
         return [NodeEntry(name="local", url="local", mode="local")]
     try:
@@ -137,16 +142,13 @@ def persisted_nodes() -> list[NodeEntry]:
     return entries or [NodeEntry(name="local", url="local", mode="local")]
 
 
-def save_nodes(nodes: list[NodeEntry]) -> None:
-    NODES_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _save_nodes_unlocked(nodes: list[NodeEntry]) -> None:
     payload = {
         "nodes": [
             {"name": node.name, "url": node.url or "local", "mode": node.mode} for node in nodes
         ]
     }
-    NODES_PATH.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    atomic_write_json(NODES_PATH, payload)
 
 
 def add_node(name: str, url: str, mode: str = "lan") -> NodeEntry:
@@ -159,10 +161,11 @@ def add_node(name: str, url: str, mode: str = "lan") -> NodeEntry:
         raise ValueError("local node is built in")
     mode = normalize_node_mode(mode)
     url = normalize_node_url(url)
-    nodes = [node for node in persisted_nodes() if node.name != name]
     entry = NodeEntry(name=name, url=url, mode=mode)
-    nodes.append(entry)
-    save_nodes(sorted(nodes, key=lambda node: node.name))
+    with locked_file(NODES_PATH):
+        nodes = [node for node in _persisted_nodes_unlocked() if node.name != name]
+        nodes.append(entry)
+        _save_nodes_unlocked(sorted(nodes, key=lambda node: node.name))
     return entry
 
 
@@ -201,8 +204,9 @@ def normalize_node_url(value: str) -> str:
 def remove_node(name: str) -> None:
     if name == "local":
         raise ValueError("local node cannot be removed")
-    nodes = [node for node in persisted_nodes() if node.name != name]
-    save_nodes(sorted(nodes, key=lambda node: node.name))
+    with locked_file(NODES_PATH):
+        nodes = [node for node in _persisted_nodes_unlocked() if node.name != name]
+        _save_nodes_unlocked(sorted(nodes, key=lambda node: node.name))
 
 
 def env_node_entries() -> list[NodeEntry]:
@@ -298,7 +302,9 @@ def collect_node_session(node: NodeEntry, name: str) -> HubSession | None:
     if node.is_local:
         view = collect_session_view(name)
         return HubSession(node_id=node.name, view=view) if view else None
-    return next((session for session in collect_node_view(node).sessions if session.name == name), None)
+    return next(
+        (session for session in collect_node_view(node).sessions if session.name == name), None
+    )
 
 
 def remote_sessions(node: NodeEntry) -> list[HubSession]:
@@ -515,8 +521,3 @@ def remote_node_headers() -> dict[str, str]:
 
 def remote_node_token() -> str:
     return node_auth_token()
-
-
-def valid_remote_node_token(value: str) -> bool:
-    token = remote_node_token()
-    return bool(token) and secrets.compare_digest(value or "", token)

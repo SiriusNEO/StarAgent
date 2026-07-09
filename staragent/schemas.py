@@ -20,18 +20,3 @@ class CreateWorker(BaseModel):
 class CreateDirectory(BaseModel):
     path: str
     name: str
-
-
-class SessionPayload(BaseModel):
-    name: str
-    agent: str = ""
-    node: str = ""
-    repo: str = ""
-    branch: str = ""
-    task: str = ""
-    status: str = "unknown"
-    summary: str = ""
-    needs_attention: bool = False
-    question: str = ""
-    source: str = "tmux"
-    last_updated: str | None = None
