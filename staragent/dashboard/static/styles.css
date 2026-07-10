@@ -884,6 +884,62 @@ table {
   min-width: 860px;
 }
 
+.sessions-node-groups {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.sessions-node-group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sessions-node-group-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 4px;
+}
+
+.sessions-node-group-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sessions-node-group-copy strong,
+.sessions-node-group-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-node-group-copy strong {
+  font-size: 14px;
+}
+
+.sessions-node-group-copy span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sessions-node-group-head > .pill {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 4px 7px;
+}
+
+.sessions-empty {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 24px 14px;
+  text-align: center;
+}
+
 th,
 td {
   border-bottom: 1px solid var(--line);
