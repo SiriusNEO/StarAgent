@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Logs · StarAgent{% endblock %}
+{% block content %}
+  <section class="page-head logs-page-head">
+    <div class="page-title">
+      <h1>Logs</h1>
+      <p>Hub-centralized service events, separated by Node.</p>
+    </div>
+    <div class="logs-retention-note">
+      <strong>Central archive</strong>
+      <span>Rotating JSONL under <code>.staragent/logs/</code></span>
+    </div>
+  </section>
+
+  <section class="band logs-band">
+    <div class="logs-toolbar">
+      <label>
+        <span>Source</span>
+        <select class="logs-source" aria-label="Log source">
+          {% for source in log_sources %}
+            <option value="{{ source.id }}">{{ source.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Level</span>
+        <select class="logs-level" aria-label="Log level">
+          <option value="">All levels</option>
+          <option value="info">Info</option>
+          <option value="warning">Warning</option>
+          <option value="error">Error</option>
+          <option value="critical">Critical</option>
+          <option value="debug">Debug</option>
+        </select>
+      </label>
+      <label class="logs-search-label">
+        <span>Search</span>
+        <input class="logs-search" type="search" placeholder="Event, message, or detail" autocomplete="off">
+      </label>
+      <button type="button" class="logs-refresh">Refresh</button>
+    </div>
+    <div class="logs-meta">
+      <span class="logs-status" aria-live="polite">Waiting to load…</span>
+      <span>Newest first · refreshes every 10 seconds</span>
+    </div>
+    <div class="logs-stream" aria-live="polite" aria-busy="true">
+      <div class="logs-empty">Loading logs…</div>
+    </div>
+  </section>
+
+  <script src="{{ url_for('static', path='logs.js') }}?v={{ static_version('logs.js') }}"></script>
+{% endblock %}

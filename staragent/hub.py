@@ -12,6 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from staragent.auth import node_auth_token
+from staragent.event_log import (
+    append_node_event,
+    ingest_node_events,
+    node_ingest_cursor,
+)
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
@@ -95,6 +100,8 @@ class NodeHeartbeat:
 
 
 NODE_HEARTBEATS: dict[str, NodeHeartbeat] = {}
+NODE_REPORTED_STATES: dict[str, tuple[str, str]] = {}
+NODE_LOG_SYNC_ERRORS: dict[str, str] = {}
 NODE_HEARTBEATS_LOCK = threading.Lock()
 
 
@@ -273,9 +280,12 @@ def collect_node_view(node: NodeEntry, prefer_cached: bool = False) -> NodeView:
     try:
         sessions.extend(remote_sessions(node))
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
-        return remote_node_failure_view(node, exc)
+        view = remote_node_failure_view(node, exc)
+        report_node_connection_state(node, view.status, view.error)
+        return view
     session_tuple = tuple(sessions)
     remember_node_heartbeat(node, session_tuple)
+    report_node_connection_state(node, "connected")
     return NodeView(entry=node, status="connected", sessions=session_tuple)
 
 
@@ -309,7 +319,41 @@ def collect_node_session(node: NodeEntry, name: str) -> HubSession | None:
 
 def remote_sessions(node: NodeEntry) -> list[HubSession]:
     payload = request_json(node, "GET", "/api/sessions", timeout=remote_node_status_timeout())
+    capabilities = payload.get("capabilities")
+    if isinstance(capabilities, dict) and capabilities.get("logs"):
+        try:
+            sync_remote_node_logs(node)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError, ValueError) as exc:
+            report_node_log_sync_failure(node, str(exc))
+        else:
+            report_node_log_sync_recovered(node)
     return session_payloads_to_views(node, payload)
+
+
+def sync_remote_node_logs(node: NodeEntry, *, max_pages: int = 4) -> int:
+    cursor = node_ingest_cursor(node.name)
+    ingested = 0
+    for _ in range(max(1, max_pages)):
+        query = urllib.parse.urlencode({"after": cursor, "limit": 250})
+        payload = request_json(
+            node,
+            "GET",
+            f"/api/logs?{query}",
+            timeout=remote_node_status_timeout(),
+        )
+        events = payload.get("events")
+        if not isinstance(events, list):
+            raise ValueError("Node returned an invalid log payload")
+        ingested += ingest_node_events(node.name, events)
+        next_cursor = str(payload.get("next_cursor") or "")
+        if next_cursor:
+            cursor = next_cursor
+        elif events:
+            last = events[-1]
+            cursor = str(last.get("id") or "") if isinstance(last, dict) else cursor
+        if not payload.get("has_more") or not events:
+            break
+    return ingested
 
 
 def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
@@ -381,6 +425,77 @@ def forget_node_heartbeat(node: NodeEntry) -> None:
 def clear_node_heartbeat_cache() -> None:
     with NODE_HEARTBEATS_LOCK:
         NODE_HEARTBEATS.clear()
+        NODE_REPORTED_STATES.clear()
+        NODE_LOG_SYNC_ERRORS.clear()
+
+
+def report_node_connection_state(node: NodeEntry, status: str, error: str = "") -> None:
+    endpoint = node_endpoint(node)
+    with NODE_HEARTBEATS_LOCK:
+        previous = NODE_REPORTED_STATES.get(node.name)
+        current = (endpoint, status)
+        if previous == current:
+            return
+        NODE_REPORTED_STATES[node.name] = current
+    previous_status = previous[1] if previous and previous[0] == endpoint else ""
+    if status == "connected":
+        event = "node.recovered" if previous_status in {"stale", "disconnected"} else "node.connected"
+        message = (
+            "Node connection recovered."
+            if event == "node.recovered"
+            else "Node connected to the Hub."
+        )
+        level = "info"
+    elif status == "stale":
+        event = "node.stale"
+        message = "Node health is reachable, but session status is stale."
+        level = "warning"
+    else:
+        event = "node.disconnected"
+        message = "Node disconnected from the Hub."
+        level = "error"
+    details: dict[str, object] = {"endpoint": endpoint}
+    if previous_status:
+        details["previous_status"] = previous_status
+    if error:
+        details["error"] = error
+    append_node_event(
+        node.name,
+        level,
+        event,
+        message,
+        source="hub.heartbeat",
+        details=details,
+    )
+
+
+def report_node_log_sync_failure(node: NodeEntry, error: str) -> None:
+    with NODE_HEARTBEATS_LOCK:
+        if NODE_LOG_SYNC_ERRORS.get(node.name) == error:
+            return
+        NODE_LOG_SYNC_ERRORS[node.name] = error
+    append_node_event(
+        node.name,
+        "warning",
+        "logs.sync_failed",
+        "Hub could not sync this Node's log outbox.",
+        source="hub.logs",
+        details={"error": error},
+    )
+
+
+def report_node_log_sync_recovered(node: NodeEntry) -> None:
+    with NODE_HEARTBEATS_LOCK:
+        previous_error = NODE_LOG_SYNC_ERRORS.pop(node.name, "")
+    if not previous_error:
+        return
+    append_node_event(
+        node.name,
+        "info",
+        "logs.sync_recovered",
+        "Node log synchronization recovered.",
+        source="hub.logs",
+    )
 
 
 def node_heartbeat_is_fresh(heartbeat: NodeHeartbeat) -> bool:

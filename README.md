@@ -62,6 +62,13 @@ Hub auth is saved in `<staragent-source>/.staragent/auth_token`; set `STARAGENT_
 before starting the Hub if you want to choose the token yourself.
 Runtime state defaults to `<staragent-source>/.staragent`; set `STARAGENT_STATE_DIR` to override it.
 
+The Dashboard **Logs** page keeps Hub and per-Node service events in one central archive.
+Files rotate under `.staragent/logs/` (`hub.jsonl` and `nodes/<node>.jsonl`). Remote Nodes
+only keep a bounded delivery outbox until the Hub pulls it during heartbeat refreshes. Hub and
+Node services run behind a lightweight supervisor, so unexpected exits include the exit code,
+uptime, recent process output, and automatic-restart event. HTTP access URLs are not logged, and
+sensitive token-like values are redacted before persistence.
+
 ## Remote Node
 
 Run this on each machine that should run agent sessions:

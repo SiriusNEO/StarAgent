@@ -10,7 +10,7 @@ The Hub is the web dashboard and coordinator.
 
 - Runs with `staragent hub --host 0.0.0.0 --port 8080`.
 - Serves the Dashboard UI.
-- Stores lightweight state under `STARAGENT_STATE_DIR`, or `~/.local/state/staragent` by default.
+- Stores lightweight state under `STARAGENT_STATE_DIR`, or `<staragent-source>/.staragent` by default.
 - Knows which nodes exist and how to reach their StarAgent node API.
 - Proxies remote node APIs and terminal WebSockets to the browser.
 
@@ -67,6 +67,7 @@ The Hub and Remote Node share the same core session operations:
 
 - `GET /api/health`
 - `GET /api/sessions`
+- `GET /api/logs` (Remote Node outbox on Nodes; centralized archive query on the Hub)
 - `POST /api/workers`
 - `POST /api/adopt`
 - `DELETE /api/sessions/{name}`
@@ -91,6 +92,24 @@ File browsing and preview are served from the machine that owns the session:
 - Remote session: Hub proxies file APIs to the Remote Node.
 
 Changed Files are derived from the session workspace Git status.
+
+## Logging and Supervision
+
+The Hub is the durable log authority. Structured JSONL events rotate independently under:
+
+- `.staragent/logs/hub.jsonl`
+- `.staragent/logs/nodes/<node>.jsonl`
+
+Each Remote Node keeps only a bounded `.staragent/log-outbox/node.jsonl` delivery buffer. A Node
+advertises log support in its session response, then the Hub uses a persisted cursor to pull,
+deduplicate, and archive new events during heartbeat refreshes. Older Nodes remain compatible
+because the Hub only starts this extra exchange when the capability is advertised.
+
+The `staragent-hub` and `staragent-node` tmux sessions contain a lightweight process supervisor.
+It records process output and exit metadata, restarts an unexpectedly exited service with bounded
+exponential backoff, and preserves the evidence that would otherwise disappear with a tmux pane.
+Uvicorn access logging is disabled so WebSocket query credentials are not captured; structured
+log fields are also redacted before they are written.
 
 ## Networking
 
