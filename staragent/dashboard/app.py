@@ -389,7 +389,10 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/sessions", response_class=HTMLResponse)
     def sessions_page(request: Request) -> HTMLResponse:
-        node_views = collect_node_views(prefer_cached=True)
+        node_views = sorted(
+            collect_node_views(prefer_cached=True),
+            key=lambda node: (not node.entry.is_local, node.name),
+        )
         views = sorted(
             [session for node in node_views for session in node.sessions],
             key=lambda item: (item.node_id, item.name),

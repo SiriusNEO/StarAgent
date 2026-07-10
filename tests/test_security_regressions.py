@@ -353,6 +353,19 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert "agent-launch-form" not in agents
 
 
+def test_sessions_page_groups_sessions_by_node() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="sessions-node-groups"' in template
+    assert 'class="sessions-node-group" data-node="{{ node.name }}"' in template
+    assert "{% for node in node_views %}" in template
+    assert "{% for view in node.sessions|sort(attribute='name') %}" in template
+    assert 'node-status-{{ node.status }}' in template
+    assert "<th>Node</th>" not in template
+
+
 def test_page_javascript_is_served_as_versioned_static_assets() -> None:
     template_dir = PROJECT_ROOT / "staragent" / "dashboard" / "templates"
     static_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static"
