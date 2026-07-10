@@ -107,6 +107,7 @@
         </div>
         <nav class="app-nav" aria-label="Primary navigation">
           <a class="{{ 'is-active' if request.url.path.startswith('/sessions') or request.url.path.startswith('/nodes/') else '' }}" href="/sessions">Sessions</a>
+          <a class="{{ 'is-active' if request.url.path.startswith('/agents') else '' }}" href="/agents">Agents</a>
           <a class="{{ 'is-active' if request.url.path.startswith('/nodes') and not request.url.path.startswith('/nodes/') else '' }}" href="/nodes">Nodes</a>
           <a class="{{ 'is-active' if request.url.path.startswith('/logs') else '' }}" href="/logs">Logs</a>
           <a class="{{ 'is-active' if request.url.path.startswith('/lark') else '' }}" href="/lark">Lark</a>
@@ -118,7 +119,7 @@
         </form>
       </nav>
     </header>
-    <main class="shell">
+    <main class="shell {% block shell_class %}{% endblock %}">
       {% block content %}{% endblock %}
     </main>
     <script src="{{ url_for('static', path='base.js') }}?v={{ static_version('base.js') }}"></script>

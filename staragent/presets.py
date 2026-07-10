@@ -8,26 +8,37 @@ class CommandPreset:
     name: str
     label: str
     command: str
+    agent: str
+    ops_compatible: bool = True
 
-    def as_dict(self) -> dict[str, str]:
-        return {"name": self.name, "label": self.label, "command": self.command}
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "label": self.label,
+            "command": self.command,
+            "agent": self.agent,
+            "ops_compatible": self.ops_compatible,
+        }
 
 
 COMMAND_PRESETS = [
-    CommandPreset("codex-yolo", "Codex YOLO", "codex --yolo"),
-    CommandPreset("codex", "Codex", "codex"),
+    CommandPreset("codex-yolo", "Codex YOLO", "codex --yolo", "codex"),
+    CommandPreset("codex", "Codex", "codex", "codex"),
     CommandPreset(
-        "claude-skip", "Claude Skip Permissions", "claude --dangerously-skip-permissions"
+        "claude-skip",
+        "Claude Skip Permissions",
+        "claude --dangerously-skip-permissions",
+        "claude",
     ),
-    CommandPreset("claude", "Claude", "claude"),
-    CommandPreset("gemini", "Gemini", "gemini"),
-    CommandPreset("opencode", "OpenCode", "opencode"),
-    CommandPreset("shell", "Shell", "bash"),
+    CommandPreset("claude", "Claude", "claude", "claude"),
+    CommandPreset("gemini", "Gemini", "gemini", "gemini"),
+    CommandPreset("opencode", "OpenCode", "opencode", "opencode"),
+    CommandPreset("shell", "Shell", "bash", "shell", ops_compatible=False),
 ]
 
 
-def command_presets_payload() -> list[dict[str, str]]:
-    return [preset.as_dict() for preset in COMMAND_PRESETS]
+def command_presets_payload(*, ops_only: bool = False) -> list[dict[str, object]]:
+    return [preset.as_dict() for preset in COMMAND_PRESETS if not ops_only or preset.ops_compatible]
 
 
 def preset_command(name: str) -> str:

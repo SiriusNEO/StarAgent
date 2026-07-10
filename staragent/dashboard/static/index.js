@@ -72,7 +72,7 @@ if (workerForm) {
       status.textContent = "Name, working directory, and command are required.";
       return;
     }
-    status.textContent = "Starting...";
+    status.textContent = "Creating...";
     const response = await fetch("/api/workers", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -83,7 +83,7 @@ if (workerForm) {
       status.textContent = body.detail || "Start failed.";
       return;
     }
-    status.textContent = "Started.";
+    status.textContent = "Created.";
     setTimeout(() => window.location.reload(), 500);
   });
 }

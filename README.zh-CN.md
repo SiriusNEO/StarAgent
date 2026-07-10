@@ -42,6 +42,7 @@ StarAgent 使用中心化架构：`StarAgent Hub` 运行 Web Dashboard，同时�
 ![](assets/sessions.png)
 
 每个 session 都包含一个轻量 Chat 控制台，用来和 agent 交互，同时也提供 Terminal 和 File Explorer。
+Session 详情页左侧提供类似 IM 的会话切换栏，不需要先返回列表；窄屏设备上会折叠成可搜索的抽屉。
 
 ![](assets/chat.png)
 
@@ -66,6 +67,20 @@ Dashboard 的 **Logs** 页面会在 Hub 上集中保存 Hub 与各个 Node 的�
 `nodes/<node>.jsonl`）；远端 Node 只保留一个有大小上限的待同步 outbox，由 Hub 在心跳刷新时增量拉取。
 Hub 与 Node 服务都由轻量守护进程运行，因此意外退出时会留下退出码、运行时长、进程输出和自动重启事件。
 普通 HTTP 访问 URL 不会进入日志，疑似 token 的敏感值也会在落盘前脱敏。
+
+Dashboard 的 **Agents** 页面会检测每个 Node 服务进程的 `PATH` 中是否可以使用 Codex、
+Claude Code、Gemini CLI 和 OpenCode。版本检查会并行执行，使用短超时与 60 秒 Node 端缓存。
+其中 **ready** 只表示可执行文件能够正常启动，不会检查账号登录状态，也不会发起模型请求。
+页面会识别常见安装来源并给出可复制的官方安装/升级命令，但不会自动执行包管理器。
+
+对于 Codex，每台机器还会通过 CLI 本地 app-server 的只读状态 RPC 显示真实的额度窗口、
+重置时间、plan、可用 credits 与 reset 次数；这个检查不会发起模型请求。Claude Code
+目前没有等价的非交互 quota 响应，因此页面只显示认证状态并提供官方交互式 `/status`
+命令，不会猜测一个百分比。
+
+**Sessions → Create Session** 与 Agents 页面的只读 preset 清单共用同一份 command preset
+注册表；通用 session 创建入口只保留在 Sessions 页面。Agents 页面还可以在用户明确点击后，
+对 Codex 与 Claude Code 的历史对话做有读取上限的只读扫描，并用 CLI 的 resume 命令恢复为新 session。
 
 ## Remote Node
 

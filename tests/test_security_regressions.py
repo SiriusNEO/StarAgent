@@ -251,6 +251,55 @@ def test_session_heavy_assets_are_loaded_on_demand() -> None:
     assert "static_version('session.js')" in template
 
 
+def test_session_detail_has_im_style_session_switcher() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "session-detail-layout" in template
+    assert "session-switcher-item" in template
+    assert "session-switcher-state pill status-{{ item.status }}" in template
+    assert ">{{ item.status }}</span>" in template
+    assert "session-switcher-avatar" not in template
+    assert 'aria-current="page"' in template
+    assert "session-switcher-toggle" in script
+    assert "Find a session" not in template
+    assert "session-switcher-search" not in template
+    assert "session-switcher-create" not in template
+    assert "← Sessions" not in template
+
+
+def test_page_root_contains_horizontal_overflow_without_breaking_inner_scrollers() -> None:
+    styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "overscroll-behavior-x: none" in styles
+    assert "@supports (overflow: clip)" in styles
+    assert "overflow-x: clip" in styles
+    assert "@supports not (overflow: clip)" in styles
+    assert ".session-detail-main > *" in styles
+    assert ".table-wrap" in styles and "overflow-x: auto" in styles
+
+
+def test_chat_removes_only_the_middle_message_list_frame() -> None:
+    styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    log_rule = styles.split(".chat-log {", 1)[1].split("}", 1)[0]
+    bubble_rule = styles.split(".chat-message pre {", 1)[1].split("}", 1)[0]
+
+    assert "background: transparent" in log_rule
+    assert "border: 0" in log_rule
+    assert "border-radius: 0" in log_rule
+    assert "border-radius: 8px" in bubble_rule
+    assert ".chat-user pre" in styles
+    assert ".chat-agent pre" in styles
+
+
 def test_tailscale_dashboard_adds_direct_nodes() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "nodes.html").read_text(
         encoding="utf-8"
@@ -265,11 +314,50 @@ def test_tailscale_dashboard_adds_direct_nodes() -> None:
     assert "Direct · LAN / Tailscale" in template
 
 
+def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "agents.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agents.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Agent CLIs" in template
+    assert "Codex usage is read through its local account status RPC" in template
+    assert 'class="agent-cli-usage" hidden' in template
+    assert "renderAgentUsage" in script
+    assert "remaining_percent" in script
+    assert 'copy.dataset.copy = usage.action' in script
+    assert "/agent-tools" in script
+    assert "window.StarAgentAfterPaint(() => loadAgentTools(false))" in script
+    assert "/agent-history" in script
+    assert "Scanning starts only when requested" in template
+    assert "source history files" not in script
+    assert 'class="agent-cli-card" data-agent="{{ tool.name }}"' in template
+    assert 'class="agent-cli-node-row" data-node="{{ node.name }}"' in template
+    assert "agent-tools-node" not in template
+    assert "Promise.all(nodeNames.map" in script
+
+
+def test_session_creation_stays_on_sessions_page() -> None:
+    agents = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "agents.html").read_text(
+        encoding="utf-8"
+    )
+    sessions = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Create Session" in sessions
+    assert 'id="create-session"' in sessions
+    assert "Create Worker" not in sessions
+    assert "agent-launch-form" not in agents
+
+
 def test_page_javascript_is_served_as_versioned_static_assets() -> None:
     template_dir = PROJECT_ROOT / "staragent" / "dashboard" / "templates"
     static_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static"
 
-    for page in ("base", "index", "nodes", "logs", "lark", "session"):
+    for page in ("base", "index", "nodes", "agents", "logs", "lark", "session"):
         template = (template_dir / f"{page}.html").read_text(encoding="utf-8")
         script = static_dir / f"{page}.js"
         assert script.is_file()

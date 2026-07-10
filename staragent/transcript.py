@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-# The structured transcript readers in this module are Python ports of the
-# corresponding MIT-licensed botmux readers:
-#   https://github.com/deepcoldy/botmux
-# StarAgent keeps the same principle: CLI-native transcript files are authoritative;
-# terminal text is only a last-resort display fallback.
+import hashlib
 import json
 import os
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from staragent.text import strip_ansi
+
+# The structured transcript readers in this module are Python ports of the
+# corresponding MIT-licensed botmux readers:
+#   https://github.com/deepcoldy/botmux
+# StarAgent keeps the same principle: CLI-native transcript files are authoritative;
+# terminal text is only a last-resort display fallback.
 
 WORKING_STATUS_PATTERN = re.compile(r"^\s*(?:[◦∙·○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\b", re.IGNORECASE)
 MAX_TRANSCRIPT_CACHE_FILES = 32
@@ -39,6 +41,7 @@ class _CodexRolloutPathEntry:
 _TRANSCRIPT_CACHE_LOCK = threading.RLock()
 _JSONL_CACHE: dict[tuple[str, str], _JsonlCacheEntry] = {}
 _CODEX_ROLLOUT_PATH_CACHE: dict[int, _CodexRolloutPathEntry] = {}
+_LIFECYCLE_CACHE: dict[tuple[str, str], tuple[tuple[int, int, int, int], str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,7 @@ class TranscriptState:
     working_label: str = ""
     working_since_ms: int = 0
     final: bool = False
+    lifecycle_id: str = ""
     messages: tuple[TranscriptMessage, ...] = ()
     token_usage: TokenUsage | None = None
 
@@ -124,6 +128,57 @@ def parse_transcript(text: str, cli: str = "", cli_pid: int = 0) -> TranscriptSt
     if cli == "opencode":
         return parse_opencode_transcript(text)
     return parse_generic_transcript(text)
+
+
+def detect_transcript_lifecycle(text: str, cli: str = "", cli_pid: int = 0) -> TranscriptState:
+    """Read only the newest lifecycle event needed for a session status.
+
+    Full transcript parsing is intentionally avoided here. A reverse JSONL scan normally
+    stops after one relevant Codex or Claude event, so a long conversation does not make
+    the Sessions page progressively slower.
+    """
+    normalized_cli = cli.lower().strip()
+    lifecycle = ""
+    if normalized_cli in {"codex", "codex-cli"}:
+        path = find_codex_rollout_by_pid(cli_pid)
+        lifecycle, lifecycle_id = latest_jsonl_lifecycle(
+            path, "codex-lifecycle", codex_lifecycle_from_json
+        )
+    elif normalized_cli in {"claude", "claude-code"}:
+        path = find_claude_jsonl_by_pid(cli_pid)
+        lifecycle, lifecycle_id = latest_jsonl_lifecycle(
+            path, "claude-lifecycle", claude_lifecycle_from_json
+        )
+    else:
+        lifecycle_id = ""
+
+    if lifecycle:
+        working = lifecycle == "working"
+        return TranscriptState(
+            working=working,
+            working_label="Working" if working else "",
+            final=lifecycle == "review",
+            lifecycle_id=lifecycle_id,
+        )
+
+    if normalized_cli in {"codex", "codex-cli"}:
+        fallback = parse_codex_transcript(text)
+        return TranscriptState(
+            working=fallback.working,
+            working_label=fallback.working_label,
+            final=fallback.final,
+            lifecycle_id=lifecycle_fingerprint(fallback.completed_reply or fallback.reply)
+            if fallback.final
+            else "",
+        )
+
+    lines = clean_transcript_lines(text)
+    working_index = latest_working_line_index(lines)
+    working = working_index >= 0 and working_index >= len(lines) - 4
+    return TranscriptState(
+        working=working,
+        working_label=latest_working_label(lines) if working else "",
+    )
 
 
 def parse_codex_transcript(text: str, cli_pid: int = 0) -> TranscriptState:
@@ -165,16 +220,17 @@ def parse_claude_transcript(text: str, cli_pid: int = 0) -> TranscriptState:
     if events:
         messages = claude_messages_from_events(events)
         user_index = latest_claude_turn_start_index(events)
-        assistant_index = latest_claude_assistant_index(events)
+        final_index = latest_claude_turn_end_index(events)
         reply = latest_claude_assistant_text(events)
-        working = user_index > assistant_index
+        working = user_index >= 0 and user_index > final_index
+        final = final_index >= 0 and final_index > user_index
         return TranscriptState(
             reply=reply,
-            completed_reply=reply if reply else "",
+            completed_reply=reply if reply and final else "",
             working=working,
             working_label="Working" if working else "",
             working_since_ms=event_timestamp_at(events, user_index) if working else 0,
-            final=bool(reply and not working),
+            final=final,
             messages=tuple(messages),
             token_usage=claude_token_usage_from_events(events),
         )
@@ -213,6 +269,7 @@ def clear_transcript_caches() -> None:
     with _TRANSCRIPT_CACHE_LOCK:
         _JSONL_CACHE.clear()
         _CODEX_ROLLOUT_PATH_CACHE.clear()
+        _LIFECYCLE_CACHE.clear()
 
 
 def read_cached_jsonl(
@@ -296,6 +353,103 @@ def remember_jsonl_cache_entry(cache_key: tuple[str, str], entry: _JsonlCacheEnt
     while len(_JSONL_CACHE) > MAX_TRANSCRIPT_CACHE_FILES:
         oldest_key = next(iter(_JSONL_CACHE))
         _JSONL_CACHE.pop(oldest_key, None)
+
+
+def latest_jsonl_lifecycle(
+    path: str,
+    namespace: str,
+    classify: Callable[[object], str],
+) -> tuple[str, str]:
+    if not path:
+        return "", ""
+    try:
+        path_stat = os.stat(path)
+    except OSError:
+        return "", ""
+    signature = (
+        path_stat.st_dev,
+        path_stat.st_ino,
+        path_stat.st_size,
+        path_stat.st_mtime_ns,
+    )
+    cache_key = (namespace, path)
+    with _TRANSCRIPT_CACHE_LOCK:
+        cached = _LIFECYCLE_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            return cached[1], cached[2]
+
+    lifecycle = ""
+    lifecycle_id = ""
+    try:
+        for obj in reverse_jsonl_objects(path):
+            lifecycle = classify(obj)
+            if lifecycle:
+                lifecycle_id = lifecycle_fingerprint(obj)
+                break
+    except OSError:
+        return "", ""
+
+    try:
+        finished_stat = os.stat(path)
+    except OSError:
+        return lifecycle, lifecycle_id
+    finished_signature = (
+        finished_stat.st_dev,
+        finished_stat.st_ino,
+        finished_stat.st_size,
+        finished_stat.st_mtime_ns,
+    )
+    if finished_signature == signature:
+        with _TRANSCRIPT_CACHE_LOCK:
+            _LIFECYCLE_CACHE.pop(cache_key, None)
+            _LIFECYCLE_CACHE[cache_key] = (signature, lifecycle, lifecycle_id)
+            while len(_LIFECYCLE_CACHE) > MAX_TRANSCRIPT_CACHE_FILES * 2:
+                _LIFECYCLE_CACHE.pop(next(iter(_LIFECYCLE_CACHE)), None)
+    return lifecycle, lifecycle_id
+
+
+def lifecycle_fingerprint(value: object) -> str:
+    if not value:
+        return ""
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        encoded = str(value).encode("utf-8", errors="replace")
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def reverse_jsonl_objects(path: str, chunk_size: int = 64 * 1024) -> Iterator[object]:
+    """Yield complete JSONL values newest-first without loading the whole file."""
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        position = handle.tell()
+        pending = b""
+        while position > 0:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            handle.seek(position)
+            data = handle.read(read_size) + pending
+            lines = data.split(b"\n")
+            pending = lines[0]
+            for raw_line in reversed(lines[1:]):
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    yield json.loads(raw_line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+        pending = pending.strip()
+        if pending:
+            try:
+                yield json.loads(pending)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return
 
 
 def codex_events_from_pid(pid: int) -> list[dict[str, object]]:
@@ -462,6 +616,17 @@ def codex_event_from_json(obj: object) -> dict[str, object] | None:
             else None
         )
     return None
+
+
+def codex_lifecycle_from_json(obj: object) -> str:
+    event = codex_event_from_json(obj)
+    if not event:
+        return ""
+    if event.get("kind") == "user":
+        return "working"
+    if event.get("kind") == "assistant_final":
+        return "review"
+    return ""
 
 
 def codex_token_usage_from_events(events: list[dict[str, object]]) -> TokenUsage | None:
@@ -722,11 +887,33 @@ def latest_claude_turn_start_index(events: list[dict[str, Any]]) -> int:
     return -1
 
 
-def latest_claude_assistant_index(events: list[dict[str, Any]]) -> int:
+def latest_claude_turn_end_index(events: list[dict[str, Any]]) -> int:
     for index in range(len(events) - 1, -1, -1):
-        if claude_assistant_text(events[index]):
+        if is_claude_turn_end_event(events[index]):
             return index
     return -1
+
+
+CLAUDE_TURN_END_REASONS = {"end_turn", "max_tokens", "stop_sequence", "refusal"}
+
+
+def is_claude_turn_end_event(event: dict[str, Any]) -> bool:
+    if event.get("isSidechain") is True:
+        return False
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return False
+    return str(message.get("stop_reason") or "") in CLAUDE_TURN_END_REASONS
+
+
+def claude_lifecycle_from_json(obj: object) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    if is_meaningful_claude_user_event(obj) or is_meaningful_claude_queued_command(obj):
+        return "working"
+    if is_claude_turn_end_event(obj):
+        return "review"
+    return ""
 
 
 def latest_claude_assistant_text(events: list[dict[str, Any]]) -> str:

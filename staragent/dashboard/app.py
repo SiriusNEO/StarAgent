@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.agent_tools import agent_catalog_payload
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
 from staragent.dependencies import dependencies_status, ensure_dependencies
@@ -62,7 +63,11 @@ from staragent.hub import (
     collect_node_session,
     collect_node_view,
     collect_node_views,
+    collect_session_navigation_nodes,
     load_nodes,
+    mark_hub_session_seen,
+    node_agent_history_payload,
+    node_agent_tools_payload,
     node_by_name,
     refresh_remote_node_heartbeats,
     remove_node,
@@ -418,6 +423,21 @@ def register_pages_routes(app: FastAPI) -> None:
             },
         )
 
+    @app.get("/agents", response_class=HTMLResponse)
+    def agents_page(request: Request) -> HTMLResponse:
+        agent_presets = [
+            preset for preset in command_presets_payload() if preset.get("agent") != "shell"
+        ]
+        return templates.TemplateResponse(
+            request,
+            "agents.html",
+            {
+                "node_views": collect_node_views(prefer_cached=True),
+                "agent_catalog": agent_catalog_payload(),
+                "agent_presets": agent_presets,
+            },
+        )
+
     @app.get("/lark", response_class=HTMLResponse)
     def lark_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -500,6 +520,14 @@ def register_terminal_routes(app: FastAPI) -> None:
 
 
 def register_sessions_routes(app: FastAPI) -> None:
+    @app.post("/api/nodes/{node_id}/sessions/{name}/seen")
+    def mark_node_session_seen(node_id: str, name: str) -> dict[str, object]:
+        view = node_session_view(node_id, name)
+        if not view:
+            raise HTTPException(status_code=404, detail="Session not found")
+        acknowledged = mark_hub_session_seen(view)
+        return {"status": view.status, "acknowledged": acknowledged}
+
     @app.post("/api/sessions/{name}/send", deprecated=True)
     def send_message(name: str, payload: SendMessage) -> dict[str, str]:
         return send_node_message("local", name, payload)
@@ -743,6 +771,35 @@ def register_nodes_routes(app: FastAPI) -> None:
     @app.get("/api/nodes")
     def list_nodes() -> dict[str, list[dict[str, object]]]:
         return {"nodes": [node_payload(node) for node in collect_node_views()]}
+
+    @app.get("/api/nodes/{node_id}/agent-tools")
+    def node_agent_tools(node_id: str, refresh: bool = False) -> dict[str, object]:
+        try:
+            node = node_by_name(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
+        return node_agent_tools_payload(node, refresh=refresh)
+
+    @app.get("/api/nodes/{node_id}/agent-history")
+    def node_agent_history(
+        node_id: str,
+        agent: str = "",
+        limit: int = 50,
+        refresh: bool = False,
+    ) -> dict[str, object]:
+        try:
+            node = node_by_name(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
+        try:
+            return node_agent_history_payload(
+                node,
+                agent=agent,
+                limit=limit,
+                refresh=refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/tailscale/hub")
     def tailscale_hub_status() -> dict[str, object]:
@@ -1507,7 +1564,9 @@ def node_session_view(node_id: str, name: str):
 
 
 def session_response(request: Request, view) -> HTMLResponse:
+    mark_hub_session_seen(view)
     attach_command = tmux_attach_command(view)
+    sidebar_nodes = collect_session_navigation_nodes()
     return templates.TemplateResponse(
         request,
         "session.html",
@@ -1517,6 +1576,8 @@ def session_response(request: Request, view) -> HTMLResponse:
             "attach_command": attach_command,
             "tmux_commands": tmux_quick_commands(view),
             "initial_token_usage": None,
+            "sidebar_nodes": sidebar_nodes,
+            "sidebar_session_count": sum(len(node.sessions) for node in sidebar_nodes),
         },
     )
 
@@ -1527,10 +1588,8 @@ def dashboard_stats(node_views, views):
         "connected_nodes": sum(1 for node in node_views if node.status in {"connected", "stale"}),
         "disconnected_nodes": sum(1 for node in node_views if node.status == "disconnected"),
         "total": len(views),
-        "agent": sum(1 for view in views if view.session_type == "agent"),
-        "system": sum(1 for view in views if view.session_type == "system"),
-        "attention": sum(1 for view in views if view.needs_attention),
-        "active": sum(1 for view in views if view.status in {"active", "attached"}),
+        "working": sum(1 for view in views if view.status == "working"),
+        "review": sum(1 for view in views if view.status == "review"),
         "idle": sum(1 for view in views if view.status == "idle"),
     }
 

@@ -38,6 +38,27 @@ def session_payload(name: str = "dev") -> dict[str, list[dict[str, object]]]:
     }
 
 
+def test_session_navigation_never_fetches_uncached_remote_nodes(monkeypatch) -> None:
+    local = NodeEntry(name="local", url="local", mode="local")
+    remote = remote_node()
+    monkeypatch.setattr(hub, "load_nodes", lambda: [local, remote])
+    monkeypatch.setattr(hub, "collect_session_navigation_views", lambda: [])
+    monkeypatch.setattr(hub, "cached_remote_node_view", lambda node: None)
+    monkeypatch.setattr(
+        hub,
+        "request_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("session navigation must use the heartbeat cache")
+        ),
+    )
+
+    nodes = hub.collect_session_navigation_nodes()
+
+    assert [node.name for node in nodes] == ["local", "worker"]
+    assert nodes[1].status == "disconnected"
+    assert nodes[1].sessions == ()
+
+
 def test_normalize_node_url_defaults_to_8081() -> None:
     assert normalize_node_url("worker") == "http://worker:8081"
     assert normalize_node_url("100.64.1.10") == "http://100.64.1.10:8081"

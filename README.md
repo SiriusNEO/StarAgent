@@ -42,6 +42,8 @@ Managing your session in one place:
 ![](assets/sessions.png)
 
 Each session includes a lightweight chat console for interacting with agents, plus a Terminal and File Explorer.
+Session detail pages keep an IM-style switcher on the left for moving between sessions without
+returning to the session table; on narrow screens it collapses into a searchable drawer.
 
 ![](assets/chat.png)
 
@@ -68,6 +70,23 @@ only keep a bounded delivery outbox until the Hub pulls it during heartbeat refr
 Node services run behind a lightweight supervisor, so unexpected exits include the exit code,
 uptime, recent process output, and automatic-restart event. HTTP access URLs are not logged, and
 sensitive token-like values are redacted before persistence.
+
+The Dashboard **Agents** page checks whether Codex, Claude Code, Gemini CLI, and OpenCode are usable
+in every Node service's `PATH`. Version checks run in parallel with a short timeout and a 60-second
+Node-side cache. A **ready** result verifies only that the executable starts; it does not test login
+or make a model request. The page identifies common install sources and offers copyable official
+install/update commands, but never runs a package manager automatically.
+
+For Codex, each machine also shows live account rate-limit windows, reset times, plan, available
+credits, and reset count through the CLI's read-only local app-server status RPC. This does not send
+a model request. Claude Code does not expose an equivalent non-interactive quota response, so the
+page reports its authentication state and provides the official interactive `/status` command
+instead of estimating a percentage.
+
+The same command-preset registry powers **Sessions → Create Session** and the read-only preset
+catalog on the Agents page. General session creation stays on the Sessions page. Agents can also
+perform an explicitly requested, bounded, read-only scan of Codex and Claude Code conversation
+history and launch a new session with the CLI's resume command.
 
 ## Remote Node
 

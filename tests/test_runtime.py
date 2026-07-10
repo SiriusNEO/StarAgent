@@ -6,12 +6,15 @@ from types import SimpleNamespace
 from staragent import runtime
 from staragent.runtime import (
     agent_from_worker_command,
+    attention_line,
+    classify_session_status,
     infer_agent,
     infer_session_type,
     should_include_tmux_session,
     tmux_task,
     tmux_worker_shell_command,
 )
+from staragent.transcript import TranscriptState
 
 
 def test_lark_worker_is_staragent_system_session() -> None:
@@ -75,6 +78,18 @@ def test_agent_from_worker_command_detects_common_cli() -> None:
     assert agent_from_worker_command("claude --dangerously-skip-permissions") == "claude"
 
 
+def test_session_status_uses_agent_lifecycle_only() -> None:
+    assert classify_session_status(TranscriptState()) == "idle"
+    assert classify_session_status(TranscriptState(working=True)) == "working"
+    assert classify_session_status(TranscriptState(final=True)) == "review"
+    assert classify_session_status(TranscriptState(working=True), needs_input=True) == "review"
+
+
+def test_attention_prompt_must_be_newer_than_working_marker() -> None:
+    assert attention_line("Proceed?\nWorking") == ""
+    assert attention_line("Working\nDo you want to proceed?") == "Do you want to proceed?"
+
+
 def test_single_session_status_only_inspects_requested_session(monkeypatch) -> None:
     inspected: list[str] = []
     monkeypatch.setattr(
@@ -111,3 +126,70 @@ def test_single_session_status_only_inspects_requested_session(monkeypatch) -> N
     assert status is not None
     assert status.name == "target"
     assert inspected == ["target"]
+
+
+def test_session_navigation_uses_only_bounded_pane_tail_and_skips_git(monkeypatch) -> None:
+    now = int(time.time())
+    monkeypatch.setattr(
+        runtime,
+        "list_tmux_sessions",
+        lambda: [
+            {
+                "name": "dev",
+                "windows": 1,
+                "attached": 0,
+                "activity": now,
+                "managed": "agent",
+                "managed_agent": "codex",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        runtime,
+        "tmux_active_panes",
+        lambda: {
+            "dev": {
+                "current_command": "bash",
+                "current_path": "/repo/project",
+                "pane_pid": 10,
+            }
+        },
+    )
+    monkeypatch.setattr(runtime, "process_children", lambda: {})
+    monkeypatch.setattr(runtime, "load_adoptions", lambda: {})
+    monkeypatch.setattr(
+        runtime,
+        "infer_cli_from_pane",
+        lambda command, pid, process_tree=None: ("codex", 20),
+    )
+    lifecycle_calls: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(
+        runtime,
+        "detect_transcript_lifecycle",
+        lambda text, cli, cli_pid=0: (
+            lifecycle_calls.append((text, cli, cli_pid))
+            or TranscriptState(working=True, lifecycle_id="turn-1")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "capture_tmux_pane",
+        lambda name, lines=80: "Working\nDo you want to proceed?" if lines == 20 else "",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "git_branch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("navigation must not inspect Git")
+        ),
+    )
+
+    statuses = runtime.discover_local_tmux_navigation_statuses()
+
+    assert list(statuses) == ["dev"]
+    assert statuses["dev"].agent == "codex"
+    assert statuses["dev"].repo == "/repo/project"
+    assert statuses["dev"].source == "navigation"
+    assert statuses["dev"].status == "review"
+    assert statuses["dev"].question == "Do you want to proceed?"
+    assert lifecycle_calls == [("Working\nDo you want to proceed?", "codex", 20)]

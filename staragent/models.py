@@ -5,6 +5,33 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+WORKING_SESSION_STATUSES = {"working", "running", "busy"}
+REVIEW_SESSION_STATUSES = {
+    "waiting",
+    "attention",
+    "need-attention",
+    "needs-attention",
+    "review",
+    "done",
+    "completed",
+    "blocked",
+    "error",
+    "failed",
+}
+
+
+def normalize_session_status(value: object, needs_attention: bool = False) -> str:
+    """Collapse current and legacy reports into the three user-facing states."""
+    if needs_attention:
+        return "review"
+    status = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+    if status in WORKING_SESSION_STATUSES:
+        return "working"
+    if status in REVIEW_SESSION_STATUSES:
+        return "review"
+    # Legacy active/attached values only described tmux activity, not agent work.
+    return "idle"
+
 
 @dataclass(frozen=True)
 class SessionConfig:
@@ -25,11 +52,12 @@ class SessionStatus:
     repo: str = ""
     branch: str = ""
     task: str = ""
-    status: str = "unknown"
+    status: str = "idle"
     summary: str = ""
     next_step: str = ""
     needs_attention: bool = False
     question: str = ""
+    status_revision: str = ""
     changed_files: tuple[str, ...] = ()
     test_command: str = ""
     test_result: str = ""
@@ -42,6 +70,7 @@ class SessionStatus:
     def from_dict(cls, data: dict[str, Any]) -> SessionStatus:
         changed_files = data.get("changed_files") or ()
         last_updated = parse_datetime(data.get("last_updated"))
+        status = normalize_session_status(data.get("status"), bool(data.get("needs_attention")))
         return cls(
             name=str(data.get("name") or ""),
             agent=str(data.get("agent") or ""),
@@ -49,11 +78,12 @@ class SessionStatus:
             repo=str(data.get("repo") or ""),
             branch=str(data.get("branch") or ""),
             task=str(data.get("task") or ""),
-            status=str(data.get("status") or "unknown"),
+            status=status,
             summary=str(data.get("summary") or ""),
             next_step=str(data.get("next_step") or ""),
-            needs_attention=bool(data.get("needs_attention")),
+            needs_attention=status == "review",
             question=str(data.get("question") or ""),
+            status_revision=str(data.get("status_revision") or ""),
             changed_files=tuple(str(item) for item in changed_files),
             test_command=str(data.get("test_command") or ""),
             test_result=str(data.get("test_result") or ""),
@@ -118,7 +148,7 @@ class SessionView:
 
     @property
     def status(self) -> str:
-        return self.status_report.status if self.status_report else "missing"
+        return self.status_report.status if self.status_report else "idle"
 
     @property
     def session_type(self) -> str:

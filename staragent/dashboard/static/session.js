@@ -59,6 +59,32 @@ const ensureHighlightAssets = () => {
   return highlightAssetsPromise;
 };
 
+const sessionSwitcher = document.querySelector(".session-switcher");
+if (sessionSwitcher) {
+  const toggle = sessionSwitcher.querySelector(".session-switcher-toggle");
+  const list = sessionSwitcher.querySelector(".session-switcher-list");
+
+  const setOpen = (open) => {
+    sessionSwitcher.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "Hide" : "Browse";
+  };
+
+  toggle.addEventListener("click", () => {
+    setOpen(!sessionSwitcher.classList.contains("is-open"));
+  });
+
+  window.StarAgentAfterPaint(() => {
+    const current = list.querySelector(".session-switcher-item.is-current");
+    if (!current) {
+      return;
+    }
+    const listRect = list.getBoundingClientRect();
+    const itemRect = current.getBoundingClientRect();
+    list.scrollTop += itemRect.top - listRect.top - (list.clientHeight - itemRect.height) / 2;
+  }, 400);
+}
+
 for (const button of document.querySelectorAll(".copy-button")) {
   button.addEventListener("click", async () => {
     const text = button.dataset.copy || "";
@@ -898,6 +924,9 @@ if (chat) {
   let userScrollPinned = false;
   let programmaticScroll = false;
   let lastRenderedChatSignature = "";
+  let acknowledgedFinalKey = "";
+  let pendingFinalKey = "";
+  let acknowledgingFinal = false;
   const longMessageChars = 900;
   const longMessageLines = 14;
 
@@ -1400,6 +1429,48 @@ if (chat) {
     updateUserScrollPin();
   }, {passive: true});
 
+  const finalStateKey = (body) => {
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const latestAgent = [...messages].reverse().find((message) => message.role === "agent");
+    return String(latestAgent?.id || messageFingerprint(body.completed_reply || body.reply || ""));
+  };
+
+  const acknowledgePendingFinal = async () => {
+    if (
+      acknowledgingFinal
+      || document.visibilityState !== "visible"
+      || !pendingFinalKey
+      || pendingFinalKey === acknowledgedFinalKey
+    ) {
+      return;
+    }
+    const key = pendingFinalKey;
+    acknowledgingFinal = true;
+    try {
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/seen`,
+        {method: "POST"},
+      );
+      const body = await response.json().catch(() => ({}));
+      if (response.ok && body.acknowledged) {
+        acknowledgedFinalKey = key;
+        if (pendingFinalKey === key) {
+          pendingFinalKey = "";
+        }
+      }
+    } catch {
+      // The normal transcript poll will retry while this completion remains visible.
+    } finally {
+      acknowledgingFinal = false;
+    }
+  };
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      acknowledgePendingFinal();
+    }
+  });
+
   const applyTranscriptState = (body) => {
     renderTokenUsage(body.token_usage);
     if (Array.isArray(body.messages)) {
@@ -1422,6 +1493,7 @@ if (chat) {
       lastChatSnapshot = [...chatHistory].reverse().find((item) => item.role === "agent")?.text || lastChatSnapshot;
     }
     if (body.working) {
+      pendingFinalKey = "";
       showWorking({
         label: body.working_label || "Working",
         startedAt: Number(body.working_since_ms || 0),
@@ -1433,6 +1505,13 @@ if (chat) {
       );
       chatStatus.textContent = "Agent working";
       return;
+    }
+    if (body.final) {
+      const key = finalStateKey(body);
+      if (key && key !== acknowledgedFinalKey) {
+        pendingFinalKey = key;
+        acknowledgePendingFinal();
+      }
     }
     if (body.final || body.reply || !loadPendingChat()) {
       clearWorking();
