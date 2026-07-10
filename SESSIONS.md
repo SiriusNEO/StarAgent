@@ -26,22 +26,21 @@ The browser only talks to the Hub. The Hub either acts on local tmux directly or
 
 ## Status
 
-Session `status` is a short live snapshot of the tmux session. It is derived from tmux state and recent pane output; it is not a lifecycle record, a Chat status, or a Terminal connection status.
+Session `status` is a short agent-lifecycle snapshot. It is independent from the browser Terminal connection and from whether tmux currently has an attached client.
 
 Status values:
 
-- `attention`: the pane appears to be waiting for user input or a decision. This takes precedence over other statuses.
-- `attached`: tmux reports at least one attached client. The session is considered active.
-- `active`: the session has recent tmux activity, currently within the last 15 minutes.
-- `idle`: the session exists, but has no recent tmux activity.
-- `missing`: StarAgent knows about the session, but no live tmux status is available.
-- `unknown`: fallback when status data is present but cannot be classified.
+- `working`: the current agent turn is still running.
+- `review`: the agent completed a turn that has not been viewed yet, or it needs visible input/approval.
+- `idle`: the agent is ready, has no detectable turn, or its latest completion has already been viewed.
 
-Status precedence is `attention`, then `attached`, then `active` or `idle`. Node connectivity is tracked separately at the node level.
+For Codex and Claude Code, StarAgent reads the newest relevant event from the CLI's native JSONL session data. Claude tool-use messages remain `working`; only a terminal turn event such as `end_turn` completes the turn. The status reader scans backward from the end of the file and stops at the first lifecycle event, so detection cost does not grow with the full conversation history. The recent bottom of the live pane is used only for visible approval/input prompts and as a fallback when native lifecycle data is unavailable.
+
+Status precedence is: visible input prompt, active turn, unseen completed turn, then `idle`. Opening a completed Session marks that completion as seen. A visible input or approval prompt remains `review` until it is answered. Legacy `active` and `attached` reports are treated as `idle` because tmux activity is not evidence that an agent is working. Node connectivity is tracked separately at the Node level.
 
 ## Lifecycle
 
-Create Worker:
+Create Session:
 
 - Starts a new tmux session in a selected working directory.
 - Runs the selected command, for example `codex --yolo`.

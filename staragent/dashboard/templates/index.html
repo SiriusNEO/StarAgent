@@ -14,9 +14,8 @@
         <span class="stat-group-title">Sessions</span>
         <div class="stat-row">
           <div><strong>{{ stats.total }}</strong><span>Total</span></div>
-          <div><strong>{{ stats.agent }}</strong><span>Agent</span></div>
-          <div><strong>{{ stats.system }}</strong><span>System</span></div>
-          <div><strong>{{ stats.active }}</strong><span>Active</span></div>
+          <div><strong>{{ stats.working }}</strong><span>Working</span></div>
+          <div><strong>{{ stats.review }}</strong><span>Review</span></div>
           <div><strong>{{ stats.idle }}</strong><span>Idle</span></div>
         </div>
       </div>
@@ -76,9 +75,9 @@
     </div>
   </section>
 
-  <section class="band deferred-render">
+  <section class="band deferred-render" id="create-session">
     <div class="section-title">
-      <h2>Create Worker</h2>
+      <h2>Create Session</h2>
       <span>tmux new-session</span>
     </div>
     <form class="worker-form">
@@ -115,7 +114,7 @@
           </label>
           <div class="send-actions">
             <span class="worker-status" aria-live="polite"></span>
-            <button type="submit">Start</button>
+            <button type="submit">Create Session</button>
           </div>
         </div>
         <div class="explorer worker-explorer">

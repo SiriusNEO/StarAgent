@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Agents · StarAgent{% endblock %}
+{% block content %}
+  <section class="page-head agents-page-head">
+    <div class="page-title">
+      <h1>Agents</h1>
+      <p>Inspect each coding CLI across machines, review its presets, and find resumable conversations.</p>
+    </div>
+    <div class="agents-overview" aria-label="Agent overview">
+      <div><strong>{{ agent_catalog|length }}</strong><span>CLIs</span></div>
+      <div><strong>{{ node_views|length }}</strong><span>Machines</span></div>
+      <div><strong>{{ agent_presets|length }}</strong><span>Presets</span></div>
+    </div>
+  </section>
+
+  <div class="agent-catalog-data" hidden>
+    {% for tool in agent_catalog %}
+      <span
+        data-name="{{ tool.name }}"
+        data-label="{{ tool.label }}"
+        data-command="{{ tool.command }}"
+      ></span>
+    {% endfor %}
+  </div>
+
+  <section class="band agent-tools-band">
+    <div class="section-title agent-tools-title">
+      <div>
+        <h2>Agent CLIs</h2>
+        <span>Each CLI, with availability across StarAgent service environments</span>
+      </div>
+      <button type="button" class="agent-tools-refresh">Check again</button>
+    </div>
+    <p class="form-hint">Ready means the executable exists and its version command succeeds. Codex usage is read through its local account status RPC without sending a model request; Claude Code currently exposes remaining allocation only through its interactive <code>/status</code> command.</p>
+    <div class="agent-cli-grid">
+      {% for tool in agent_catalog %}
+        <article class="agent-cli-card" data-agent="{{ tool.name }}">
+          <header class="agent-cli-card-head">
+            <div class="agent-cli-identity">
+              <strong>{{ tool.label }}</strong>
+              <code>{{ tool.command }}</code>
+            </div>
+            <a href="{{ tool.docs_url }}" target="_blank" rel="noreferrer">Official docs ↗</a>
+          </header>
+          <div class="agent-cli-summary">Waiting to check {{ node_views|length }} machine{{ '' if node_views|length == 1 else 's' }}…</div>
+          <div class="agent-cli-node-list">
+            {% for node in node_views %}
+              <section class="agent-cli-node-row" data-node="{{ node.name }}">
+                <div class="agent-cli-node-head">
+                  <strong>{{ node.name }}</strong>
+                  <span class="pill node-status-{{ node.status }}">{{ node.status }}</span>
+                </div>
+                <div class="agent-cli-result" aria-live="polite">
+                  <div class="agent-cli-result-head">
+                    <span class="agent-cli-version">Waiting to check…</span>
+                    <span class="pill node-status-optional agent-cli-status">unknown</span>
+                  </div>
+                  <div class="agent-cli-install"></div>
+                  <div class="agent-cli-usage" hidden></div>
+                  <div class="agent-cli-actions"></div>
+                  <div class="agent-cli-meta"></div>
+                  <div class="agent-cli-error" hidden></div>
+                </div>
+              </section>
+            {% else %}
+              <div class="agent-empty">No machines configured.</div>
+            {% endfor %}
+          </div>
+          <footer class="agent-cli-presets">
+            <div class="agent-cli-presets-head">
+              <span>Session presets</span>
+              <a href="/sessions#create-session">Create Session →</a>
+            </div>
+            <div class="agent-cli-preset-list">
+              {% for preset in agent_presets if preset.agent == tool.name %}
+                <div class="agent-cli-preset" data-preset="{{ preset.name }}">
+                  <div>
+                    <strong>{{ preset.label }}</strong>
+                    <code>{{ preset.command }}</code>
+                  </div>
+                  <button type="button" class="copy-button inline-copy" data-copy="{{ preset.command }}">Copy</button>
+                </div>
+              {% else %}
+                <span class="agent-cli-no-presets">No presets configured.</span>
+              {% endfor %}
+            </div>
+          </footer>
+        </article>
+      {% endfor %}
+    </div>
+    <div class="agent-tools-status" aria-live="polite"></div>
+  </section>
+
+  <section class="band agent-history-band deferred-render">
+    <div class="section-title agent-history-title">
+      <div>
+        <h2>Conversation History</h2>
+        <span>Read-only discovery of local Codex and Claude Code histories</span>
+      </div>
+    </div>
+    <form class="agent-history-controls">
+      <label>
+        <span>CLI</span>
+        <select name="agent">
+          <option value="">Codex + Claude Code</option>
+          {% for tool in agent_catalog if tool.history_supported %}
+            <option value="{{ tool.name }}">{{ tool.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Machine</span>
+        <select name="node">
+          {% for node in node_views %}
+            <option value="{{ node.name }}" {{ "selected" if node.name == "local" else "" }}>{{ node.name }} · {{ node.mode }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Limit</span>
+        <select name="limit">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <button type="submit">Scan history</button>
+    </form>
+    <p class="form-hint">Scanning starts only when requested, reads bounded metadata plus a short prompt preview, and never changes the CLI history files. Gemini and OpenCode history adapters are not enabled yet.</p>
+    <div class="agent-history-status" aria-live="polite">Choose a machine, then scan when needed.</div>
+    <div class="agent-history-list"></div>
+  </section>
+
+  <script src="{{ url_for('static', path='agents.js') }}?v={{ static_version('agents.js') }}"></script>
+{% endblock %}

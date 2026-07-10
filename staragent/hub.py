@@ -11,6 +11,18 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+from staragent.agent_history import (
+    HISTORY_AGENTS,
+    agent_history_payload,
+    history_payload_with_node,
+    unavailable_agent_history_payload,
+)
+from staragent.agent_tools import (
+    agent_tools_payload,
+    normalize_agent_tools_payload,
+    payload_with_node,
+    unknown_agent_tools_payload,
+)
 from staragent.auth import node_auth_token
 from staragent.event_log import (
     append_node_event,
@@ -20,8 +32,13 @@ from staragent.event_log import (
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
+from staragent.session_seen import completion_seen, mark_completion_seen
 from staragent.state import atomic_write_json, locked_file
-from staragent.status import collect_session_view, collect_session_views
+from staragent.status import (
+    collect_session_navigation_views,
+    collect_session_view,
+    collect_session_views,
+)
 
 NODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 NODE_MODES = {"lan", "remote"}
@@ -33,6 +50,9 @@ NODE_AUTH_FAILURE_STATUS_CODES = {401, 403}
 NODE_REQUEST_TIMEOUT_SECONDS = 5.0
 NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 2.0
+NODE_AGENT_TOOL_REQUEST_TIMEOUT_SECONDS = 5.0
+NODE_AGENT_TOOL_HUB_CACHE_SECONDS = 90.0
+NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS = 8.0
 
 
 @dataclass(frozen=True)
@@ -55,8 +75,32 @@ class HubSession:
     def key(self) -> str:
         return f"{self.node_id}/{self.view.name}"
 
+    @property
+    def status(self) -> str:
+        report = self.view.status_report
+        if (
+            report
+            and report.status == "review"
+            and not report.question
+            and completion_seen(self.node_id, self.view.name, report.status_revision)
+        ):
+            return "idle"
+        return self.view.status
+
+    @property
+    def needs_attention(self) -> bool:
+        return self.status == "review"
+
     def __getattr__(self, name: str):
         return getattr(self.view, name)
+
+
+def mark_hub_session_seen(session: HubSession) -> bool:
+    report = session.view.status_report
+    if report and report.status_revision and not report.question:
+        mark_completion_seen(session.node_id, session.view.name, report.status_revision)
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -99,9 +143,17 @@ class NodeHeartbeat:
     last_error: str = ""
 
 
+@dataclass
+class NodeAgentToolsCache:
+    endpoint: str
+    payload: dict[str, object]
+    cached_at: float
+
+
 NODE_HEARTBEATS: dict[str, NodeHeartbeat] = {}
 NODE_REPORTED_STATES: dict[str, tuple[str, str]] = {}
 NODE_LOG_SYNC_ERRORS: dict[str, str] = {}
+NODE_AGENT_TOOLS: dict[str, NodeAgentToolsCache] = {}
 NODE_HEARTBEATS_LOCK = threading.Lock()
 
 
@@ -214,6 +266,8 @@ def remove_node(name: str) -> None:
     with locked_file(NODES_PATH):
         nodes = [node for node in _persisted_nodes_unlocked() if node.name != name]
         _save_nodes_unlocked(sorted(nodes, key=lambda node: node.name))
+    with NODE_HEARTBEATS_LOCK:
+        NODE_AGENT_TOOLS.pop(name, None)
 
 
 def env_node_entries() -> list[NodeEntry]:
@@ -258,6 +312,29 @@ def collect_node_views(prefer_cached: bool = False) -> list[NodeView]:
             )
         )
     return sorted(nodes, key=lambda item: item.name)
+
+
+def collect_session_navigation_nodes() -> list[NodeView]:
+    """Build the session switcher without remote I/O or expensive local pane parsing."""
+    nodes = []
+    for entry in load_nodes():
+        if entry.is_local:
+            sessions = tuple(
+                HubSession(node_id=entry.name, view=view)
+                for view in collect_session_navigation_views()
+            )
+            nodes.append(NodeView(entry=entry, status="connected", sessions=sessions))
+            continue
+        cached = cached_remote_node_view(entry)
+        nodes.append(
+            cached
+            or NodeView(
+                entry=entry,
+                status="disconnected",
+                error="Waiting for the first Node heartbeat.",
+            )
+        )
+    return sorted(nodes, key=lambda item: (not item.entry.is_local, item.name))
 
 
 def refresh_remote_node_heartbeats() -> None:
@@ -320,6 +397,16 @@ def collect_node_session(node: NodeEntry, name: str) -> HubSession | None:
 def remote_sessions(node: NodeEntry) -> list[HubSession]:
     payload = request_json(node, "GET", "/api/sessions", timeout=remote_node_status_timeout())
     capabilities = payload.get("capabilities")
+    reported_agent_tools = payload.get("agent_tools")
+    if isinstance(reported_agent_tools, dict):
+        remember_node_agent_tools(node, reported_agent_tools)
+    elif not (isinstance(capabilities, dict) and capabilities.get("agent_tools")):
+        remember_node_agent_tools(
+            node,
+            unknown_agent_tools_payload(
+                "Node update required before agent CLI detection is available."
+            ),
+        )
     if isinstance(capabilities, dict) and capabilities.get("logs"):
         try:
             sync_remote_node_logs(node)
@@ -427,6 +514,135 @@ def clear_node_heartbeat_cache() -> None:
         NODE_HEARTBEATS.clear()
         NODE_REPORTED_STATES.clear()
         NODE_LOG_SYNC_ERRORS.clear()
+        NODE_AGENT_TOOLS.clear()
+
+
+def node_agent_tools_payload(node: NodeEntry, *, refresh: bool = False) -> dict[str, object]:
+    if node.is_local:
+        return payload_with_node(
+            agent_tools_payload(force=refresh),
+            node.name,
+        )
+    cached = cached_node_agent_tools(node)
+    if cached and not refresh and not cached.get("stale"):
+        return cached
+    path = f"/api/agent-tools?{urllib.parse.urlencode({'refresh': str(refresh).lower()})}"
+    try:
+        payload = request_json(
+            node,
+            "GET",
+            path,
+            timeout=NODE_AGENT_TOOL_REQUEST_TIMEOUT_SECONDS,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code in {404, 405}:
+            return payload_with_node(
+                unknown_agent_tools_payload(
+                    "Node update required before agent CLI detection is available."
+                ),
+                node.name,
+            )
+        return stale_or_unknown_node_agent_tools(node, cached, str(exc))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return stale_or_unknown_node_agent_tools(node, cached, str(exc))
+    remember_node_agent_tools(node, payload)
+    return payload_with_node(payload, node.name)
+
+
+def node_agent_history_payload(
+    node: NodeEntry,
+    *,
+    agent: str = "",
+    limit: int = 50,
+    refresh: bool = False,
+) -> dict[str, object]:
+    normalized_agent = str(agent or "").strip().lower()
+    if normalized_agent and normalized_agent not in HISTORY_AGENTS:
+        raise ValueError(f"History scanning is not supported for: {normalized_agent}")
+    bounded_limit = max(1, min(int(limit), 100))
+    if node.is_local:
+        return history_payload_with_node(
+            agent_history_payload(
+                agent=normalized_agent,
+                limit=bounded_limit,
+                force=refresh,
+            ),
+            node.name,
+        )
+    path = "/api/agent-history?" + urllib.parse.urlencode(
+        {
+            "agent": normalized_agent,
+            "limit": bounded_limit,
+            "refresh": str(refresh).lower(),
+        }
+    )
+    try:
+        payload = request_json(
+            node,
+            "GET",
+            path,
+            timeout=NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS,
+        )
+    except urllib.error.HTTPError as exc:
+        error = (
+            "Node update required before conversation history scanning is available."
+            if exc.code in {404, 405}
+            else f"History scan failed: {exc}"
+        )
+        return history_payload_with_node(unavailable_agent_history_payload(error), node.name)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        return history_payload_with_node(
+            unavailable_agent_history_payload(f"Node is unavailable: {exc}"),
+            node.name,
+        )
+    return history_payload_with_node(payload, node.name)
+
+
+def remember_node_agent_tools(node: NodeEntry, payload: object) -> None:
+    normalized = normalize_agent_tools_payload(payload)
+    with NODE_HEARTBEATS_LOCK:
+        NODE_AGENT_TOOLS[node.name] = NodeAgentToolsCache(
+            endpoint=node_endpoint(node),
+            payload=normalized,
+            cached_at=time.monotonic(),
+        )
+
+
+def cached_node_agent_tools(node: NodeEntry) -> dict[str, object] | None:
+    with NODE_HEARTBEATS_LOCK:
+        cached = NODE_AGENT_TOOLS.get(node.name)
+        if cached is None or cached.endpoint != node_endpoint(node):
+            return None
+        age = max(0.0, time.monotonic() - cached.cached_at)
+        heartbeat = NODE_HEARTBEATS.get(node.name)
+        connection_stale = bool(
+            heartbeat
+            and (
+                heartbeat.failures
+                or heartbeat.last_success <= 0
+                or not node_heartbeat_is_fresh(heartbeat)
+            )
+        )
+        payload = dict(cached.payload)
+    return payload_with_node(
+        payload,
+        node.name,
+        stale=connection_stale or age > NODE_AGENT_TOOL_HUB_CACHE_SECONDS,
+    )
+
+
+def stale_or_unknown_node_agent_tools(
+    node: NodeEntry,
+    cached: dict[str, object] | None,
+    error: str,
+) -> dict[str, object]:
+    if cached:
+        return payload_with_node(cached, node.name, stale=True, error=error)
+    return payload_with_node(
+        unknown_agent_tools_payload(f"Node is unavailable: {error}", stale=True),
+        node.name,
+        stale=True,
+    )
 
 
 def report_node_connection_state(node: NodeEntry, status: str, error: str = "") -> None:
@@ -439,7 +655,9 @@ def report_node_connection_state(node: NodeEntry, status: str, error: str = "") 
         NODE_REPORTED_STATES[node.name] = current
     previous_status = previous[1] if previous and previous[0] == endpoint else ""
     if status == "connected":
-        event = "node.recovered" if previous_status in {"stale", "disconnected"} else "node.connected"
+        event = (
+            "node.recovered" if previous_status in {"stale", "disconnected"} else "node.connected"
+        )
         message = (
             "Node connection recovered."
             if event == "node.recovered"

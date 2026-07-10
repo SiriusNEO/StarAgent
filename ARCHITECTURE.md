@@ -23,6 +23,7 @@ A Remote Node is a machine that runs tmux sessions for coding work.
 - Runs `staragent node --host 127.0.0.1 --port 8081`.
 - Is usually supervised by a tmux system session named `staragent-node`.
 - Exposes local tmux operations through HTTP and WebSocket APIs.
+- Exposes cached Codex, Claude Code, Gemini CLI, and OpenCode executable checks to the Hub.
 - Requires `STARAGENT_NODE_TOKEN` or `STARAGENT_AUTH_TOKEN` for all non-health APIs.
 - Does not own dashboard state; it reports live local tmux state to the Hub.
 
@@ -36,6 +37,10 @@ StarAgent has two kinds of sessions:
 - `system` sessions: infrastructure sessions, such as `staragent-hub`, `staragent-node`, and `staragent-tailscaled`.
 
 Agent sessions can be created from the Dashboard or adopted from existing tmux sessions. System sessions are visible for observability but are read-only from Chat.
+
+The Agents page is the inventory and maintenance control plane for coding CLIs. A single preset
+registry feeds both its read-only catalog and **Sessions → Create Session**. General session creation
+remains on the Sessions page.
 
 ## Data Flow
 
@@ -68,6 +73,10 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/health`
 - `GET /api/sessions`
 - `GET /api/logs` (Remote Node outbox on Nodes; centralized archive query on the Hub)
+- `GET /api/agent-tools` (Remote Node executable probe)
+- `GET /api/nodes/{node}/agent-tools` (Hub view of a local or remote Node probe)
+- `GET /api/agent-history` (bounded, read-only Remote Node history scan)
+- `GET /api/nodes/{node}/agent-history` (Hub proxy for an explicitly requested scan)
 - `POST /api/workers`
 - `POST /api/adopt`
 - `DELETE /api/sessions/{name}`
@@ -82,7 +91,9 @@ The Hub adds node management and browser authentication.
 
 Terminal is a live tmux PTY view. It is the ground truth display and accepts direct keyboard input.
 
-Chat is a structured view derived from the tmux transcript. StarAgent parses the captured pane output with CLI-specific transcript parsers, then maps user and agent turns into the chat UI. Chat sends input through tmux, so messages also appear in the real terminal.
+Chat is a structured view derived from each CLI's native transcript, with captured pane output as a fallback. StarAgent maps user and agent turns into the chat UI. Chat sends input through tmux, so messages also appear in the real terminal.
+
+Session status uses the same agent-native lifecycle principle but a cheaper path: Codex and Claude JSONL files are scanned backward only until the newest user or completed-turn event. The Dashboard exposes only `idle`, `working`, and `review`; terminal attachment and tmux activity age do not affect these states. A completed turn remains `review` until its Session is viewed, while visible approval/input prompts remain actionable.
 
 ## Files
 
@@ -92,6 +103,16 @@ File browsing and preview are served from the machine that owns the session:
 - Remote session: Hub proxies file APIs to the Remote Node.
 
 Changed Files are derived from the session workspace Git status.
+
+CLI inventory probes execute version commands and disable nonessential updater traffic. They cache
+results on the Node and expose suggested update commands without executing them. The same cached
+probe uses Codex's local read-only `account/rateLimits/read` app-server method for quota windows and
+Claude Code's non-billable `auth status --json` for authentication metadata; Claude remaining usage
+is intentionally left to its interactive `/status` command. All remote payloads are normalized to an
+allowlisted shape before display. Conversation history scanning is manual, reads only fixed
+Codex/Claude history locations, bounds both file count and bytes read, and returns an allowlisted
+metadata shape with a short prompt preview. It never modifies source history files or returns their
+paths.
 
 ## Logging and Supervision
 

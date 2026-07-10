@@ -11,6 +11,8 @@ from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.agent_history import agent_history_payload
+from staragent.agent_tools import agent_tools_payload
 from staragent.auth import node_auth_token
 from staragent.event_log import append_node_outbox_event, node_outbox_payload
 from staragent.files import (
@@ -80,12 +82,29 @@ def create_app() -> FastAPI:
     def sessions() -> dict[str, object]:
         return {
             "sessions": [session_payload(view) for view in collect_session_views()],
-            "capabilities": {"logs": 1},
+            "capabilities": {
+                "logs": 1,
+                "agent_tools": 2,
+                "agent_usage": 1,
+                "agent_history": 1,
+                "session_status": 2,
+            },
         }
 
     @app.get("/api/logs")
     def logs(after: str = "", limit: int = 250) -> dict[str, object]:
         return node_outbox_payload(after=after, limit=limit)
+
+    @app.get("/api/agent-tools")
+    def agent_tools(refresh: bool = False) -> dict[str, object]:
+        return agent_tools_payload(force=refresh)
+
+    @app.get("/api/agent-history")
+    def agent_history(agent: str = "", limit: int = 50, refresh: bool = False) -> dict[str, object]:
+        try:
+            return agent_history_payload(agent=agent, limit=limit, force=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/sessions/{name}")
     def session(name: str) -> dict[str, object]:
@@ -294,6 +313,7 @@ def session_payload(view) -> dict[str, object]:
         "summary": view.status_report.summary if view.status_report else "",
         "needs_attention": view.needs_attention,
         "question": view.status_report.question if view.status_report else "",
+        "status_revision": view.status_report.status_revision if view.status_report else "",
         "source": view.status_report.source if view.status_report else "tmux",
         "last_updated": view.last_updated.isoformat() if view.last_updated else None,
     }

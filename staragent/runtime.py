@@ -6,19 +6,32 @@ import shlex
 import socket
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
-from staragent.adopt import adopted_session, infer_cli_from_pane, process_children
+from staragent.adopt import adopted_session, infer_cli_from_pane, load_adoptions, process_children
 from staragent.models import SessionStatus
 from staragent.text import strip_ansi
+from staragent.transcript import (
+    WORKING_STATUS_PATTERN,
+    TranscriptState,
+    detect_transcript_lifecycle,
+)
 
 ATTENTION_PATTERNS = (
-    re.compile(r"\b(continue|proceed)\?", re.IGNORECASE),
-    re.compile(r"\b(y/n|yes/no)\b", re.IGNORECASE),
+    re.compile(r"\b(continue|proceed|allow)\?\s*$", re.IGNORECASE),
+    re.compile(
+        r"(?:\(|\[)\s*y(?:es)?\s*/\s*n(?:o)?\s*(?:\)|\])",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:do|would) you (?:want|like) to (?:continue|proceed|allow|run)", re.IGNORECASE
+    ),
+    re.compile(r"press (?:enter|return) to continue", re.IGNORECASE),
     re.compile(r"needs? (input|attention|decision)", re.IGNORECASE),
     re.compile(r"what do you want to do", re.IGNORECASE),
-    re.compile(r"是否|需要.*决策|请选择"),
+    re.compile(r"是否(?:继续|允许|执行)|需要.*决策|请选择"),
 )
 
 SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -50,6 +63,7 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
     node = socket.gethostname()
     statuses: dict[str, SessionStatus] = {}
     panes = tmux_active_panes()
+    pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], lines)
     process_tree = process_children()
     git_cache: dict[str, tuple[str, list[str]]] = {}
     for session in sessions:
@@ -59,11 +73,79 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
             lines=lines,
             node=node,
             pane=panes.get(name),
+            output=pane_outputs.get(name, ""),
             process_tree=process_tree,
             git_cache=git_cache,
         )
         if status:
             statuses[status.name] = status
+    return statuses
+
+
+def discover_local_tmux_navigation_statuses() -> dict[str, SessionStatus]:
+    """Collect sidebar metadata with a bounded pane tail and no full transcript or Git calls."""
+    sessions = list_tmux_sessions()
+    if not sessions:
+        return {}
+    node = socket.gethostname()
+    panes = tmux_active_panes()
+    pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], 20)
+    process_tree = process_children()
+    adoptions = load_adoptions()
+    statuses: dict[str, SessionStatus] = {}
+    for session in sessions:
+        name = str(session["name"])
+        pane = panes.get(name, {})
+        current_command = str(pane.get("current_command") or "")
+        pane_pid = int(pane.get("pane_pid") or 0)
+        detected_cli, cli_pid = infer_cli_from_pane(
+            current_command,
+            pane_pid,
+            process_tree=process_tree,
+        )
+        adopted = adoptions.get(name)
+        managed_agent = str(session.get("managed_agent") or "")
+        managed_session = str(session.get("managed") or "") == "agent"
+        if not should_include_tmux_session(
+            name,
+            current_command=current_command,
+            detected_cli=detected_cli,
+            managed_session=managed_session,
+            adopted=adopted,
+        ):
+            continue
+        updated = datetime.fromtimestamp(int(session["activity"]), tz=UTC).astimezone()
+        current_path = (
+            adopted.cwd if adopted and adopted.cwd else str(pane.get("current_path") or "")
+        )
+        output = pane_outputs.get(name, "")
+        agent = (
+            adopted.cli
+            if adopted and adopted.cli
+            else infer_agent(name, current_command, detected_cli, managed_agent)
+        )
+        session_type = infer_session_type(name, "", current_command)
+        question = attention_line(output)
+        lifecycle = detect_transcript_lifecycle(output, agent, cli_pid=cli_pid)
+        status = classify_session_status(lifecycle, needs_input=bool(question))
+        statuses[name] = SessionStatus.from_dict(
+            {
+                "name": name,
+                "agent": agent,
+                "node": node,
+                "repo": current_path,
+                "task": f"Adopted {adopted.cli} tmux session"
+                if adopted
+                else tmux_task(session, pane),
+                "status": status,
+                "needs_attention": status == "review",
+                "question": question,
+                "status_revision": lifecycle.lifecycle_id if lifecycle.final else "",
+                "source": "navigation",
+                "session_type": session_type,
+                "last_updated": updated.isoformat(),
+            }
+        )
     return statuses
 
 
@@ -82,16 +164,17 @@ def local_tmux_status(
     lines: int = 80,
     node: str = "",
     pane: dict[str, str | int] | None = None,
+    output: str | None = None,
     process_tree: dict[int, list[tuple[int, str]]] | None = None,
     git_cache: dict[str, tuple[str, list[str]]] | None = None,
 ) -> SessionStatus | None:
     name = str(session["name"])
     pane = pane or tmux_active_pane(name)
-    output = capture_tmux_pane(name, lines=lines)
+    output = capture_tmux_pane(name, lines=lines) if output is None else output
     current_command = str(pane.get("current_command") or "")
     adopted = adopted_session(name)
     pane_pid = int(pane.get("pane_pid") or 0)
-    detected_cli, _ = (
+    detected_cli, cli_pid = (
         infer_cli_from_pane(current_command, pane_pid)
         if process_tree is None
         else infer_cli_from_pane(current_command, pane_pid, process_tree=process_tree)
@@ -107,8 +190,18 @@ def local_tmux_status(
     ):
         return None
     session_type = infer_session_type(name, output, current_command)
-    needs_attention = looks_like_attention(output)
-    status = classify_tmux_status(session, needs_attention)
+    agent = (
+        adopted.cli
+        if adopted and adopted.cli
+        else infer_agent(name, current_command, detected_cli, managed_agent)
+    )
+    question = attention_line(output)
+    lifecycle = detect_transcript_lifecycle(output, agent, cli_pid=cli_pid)
+    status = classify_session_status(
+        lifecycle,
+        needs_input=bool(question),
+    )
+    needs_attention = status == "review"
     updated = datetime.fromtimestamp(int(session["activity"]), tz=UTC).astimezone()
     current_path = adopted.cwd if adopted and adopted.cwd else str(pane.get("current_path") or "")
     if git_cache is not None and current_path in git_cache:
@@ -121,9 +214,7 @@ def local_tmux_status(
     return SessionStatus.from_dict(
         {
             "name": name,
-            "agent": adopted.cli
-            if adopted and adopted.cli
-            else infer_agent(name, current_command, detected_cli, managed_agent),
+            "agent": agent,
             "node": node or socket.gethostname(),
             "repo": current_path,
             "branch": branch,
@@ -132,7 +223,8 @@ def local_tmux_status(
             "summary": tmux_summary(session, pane, output),
             "next_step": "",
             "needs_attention": needs_attention,
-            "question": attention_line(output) if needs_attention else "",
+            "question": question,
+            "status_revision": lifecycle.lifecycle_id if lifecycle.final else "",
             "changed_files": changed_files,
             "recent_output": output,
             "source": "adopted" if adopted else "tmux",
@@ -187,6 +279,15 @@ def capture_tmux_pane(session: str, lines: int = 80) -> str:
     if result.returncode != 0:
         return ""
     return strip_ansi(result.stdout).strip()
+
+
+def capture_tmux_pane_tails(sessions: list[str], lines: int = 20) -> dict[str, str]:
+    if not sessions:
+        return {}
+    workers = min(len(sessions), 8)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        outputs = executor.map(lambda session: capture_tmux_pane(session, lines), sessions)
+        return dict(zip(sessions, outputs, strict=True))
 
 
 def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
@@ -483,15 +584,16 @@ def tmux_active_pane(session: str) -> dict[str, str | int]:
     }
 
 
-def classify_tmux_status(session: dict[str, int | str], needs_attention: bool) -> str:
-    if needs_attention:
-        return "attention"
-    if int(session["attached"]):
-        return "attached"
-    activity = datetime.fromtimestamp(int(session["activity"]), tz=UTC)
-    age = datetime.now(UTC) - activity
-    if age.total_seconds() < 15 * 60:
-        return "active"
+def classify_session_status(
+    lifecycle: TranscriptState,
+    needs_input: bool = False,
+) -> str:
+    if needs_input:
+        return "review"
+    if lifecycle.working:
+        return "working"
+    if lifecycle.final:
+        return "review"
     return "idle"
 
 
@@ -608,15 +710,21 @@ def git_changed_files(path: str) -> list[str]:
 
 
 def looks_like_attention(output: str) -> bool:
-    tail = "\n".join(output.splitlines()[-20:])
-    return any(pattern.search(tail) for pattern in ATTENTION_PATTERNS)
+    return bool(attention_line(output))
 
 
 def attention_line(output: str) -> str:
-    for line in reversed(output.splitlines()[-20:]):
+    lines = [line for line in output.splitlines()[-20:] if line.strip()]
+    attention_index = -1
+    question = ""
+    working_index = -1
+    for index, line in enumerate(lines):
+        if WORKING_STATUS_PATTERN.search(line):
+            working_index = index
         if any(pattern.search(line) for pattern in ATTENTION_PATTERNS):
-            return line.strip()
-    return ""
+            attention_index = index
+            question = line.strip()
+    return question if attention_index > working_index else ""
 
 
 def safe_int(value: str) -> int:

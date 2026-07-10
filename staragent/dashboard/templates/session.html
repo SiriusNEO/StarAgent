@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ view.name }} · StarAgent{% endblock %}
+{% block shell_class %}session-shell{% endblock %}
 {% block head_extra %}
   <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}?v={{ static_version('vendor/xterm/xterm.css') }}">
@@ -13,9 +14,56 @@
     data-highlight-js="{{ url_for('static', path='vendor/highlight.js/highlight.min.js') }}?v={{ static_version('vendor/highlight.js/highlight.min.js') }}"
     hidden
   ></div>
+  <div class="session-detail-layout">
+    <aside class="session-switcher" aria-label="Session switcher">
+      <div class="session-switcher-head">
+        <a href="/sessions">
+          <strong>Sessions</strong>
+          <span>{{ sidebar_session_count }} total</span>
+        </a>
+        <button
+          type="button"
+          class="session-switcher-toggle"
+          aria-expanded="false"
+          aria-controls="session-switcher-body"
+        >Browse</button>
+      </div>
+      <div class="session-switcher-body" id="session-switcher-body">
+        <nav class="session-switcher-list" aria-label="Available sessions">
+          {% for node in sidebar_nodes %}
+            {% if node.sessions %}
+              <section class="session-switcher-group" data-node="{{ node.name }}">
+                <div class="session-switcher-group-head">
+                  <strong>{{ node.name }}</strong>
+                  <span class="pill node-status-{{ node.status }}">{{ node.status }}</span>
+                </div>
+                <div class="session-switcher-items">
+                  {% for item in node.sessions|sort(attribute='name') %}
+                    <a
+                      class="session-switcher-item{{ ' is-current' if item.node_id == view.node_id and item.name == view.name else '' }}"
+                      href="/nodes/{{ item.node_id }}/sessions/{{ item.name }}"
+                      {% if item.node_id == view.node_id and item.name == view.name %}aria-current="page"{% endif %}
+                    >
+                      <span class="session-switcher-item-copy">
+                        <strong>{{ item.name }}</strong>
+                        <span>{{ item.agent if item.session_type == 'agent' else item.session_type }} · {{ relative_time(item.last_updated) }}</span>
+                      </span>
+                      <span class="session-switcher-state pill status-{{ item.status }}">{{ item.status }}</span>
+                    </a>
+                  {% endfor %}
+                </div>
+              </section>
+            {% endif %}
+          {% endfor %}
+          {% if not sidebar_session_count %}
+            <p class="session-switcher-empty">No sessions available.</p>
+          {% endif %}
+        </nav>
+      </div>
+    </aside>
+    <div class="session-detail-main">
   <section class="page-head">
     <div>
-      <a class="back" href="/sessions">← Sessions</a>
       <h1>{{ view.name }}</h1>
       <p>{{ view.node_id }} · {{ view.task }}</p>
     </div>
@@ -208,5 +256,7 @@
       <p class="empty">No status report found for this session.</p>
     </section>
   {% endif %}
+    </div>
+  </div>
   <script src="{{ url_for('static', path='session.js') }}?v={{ static_version('session.js') }}"></script>
 {% endblock %}
