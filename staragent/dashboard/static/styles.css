@@ -1901,11 +1901,8 @@ dd {
   min-height: 0;
 }
 
-.workspace-band .session-explorer {
-  height: 560px;
-}
-
 .workspace-band .explorer {
+  height: 100%;
   margin-bottom: 0;
   min-height: 0;
 }
@@ -1917,7 +1914,6 @@ dd {
 
 .changed-panel {
   grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
 }
 
 .changed-panel .explorer-list {
@@ -3254,6 +3250,13 @@ dd {
 }
 
 @media (max-width: 820px) {
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+  }
+
   .topbar,
   .shell {
     padding-left: 16px;
@@ -3317,14 +3320,6 @@ dd {
     grid-template-rows: 520px 300px;
     height: auto;
     min-height: 0;
-  }
-
-  .workspace-band .explorer {
-    height: 520px;
-  }
-
-  .changed-panel {
-    height: 300px;
   }
 
   .preview-panel {
@@ -3485,10 +3480,6 @@ dd {
 
   .workspace-sidebar {
     grid-template-rows: 420px 260px;
-  }
-
-  .changed-panel {
-    height: 260px;
   }
 
   .preview-panel {
