@@ -40,6 +40,13 @@ from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
 from staragent.dependencies import dependencies_status, ensure_dependencies
+from staragent.event_log import (
+    append_hub_event,
+    append_node_event,
+    archived_node_names,
+    read_hub_events,
+    read_node_events,
+)
 from staragent.files import (
     create_directory_payload,
     directory_listing,
@@ -55,6 +62,7 @@ from staragent.hub import (
     collect_node_session,
     collect_node_view,
     collect_node_views,
+    load_nodes,
     node_by_name,
     refresh_remote_node_heartbeats,
     remove_node,
@@ -192,6 +200,14 @@ TRUE_VALUES = {"1", "true", "yes"}
 
 @contextlib.asynccontextmanager
 async def dashboard_lifespan(app: FastAPI):
+    with contextlib.suppress(OSError):
+        append_hub_event(
+            "info",
+            "hub.started",
+            "Hub application started.",
+            source="hub.runtime",
+            details={"pid": os.getpid()},
+        )
     app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
     app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
     try:
@@ -207,6 +223,14 @@ async def dashboard_lifespan(app: FastAPI):
             terminal = http_terminals.pop(terminal_id, None)
             if terminal:
                 await close_http_terminal(terminal)
+        with contextlib.suppress(OSError):
+            append_hub_event(
+                "info",
+                "hub.stopped",
+                "Hub application stopped gracefully.",
+                source="hub.runtime",
+                details={"pid": os.getpid()},
+            )
 
 
 def create_app() -> FastAPI:
@@ -220,6 +244,7 @@ def create_app() -> FastAPI:
     register_terminal_routes(app)
     register_sessions_routes(app)
     register_nodes_routes(app)
+    register_logs_routes(app)
     register_lark_routes(app)
     register_workspace_routes(app)
     return app
@@ -399,6 +424,14 @@ def register_pages_routes(app: FastAPI) -> None:
             request,
             "lark.html",
             {"lark": lark_status_payload()},
+        )
+
+    @app.get("/logs", response_class=HTMLResponse)
+    def logs_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "logs.html",
+            {"log_sources": log_source_payloads()},
         )
 
     @app.get("/sessions/{name}", response_class=HTMLResponse)
@@ -622,6 +655,14 @@ def register_nodes_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        append_node_event(
+            node.name,
+            "info",
+            "session.created",
+            f"Session {worker.name} was created.",
+            source="hub.api",
+            details={"session": worker.name, "cwd": worker.cwd},
+        )
         return {"status": "created", "name": worker.name}
 
     @app.get("/api/adoptable-sessions")
@@ -646,6 +687,14 @@ def register_nodes_routes(app: FastAPI) -> None:
             adopted = adopt_existing_session(payload.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_node_event(
+            node.name,
+            "info",
+            "session.adopted",
+            f"Session {payload.name} was adopted.",
+            source="hub.api",
+            details={"session": payload.name},
+        )
         return {"status": "adopted", "session": adopted.as_dict()}
 
     @app.delete("/api/sessions/{name}", deprecated=True)
@@ -666,6 +715,14 @@ def register_nodes_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        append_node_event(
+            node.name,
+            "info",
+            "session.stopped",
+            f"Session {name} was stopped.",
+            source="hub.api",
+            details={"session": name},
+        )
         return {"status": "stopped", "name": name}
 
     @app.post("/api/nodes")
@@ -674,6 +731,13 @@ def register_nodes_routes(app: FastAPI) -> None:
             node = add_node(payload.name, payload.url, payload.mode)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_hub_event(
+            "info",
+            "node.added",
+            f"Node {node.name} was added.",
+            source="hub.api",
+            details={"node": node.name, "endpoint": node.url or "local", "mode": node.mode},
+        )
         return {"status": "created", "name": node.name, "url": node.url or "local"}
 
     @app.get("/api/nodes")
@@ -683,6 +747,29 @@ def register_nodes_routes(app: FastAPI) -> None:
     @app.get("/api/tailscale/hub")
     def tailscale_hub_status() -> dict[str, object]:
         return tailscale_hub_payload()
+
+
+def register_logs_routes(app: FastAPI) -> None:
+    @app.get("/api/logs")
+    def logs(
+        source: str = "hub", level: str = "", q: str = "", limit: int = 200
+    ) -> dict[str, object]:
+        sources = log_source_payloads()
+        selected = next((item for item in sources if item["id"] == source), None)
+        if selected is None:
+            raise HTTPException(status_code=404, detail=f"log source not found: {source}")
+        events = (
+            read_hub_events(limit=limit, level=level, query=q)
+            if selected["kind"] == "hub"
+            else read_node_events(str(selected["name"]), limit=limit, level=level, query=q)
+        )
+        return {
+            "source": source,
+            "sources": sources,
+            "events": events,
+            "latest_id": str(events[0].get("id") or "") if events else "",
+            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        }
 
 
 def register_lark_routes(app: FastAPI) -> None:
@@ -787,6 +874,13 @@ def register_workspace_routes(app: FastAPI) -> None:
             remove_node(node_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_hub_event(
+            "info",
+            "node.removed",
+            f"Node {node_id} was removed.",
+            source="hub.api",
+            details={"node": node_id},
+        )
         return {"status": "removed", "name": node_id}
 
     @app.get("/api/directories")
@@ -1463,6 +1557,24 @@ def node_payload(node) -> dict[str, object]:
             for session in node.sessions
         ],
     }
+
+
+def log_source_payloads() -> list[dict[str, str]]:
+    active_nodes = {node.name: node for node in load_nodes()}
+    node_names = sorted({*active_nodes, *archived_node_names()})
+    sources = [{"id": "hub", "name": "hub", "label": "Hub", "kind": "hub"}]
+    for name in node_names:
+        node = active_nodes.get(name)
+        suffix = " · archived" if node is None else ""
+        sources.append(
+            {
+                "id": f"node:{name}",
+                "name": name,
+                "label": f"{name}{suffix}",
+                "kind": "node",
+            }
+        )
+    return sources
 
 
 def lark_status_payload() -> dict[str, object]:

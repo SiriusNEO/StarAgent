@@ -61,6 +61,12 @@ staragent hub --host 0.0.0.0 --port 8080
 Hub 认证信息会保存在 `<staragent-source>/.staragent/auth_token`；如果你希望自己指定 token，可以在启动 Hub 前设置 `STARAGENT_AUTH_TOKEN`。
 运行状态默认保存在 `<staragent-source>/.staragent`；如果需要覆盖，可以设置 `STARAGENT_STATE_DIR`。
 
+Dashboard 的 **Logs** 页面会在 Hub 上集中保存 Hub 与各个 Node 的服务事件。
+归档文件按来源分别轮转存放在 `.staragent/logs/`（`hub.jsonl` 与
+`nodes/<node>.jsonl`）；远端 Node 只保留一个有大小上限的待同步 outbox，由 Hub 在心跳刷新时增量拉取。
+Hub 与 Node 服务都由轻量守护进程运行，因此意外退出时会留下退出码、运行时长、进程输出和自动重启事件。
+普通 HTTP 访问 URL 不会进入日志，疑似 token 的敏感值也会在落盘前脱敏。
+
 ## Remote Node
 
 在每台需要运行 agent session 的机器上执行：

@@ -5,6 +5,7 @@ import subprocess
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from typer.testing import CliRunner
 
 from staragent import __version__, hub
@@ -12,6 +13,11 @@ from staragent import main as staragent_main
 from staragent.hub import NodeEntry, normalize_node_url
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def isolate_hub_test_state(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path / "state"))
 
 
 def remote_node(name: str = "worker") -> NodeEntry:

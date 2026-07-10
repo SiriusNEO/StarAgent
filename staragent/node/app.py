@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -10,6 +12,7 @@ from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.auth import node_auth_token
+from staragent.event_log import append_node_outbox_event, node_outbox_payload
 from staragent.files import (
     create_directory_payload,
     directory_listing,
@@ -32,8 +35,29 @@ from staragent.status import collect_session_view, collect_session_views
 from staragent.web_terminal import stream_pty_to_websocket
 
 
+@contextlib.asynccontextmanager
+async def node_lifespan(_app: FastAPI):
+    append_node_outbox_event(
+        "info",
+        "node.started",
+        "Node API started.",
+        source="node.runtime",
+        details={"pid": os.getpid(), "cwd": str(Path.cwd())},
+    )
+    try:
+        yield
+    finally:
+        append_node_outbox_event(
+            "info",
+            "node.stopped",
+            "Node API stopped gracefully.",
+            source="node.runtime",
+            details={"pid": os.getpid()},
+        )
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="StarAgent Node")
+    app = FastAPI(title="StarAgent Node", lifespan=node_lifespan)
 
     @app.middleware("http")
     async def require_node_auth(request: Request, call_next):
@@ -53,8 +77,15 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/api/sessions")
-    def sessions() -> dict[str, list[dict[str, object]]]:
-        return {"sessions": [session_payload(view) for view in collect_session_views()]}
+    def sessions() -> dict[str, object]:
+        return {
+            "sessions": [session_payload(view) for view in collect_session_views()],
+            "capabilities": {"logs": 1},
+        }
+
+    @app.get("/api/logs")
+    def logs(after: str = "", limit: int = 250) -> dict[str, object]:
+        return node_outbox_payload(after=after, limit=limit)
 
     @app.get("/api/sessions/{name}")
     def session(name: str) -> dict[str, object]:
@@ -71,6 +102,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info",
+            "session.created",
+            f"Session {payload.name} was created.",
+            source="node.api",
+            details={"session": payload.name, "cwd": payload.cwd},
+        )
         return {"status": "created", "name": payload.name}
 
     @app.get("/api/adoptable-sessions")
@@ -83,6 +121,13 @@ def create_app() -> FastAPI:
             adopted = adopt_existing_session(payload.name)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info",
+            "session.adopted",
+            f"Session {payload.name} was adopted.",
+            source="node.api",
+            details={"session": payload.name},
+        )
         return {"status": "adopted", "session": adopted.as_dict()}
 
     @app.delete("/api/sessions/{name}")
@@ -93,6 +138,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info",
+            "session.stopped",
+            f"Session {name} was stopped.",
+            source="node.api",
+            details={"session": name},
+        )
         return {"status": "stopped", "name": name}
 
     @app.post("/api/sessions/{name}/send")

@@ -269,7 +269,7 @@ def test_page_javascript_is_served_as_versioned_static_assets() -> None:
     template_dir = PROJECT_ROOT / "staragent" / "dashboard" / "templates"
     static_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static"
 
-    for page in ("base", "index", "nodes", "lark", "session"):
+    for page in ("base", "index", "nodes", "logs", "lark", "session"):
         template = (template_dir / f"{page}.html").read_text(encoding="utf-8")
         script = static_dir / f"{page}.js"
         assert script.is_file()

@@ -108,6 +108,7 @@
         <nav class="app-nav" aria-label="Primary navigation">
           <a class="{{ 'is-active' if request.url.path.startswith('/sessions') or request.url.path.startswith('/nodes/') else '' }}" href="/sessions">Sessions</a>
           <a class="{{ 'is-active' if request.url.path.startswith('/nodes') and not request.url.path.startswith('/nodes/') else '' }}" href="/nodes">Nodes</a>
+          <a class="{{ 'is-active' if request.url.path.startswith('/logs') else '' }}" href="/logs">Logs</a>
           <a class="{{ 'is-active' if request.url.path.startswith('/lark') else '' }}" href="/lark">Lark</a>
         </nav>
       </div>

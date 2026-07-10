@@ -40,6 +40,7 @@ from staragent.runtime import (
     wait_for_tmux_session,
 )
 from staragent.schemas import CreateWorker
+from staragent.service_supervisor import supervise_service
 from staragent.status import collect_session_views
 
 app = typer.Typer(help="Monitor and control AI coding-agent sessions.")
@@ -165,7 +166,12 @@ def dashboard(
     ensure_hub_auth_for_bind(bind)
     console.print(f"StarAgent dashboard: http://{bind}:{port}")
     uvicorn.run(
-        "staragent.dashboard.app:create_app", factory=True, host=bind, port=port, reload=reload
+        "staragent.dashboard.app:create_app",
+        factory=True,
+        host=bind,
+        port=port,
+        reload=reload,
+        access_log=False,
     )
 
 
@@ -179,7 +185,17 @@ def hub(
     ensure_dependencies()
     ensure_hub_auth_for_bind(bind)
     if os.environ.get("STARAGENT_TMUX_CHILD") == "hub":
-        dashboard(bind=bind, port=port, reload=False)
+        supervise_service(
+            [
+                str(staragent_executable()),
+                "dashboard",
+                "--host",
+                bind,
+                "--port",
+                str(port),
+            ],
+            service="hub",
+        )
         return
     command = tmux_child_command(
         "hub", ["staragent", "hub", "--host", bind, "--port", str(port), "--session", session]
@@ -199,7 +215,24 @@ def run_node(bind: str, port: int, reload: bool) -> None:
         )
         raise typer.Exit(1)
     console.print(f"StarAgent node: http://{bind}:{port}")
-    uvicorn.run("staragent.node.app:create_app", factory=True, host=bind, port=port, reload=reload)
+    uvicorn.run(
+        "staragent.node.app:create_app",
+        factory=True,
+        host=bind,
+        port=port,
+        reload=reload,
+        access_log=False,
+    )
+
+
+@app.command("node-server", hidden=True)
+def node_server(
+    bind: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8081, "--port"),
+    reload: bool = typer.Option(False, "--reload"),
+) -> None:
+    """Internal foreground node API runner."""
+    run_node(bind, port, reload)
 
 
 @app.command()
@@ -211,7 +244,17 @@ def node(
 ) -> None:
     """Run a StarAgent node inside a supervised tmux session."""
     if os.environ.get("STARAGENT_TMUX_CHILD") == "node":
-        run_node(bind, port, reload)
+        command = [
+            str(staragent_executable()),
+            "node-server",
+            "--host",
+            bind,
+            "--port",
+            str(port),
+        ]
+        if reload:
+            command.append("--reload")
+        supervise_service(command, service="node")
         return
     start_node_tmux_session(bind=bind, port=port, session=session, reload=reload)
 
