@@ -248,6 +248,7 @@ def test_session_heavy_assets_are_loaded_on_demand() -> None:
     assert "highlight.min.js" not in head
     assert "const ensureTerminalAssets" in script
     assert "const ensureHighlightAssets" in script
+    assert "data-xterm-web-links-js" in template
     assert "static_version('session.js')" in template
 
 
@@ -272,12 +273,41 @@ def test_terminal_input_is_locked_until_the_explicit_toggle_is_used() -> None:
     assert "if (!terminalInputUnlocked)" in script
     assert 'inputLockButton.addEventListener("click"' in script
     assert "parentTerminalToggle?.click()" in script
-    assert 'terminalTextarea.setAttribute("inputmode", "none")' in script
+    assert "term.attachCustomKeyEventHandler(() => terminalInputUnlocked)" in script
+    assert "terminalTextarea.readOnly = !terminalInputUnlocked" in script
+    assert 'terminalTextarea.setAttribute("inputmode", "none")' not in script
+    assert 'terminalTextarea.setAttribute("tabindex", "-1")' not in script
+    assert "requestAnimationFrame(() => term.blur())" not in script
     assert 'screenEl.addEventListener("pointerdown", () => setTerminalSelected(true))' not in script
     assert ".web-terminal.is-input-unlocked" in styles
     assert ".terminal-input-lock.is-unlocked" in styles
     assert ".terminal-band .section-title" in styles
     assert "grid-template-columns: 1fr 1fr" in styles
+
+
+def test_terminal_links_use_the_xterm_web_links_addon_safely() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
+    addon = (
+        PROJECT_ROOT
+        / "staragent"
+        / "dashboard"
+        / "static"
+        / "vendor"
+        / "xterm-addon-web-links"
+        / "xterm-addon-web-links.min.js"
+    )
+
+    assert "xterm-addon-web-links.min.js" in template
+    assert "new WebLinksAddon.WebLinksAddon(openTerminalLink)" in script
+    assert 'url.protocol !== "http:" && url.protocol !== "https:"' in script
+    assert 'window.open(url.href, "_blank", "noopener,noreferrer")' in script
+    assert addon.is_file()
+    assert "xterm-addon-web-links@0.9.0" in addon.read_text(encoding="utf-8")
 
 
 def test_session_detail_has_im_style_session_switcher() -> None:
@@ -521,6 +551,17 @@ def test_session_chat_uses_one_transcript_poll_scheduler() -> None:
     assert "setInterval(() => {\n    syncChatFromTranscript" not in script
 
 
+def test_session_chat_allows_the_same_user_command_in_multiple_turns() -> None:
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "const createChatMessageId" in script
+    assert "const sameMessageInstance" in script
+    assert "id: createChatMessageId()" in script
+    assert "chatHistory.some((message) => message.role === role" not in script
+
+
 def test_hub_persists_env_token_for_non_loopback_bind(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "secret")
@@ -676,6 +717,91 @@ def test_unchanged_transcript_history_is_not_rewritten(monkeypatch, tmp_path) ->
 
     assert first == second
     assert writes == 1
+
+
+def test_transcript_sync_preserves_a_recent_optimistic_user_message(
+    monkeypatch, tmp_path
+) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    now = int(datetime.now().timestamp() * 1000)
+    dashboard_app.append_chat_message(
+        "local",
+        "dev",
+        "user",
+        "commit/push",
+        now,
+        "client:new-turn",
+    )
+
+    before_rollout_catches_up = dashboard_app.replace_chat_history_from_transcript(
+        "local",
+        "dev",
+        (TranscriptMessage("agent", "Previous result", now - 1000, "agent:previous"),),
+    )
+
+    assert [message["text"] for message in before_rollout_catches_up] == [
+        "Previous result",
+        "commit/push",
+    ]
+
+    after_rollout_catches_up = dashboard_app.replace_chat_history_from_transcript(
+        "local",
+        "dev",
+        (
+            TranscriptMessage("agent", "Previous result", now - 1000, "agent:previous"),
+            TranscriptMessage("user", "commit/push", now + 100, "rollout:new-turn"),
+        ),
+    )
+
+    matching = [
+        message for message in after_rollout_catches_up if message["text"] == "commit/push"
+    ]
+    assert matching == [
+        {
+            "role": "user",
+            "text": "commit/push",
+            "time": now + 100,
+            "id": "rollout:new-turn",
+        }
+    ]
+
+
+def test_transcript_sync_keeps_repeated_identical_turns(monkeypatch, tmp_path) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    now = int(datetime.now().timestamp() * 1000)
+
+    messages = dashboard_app.replace_chat_history_from_transcript(
+        "local",
+        "dev",
+        (
+            TranscriptMessage("user", "commit/push", now - 60_000, "rollout:first"),
+            TranscriptMessage("agent", "First result", now - 55_000, "agent:first"),
+            TranscriptMessage("user", "commit/push", now, "rollout:second"),
+        ),
+    )
+
+    repeated = [message for message in messages if message["text"] == "commit/push"]
+    assert [message["id"] for message in repeated] == ["rollout:first", "rollout:second"]
+
+
+def test_chat_history_accepts_repeated_text_with_distinct_message_ids(
+    monkeypatch, tmp_path
+) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    now = int(datetime.now().timestamp() * 1000)
+
+    dashboard_app.append_chat_message(
+        "local", "dev", "user", "commit/push", now, "client:first"
+    )
+    dashboard_app.append_chat_message(
+        "local", "dev", "user", "commit/push", now + 10_000, "client:second"
+    )
+
+    messages = dashboard_app.chat_history("local", "dev")
+    assert [message["id"] for message in messages] == ["client:first", "client:second"]
 
 
 def test_lark_connection_test_fails_fast_without_credentials(monkeypatch, tmp_path) -> None:

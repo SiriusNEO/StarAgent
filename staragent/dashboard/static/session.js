@@ -36,12 +36,15 @@ const loadStyleAsset = (url) => new Promise((resolve) => {
 });
 let terminalAssetsPromise = null;
 const ensureTerminalAssets = () => {
-  if (window.Terminal && window.FitAddon) {
+  if (window.Terminal && window.FitAddon && window.WebLinksAddon) {
     return Promise.resolve();
   }
   if (!terminalAssetsPromise) {
     terminalAssetsPromise = loadScriptAsset(sessionAssets.dataset.xtermJs)
-      .then(() => loadScriptAsset(sessionAssets.dataset.xtermFitJs));
+      .then(() => Promise.all([
+        loadScriptAsset(sessionAssets.dataset.xtermFitJs),
+        loadScriptAsset(sessionAssets.dataset.xtermWebLinksJs),
+      ]));
   }
   return terminalAssetsPromise;
 };
@@ -929,6 +932,8 @@ if (chat) {
   let acknowledgingFinal = false;
   const longMessageChars = 900;
   const longMessageLines = 14;
+  const messageMatchWindowMs = 5000;
+  const pendingUserRetentionMs = 15 * 60 * 1000;
 
   const localChatHistory = () => {
     try {
@@ -945,6 +950,25 @@ if (chat) {
 
   const normalizeMessageText = (text) => String(text || "").trim().replace(/\s+/g, " ");
   const messageFingerprint = (text) => String(text || "").trim().replace(/\s+/g, "").toLowerCase();
+  const createChatMessageId = () => {
+    if (globalThis.crypto?.randomUUID) {
+      return `client:${globalThis.crypto.randomUUID()}`;
+    }
+    return `client:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  };
+  const sameMessageInstance = (left, right) => {
+    const leftId = String(left?.id || "");
+    const rightId = String(right?.id || "");
+    if (leftId && rightId && leftId === rightId) {
+      return true;
+    }
+    if (left?.role !== right?.role || messageFingerprint(left?.text) !== messageFingerprint(right?.text)) {
+      return false;
+    }
+    const leftTime = Number(left?.time || 0);
+    const rightTime = Number(right?.time || 0);
+    return Boolean(leftTime && rightTime && Math.abs(leftTime - rightTime) <= messageMatchWindowMs);
+  };
   const looksLikeTranscriptFragment = (role, text) => {
     const first = String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
     return role === "agent" && (first.startsWith("›") || first.startsWith("◦ Working"));
@@ -1003,11 +1027,10 @@ if (chat) {
   };
 
   const mergeMessages = (...lists) => {
-    const seenIds = new Set();
-    const seenFingerprints = new Set();
     const merged = [];
-    const candidates = [];
     for (const list of lists) {
+      const previousCount = merged.length;
+      const matchedPrevious = new Set();
       for (const message of list || []) {
         const role = ["user", "agent", "session"].includes(message.role) ? message.role : "agent";
         const text = String(message.text || "").trim();
@@ -1015,33 +1038,28 @@ if (chat) {
           continue;
         }
         const id = String(message.id || "");
-        const fingerprint = `${role}\n${messageFingerprint(text)}`;
-        candidates.push({role, text, time: Number(message.time || Date.now()), id, fingerprint});
+        const candidate = {role, text, time: Number(message.time || 0), id};
+        const exactIdIndex = id
+          ? merged.findIndex((item) => String(item.id || "") === id)
+          : -1;
+        if (exactIdIndex >= 0) {
+          matchedPrevious.add(exactIdIndex);
+          continue;
+        }
+        const instanceIndex = merged.findIndex((item, index) => (
+          index < previousCount
+          && !matchedPrevious.has(index)
+          && sameMessageInstance(item, candidate)
+        ));
+        if (instanceIndex >= 0) {
+          matchedPrevious.add(instanceIndex);
+          if (!merged[instanceIndex].id && id) {
+            merged[instanceIndex].id = id;
+          }
+          continue;
+        }
+        merged.push(candidate);
       }
-    }
-    candidates.sort((a, b) => {
-      if (a.fingerprint === b.fingerprint && Boolean(a.id) !== Boolean(b.id)) {
-        return a.id ? -1 : 1;
-      }
-      return a.time - b.time;
-    });
-    for (const message of candidates) {
-      if (message.id && seenIds.has(message.id)) {
-        continue;
-      }
-      if (seenFingerprints.has(message.fingerprint)) {
-        continue;
-      }
-      if (message.id) {
-        seenIds.add(message.id);
-      }
-      seenFingerprints.add(message.fingerprint);
-      merged.push({
-        role: message.role,
-        text: message.text,
-        time: message.time,
-        id: message.id,
-      });
     }
     return merged
       .sort((a, b) => a.time - b.time)
@@ -1049,18 +1067,21 @@ if (chat) {
   };
 
   const pendingLocalUserMessages = (local, remote) => {
-    const latestRemoteTime = (remote || []).reduce((latest, message) => Math.max(latest, Number(message.time || 0)), 0);
-    const remoteUserFingerprints = new Set((remote || [])
-      .filter((message) => message.role === "user")
-      .map((message) => messageFingerprint(message.text || "")));
+    const remoteUsers = (remote || []).filter((message) => message.role === "user");
+    const matchedRemote = new Set();
     return (local || []).filter((message) => {
       if (message.role !== "user") {
         return false;
       }
-      if (Number(message.time || 0) <= latestRemoteTime) {
+      const remoteIndex = remoteUsers.findIndex((remoteMessage, index) => (
+        !matchedRemote.has(index) && sameMessageInstance(message, remoteMessage)
+      ));
+      if (remoteIndex >= 0) {
+        matchedRemote.add(remoteIndex);
         return false;
       }
-      return !remoteUserFingerprints.has(messageFingerprint(message.text || ""));
+      const timestamp = Number(message.time || 0);
+      return Boolean(timestamp && Date.now() - timestamp <= pendingUserRetentionMs);
     });
   };
 
@@ -1371,15 +1392,15 @@ if (chat) {
 
   const appendChat = (role, text) => {
     role = ["user", "agent", "session"].includes(role) ? role : "agent";
-    const normalized = messageFingerprint(text);
-    if (looksLikeTranscriptFragment(role, text) || chatHistory.some((message) => message.role === role && messageFingerprint(message.text) === normalized)) {
-      return;
+    if (looksLikeTranscriptFragment(role, text)) {
+      return null;
     }
-    const message = {role, text: text.trim(), time: Date.now()};
+    const message = {role, text: text.trim(), time: Date.now(), id: createChatMessageId()};
     chatHistory.push(message);
     saveChatHistory();
     saveChatMessageRemote(message);
     renderChatHistory({forceBottom: role === "user"});
+    return message;
   };
 
   const showWorking = ({forceBottom = false, label = "Working", startedAt = 0} = {}) => {
@@ -1475,19 +1496,7 @@ if (chat) {
     renderTokenUsage(body.token_usage);
     if (Array.isArray(body.messages)) {
       const transcriptMessages = body.messages;
-      const latestTranscriptTime = transcriptMessages.reduce((latest, message) => Math.max(latest, Number(message.time || 0)), 0);
-      const transcriptFingerprints = new Set(
-        transcriptMessages.map((message) => {
-          const role = ["user", "agent", "session"].includes(message.role) ? message.role : "agent";
-          return `${role}\n${messageFingerprint(message.text || "")}`;
-        })
-      );
-      const pendingLocalUsers = chatHistory.filter((message) => {
-        if (message.id || message.role !== "user" || Number(message.time || 0) <= latestTranscriptTime) {
-          return false;
-        }
-        return !transcriptFingerprints.has(`user\n${messageFingerprint(message.text || "")}`);
-      });
+      const pendingLocalUsers = pendingLocalUserMessages(chatHistory, transcriptMessages);
       chatHistory = mergeMessages(transcriptMessages, pendingLocalUsers);
       saveChatHistory();
       lastChatSnapshot = [...chatHistory].reverse().find((item) => item.role === "agent")?.text || lastChatSnapshot;
@@ -1632,6 +1641,18 @@ if (terminal) {
   const transportValue = terminal.querySelector(".terminal-transport-value");
   const inputLockButton = parentTerminalBand.querySelector(".terminal-input-lock");
   const inputLockLabel = inputLockButton.querySelector(".terminal-lock-label");
+  const openTerminalLink = (_event, uri) => {
+    let url;
+    try {
+      url = new URL(uri);
+    } catch (_error) {
+      return;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return;
+    }
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  };
   const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const terminalTheme = () => ({
     background: cssVar("--terminal-bg", "#1e1e1e"),
@@ -1673,7 +1694,9 @@ if (terminal) {
     term.options.theme = terminalTheme();
   });
   const fitAddon = new FitAddon.FitAddon();
+  const webLinksAddon = new WebLinksAddon.WebLinksAddon(openTerminalLink);
   term.loadAddon(fitAddon);
+  term.loadAddon(webLinksAddon);
   term.open(screenEl);
   const terminalScrollbar = document.createElement("div");
   terminalScrollbar.className = "terminal-scrollbar";
@@ -1738,8 +1761,7 @@ if (terminal) {
   };
 
   const terminalTextarea = term.textarea;
-  const terminalTextareaTabIndex = terminalTextarea?.getAttribute("tabindex");
-  const terminalTextareaInputMode = terminalTextarea?.getAttribute("inputmode");
+  term.attachCustomKeyEventHandler(() => terminalInputUnlocked);
   const setTerminalInputUnlocked = (unlocked, {focus = false} = {}) => {
     terminalInputUnlocked = Boolean(unlocked);
     term.options.disableStdin = !terminalInputUnlocked;
@@ -1759,21 +1781,6 @@ if (terminal) {
     if (terminalTextarea) {
       terminalTextarea.readOnly = !terminalInputUnlocked;
       terminalTextarea.setAttribute("aria-readonly", String(!terminalInputUnlocked));
-      if (terminalInputUnlocked) {
-        if (terminalTextareaTabIndex === null) {
-          terminalTextarea.removeAttribute("tabindex");
-        } else {
-          terminalTextarea.setAttribute("tabindex", terminalTextareaTabIndex);
-        }
-        if (terminalTextareaInputMode === null) {
-          terminalTextarea.removeAttribute("inputmode");
-        } else {
-          terminalTextarea.setAttribute("inputmode", terminalTextareaInputMode);
-        }
-      } else {
-        terminalTextarea.setAttribute("tabindex", "-1");
-        terminalTextarea.setAttribute("inputmode", "none");
-      }
     }
     if (terminalInputUnlocked && focus) {
       term.focus();
@@ -1803,13 +1810,6 @@ if (terminal) {
       parentTerminalToggle?.click();
     }
     setTerminalInputUnlocked(nextUnlocked, {focus: nextUnlocked});
-  });
-  screenEl.addEventListener("pointerdown", () => {
-    if (terminalInputUnlocked) {
-      term.focus();
-      return;
-    }
-    requestAnimationFrame(() => term.blur());
   });
   document.addEventListener("pointerdown", (event) => {
     if (!terminal.contains(event.target)) {
