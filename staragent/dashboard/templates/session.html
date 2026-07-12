@@ -4,6 +4,21 @@
 {% block head_extra %}
   <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}?v={{ static_version('vendor/xterm/xterm.css') }}">
+  <style>
+    @view-transition { navigation: auto; }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(root) { animation-duration: 0s; }
+    }
+  </style>
+  <script type="speculationrules">
+    {
+      "prefetch": [{
+        "source": "document",
+        "where": {"selector_matches": ".session-switcher-item:not(.is-current)"},
+        "eagerness": "moderate"
+      }]
+    }
+  </script>
 {% endblock %}
 {% block content %}
   <div
@@ -161,13 +176,26 @@
       </section>
     {% endif %}
 
-    <section class="band terminal-band">
-      <div class="section-title">
-        <h2>Terminal</h2>
-        <button type="button" class="terminal-toggle">Show Terminal</button>
-      </div>
-      <div class="terminal-wrap">
-        <div class="web-terminal" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
+      <section class="band terminal-band">
+        <div class="section-title">
+          <h2>Terminal</h2>
+          <div class="terminal-title-actions">
+            <button
+              type="button"
+              class="terminal-input-lock is-locked"
+              aria-label="Unlock terminal input"
+              aria-pressed="false"
+              title="Terminal input is locked"
+              disabled
+            >
+              <span class="terminal-lock-icon" aria-hidden="true"></span>
+              <span class="terminal-lock-label">Locked</span>
+            </button>
+            <button type="button" class="terminal-toggle">Show Terminal</button>
+          </div>
+        </div>
+        <div class="terminal-wrap">
+          <div class="web-terminal is-input-locked" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
           <div class="terminal-screen"></div>
           <div class="terminal-status">
             <span class="terminal-connection-meta" aria-label="Terminal connection method">

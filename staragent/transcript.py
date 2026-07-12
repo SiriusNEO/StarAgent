@@ -123,8 +123,6 @@ def parse_transcript(text: str, cli: str = "", cli_pid: int = 0) -> TranscriptSt
         return parse_codex_transcript(text, cli_pid=cli_pid)
     if cli in {"claude", "claude-code"}:
         return parse_claude_transcript(text, cli_pid=cli_pid)
-    if cli == "gemini":
-        return parse_gemini_transcript(text)
     if cli == "opencode":
         return parse_opencode_transcript(text)
     return parse_generic_transcript(text)
@@ -236,14 +234,6 @@ def parse_claude_transcript(text: str, cli_pid: int = 0) -> TranscriptState:
         )
     lines = clean_transcript_lines(text)
     reply = extract_last_block_after_prompt(lines, (">", "Human:", "User:"))
-    return TranscriptState(
-        reply=reply, completed_reply=reply, working=False, working_label="", final=bool(reply)
-    )
-
-
-def parse_gemini_transcript(text: str) -> TranscriptState:
-    lines = clean_transcript_lines(text)
-    reply = extract_last_block_after_prompt(lines, (">", "User:"))
     return TranscriptState(
         reply=reply, completed_reply=reply, working=False, working_label="", final=bool(reply)
     )
@@ -1174,7 +1164,7 @@ def extract_session_meta(lines: list[str]) -> str:
     for index in range(len(lines) - 1, max(-1, len(lines) - 13), -1):
         line = lines[index].strip()
         if (
-            re.search(r"(gpt|codex|claude|gemini|sonnet|opus|haiku)", line, re.IGNORECASE)
+            re.search(r"(gpt|codex|claude|sonnet|opus|haiku)", line, re.IGNORECASE)
             and re.search(r"[·•]", line)
             and re.search(r"(~|/)", line)
         ):

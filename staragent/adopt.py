@@ -161,8 +161,6 @@ def normalize_cli_name(command: str) -> str:
         return "codex"
     if base in {"claude", "claude-code"}:
         return "claude"
-    if base == "gemini":
-        return "gemini"
     if base == "opencode":
         return "opencode"
     return "unknown"

@@ -71,11 +71,16 @@ Node services run behind a lightweight supervisor, so unexpected exits include t
 uptime, recent process output, and automatic-restart event. HTTP access URLs are not logged, and
 sensitive token-like values are redacted before persistence.
 
-The Dashboard **Agents** page checks whether Codex, Claude Code, Gemini CLI, and OpenCode are usable
+The Dashboard **Agents** page checks whether Codex, Claude Code, and OpenCode are usable
 in every Node service's `PATH`. Version checks run in parallel with a short timeout and a 60-second
-Node-side cache. A **ready** result verifies only that the executable starts; it does not test login
-or make a model request. The page identifies common install sources and offers copyable official
-install/update commands, but never runs a package manager automatically.
+Node-side cache. A **ready** result verifies only that the executable starts; login is reported
+separately and neither check makes a model request. Codex and Claude Code use their read-only login
+status commands, while OpenCode lists configured provider credentials. No account identity,
+credential, or token is returned to the Hub. The page identifies common install sources and offers
+copyable official install/update commands. For an installed CLI, **Update now** asks for confirmation
+and runs only the allowlisted command selected from that Node's freshly detected install source; the
+browser cannot submit command text, and StarAgent never checks or applies updates automatically on
+page load. The same optional update action appears in **Sessions → Create Session** before launch.
 
 For Codex, each machine also shows live account rate-limit windows, reset times, plan, available
 credits, and reset count through the CLI's read-only local app-server status RPC. This does not send

@@ -7,7 +7,7 @@ import urllib.error
 import pytest
 from fastapi.testclient import TestClient
 
-from staragent import agent_tools, agent_usage, hub
+from staragent import agent_auth, agent_tools, agent_usage, hub
 from staragent.dashboard import app as dashboard_app
 from staragent.node import app as node_app
 
@@ -24,6 +24,11 @@ def stub_agent_usage_probe(monkeypatch) -> None:
         agent_tools,
         "probe_agent_usage",
         lambda agent, executable: agent_usage.unknown_agent_usage(agent, "test usage"),
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "probe_agent_auth",
+        lambda agent, executable: agent_auth.unknown_agent_auth(agent, "test auth"),
     )
 
 
@@ -52,7 +57,6 @@ def test_agent_tool_detection_reports_versions_in_parallel(monkeypatch) -> None:
 
     assert tool_by_name(payload, "codex")["version"] == "codex-cli 1.2.3"
     assert tool_by_name(payload, "claude")["version"] == "2.3.4 (Claude Code)"
-    assert tool_by_name(payload, "gemini")["status"] == "missing"
     assert tool_by_name(payload, "opencode")["status"] == "missing"
 
 
@@ -110,7 +114,7 @@ def test_agent_tool_detection_uses_ttl_cache(monkeypatch) -> None:
     second = agent_tools.agent_tools_payload()
 
     assert first == second
-    assert len(calls) == 4
+    assert len(calls) == 3
 
 
 def test_normalized_remote_payload_only_accepts_known_tools() -> None:
@@ -133,7 +137,6 @@ def test_normalized_remote_payload_only_accepts_known_tools() -> None:
     assert [item["name"] for item in normalized["tools"]] == [
         "codex",
         "claude",
-        "gemini",
         "opencode",
     ]
     assert tool_by_name(normalized, "claude")["status"] == "unknown"
@@ -156,6 +159,120 @@ def test_agent_tool_status_detects_npm_and_exposes_safe_update_command() -> None
     assert status["update_action"] == "update"
 
 
+def test_agent_tool_update_runs_only_the_detected_allowlisted_command(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    before = agent_tools.tool_status(
+        spec,
+        status="available",
+        executable="/usr/local/bin/codex",
+        resolved_executable="/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+        version="codex-cli 1.2.3",
+    )
+    after = {**before, "version": "codex-cli 1.2.4"}
+    probes = iter((before, after))
+    commands: list[list[str]] = []
+    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: next(probes))
+
+    def fake_update(argv: list[str]) -> tuple[int, str]:
+        commands.append(argv)
+        return 0, "updated"
+
+    monkeypatch.setattr(agent_tools, "run_agent_update_command", fake_update)
+
+    result = agent_tools.update_agent_tool("codex")
+
+    assert commands == [["npm", "install", "-g", "@openai/codex@latest"]]
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["before_version"] == "codex-cli 1.2.3"
+    assert result["after_version"] == "codex-cli 1.2.4"
+
+
+def test_agent_tool_update_rejects_a_command_outside_the_allowlist() -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+
+    with pytest.raises(ValueError, match="Unsupported update command"):
+        agent_tools.update_argv(
+            spec,
+            {"install_method": "npm", "executable": "/usr/local/bin/codex"},
+            "sh -c 'echo unsafe'",
+        )
+
+
+def test_agent_tool_update_failure_is_bounded_and_redacted(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    before = agent_tools.tool_status(
+        spec,
+        status="available",
+        executable="/usr/local/bin/codex",
+        resolved_executable="/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+        version="codex-cli 1.2.3",
+    )
+    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: before)
+    monkeypatch.setattr(
+        agent_tools,
+        "run_agent_update_command",
+        lambda _argv: (1, "token=super-secret\nupdate failed"),
+    )
+
+    result = agent_tools.update_agent_tool("codex")
+
+    assert result["ok"] is False
+    assert "super-secret" not in str(result["output"])
+    assert "super-secret" not in str(result["error"])
+    assert "[REDACTED]" in str(result["error"])
+
+
+def test_agent_tool_update_reports_a_concurrent_update() -> None:
+    lock = agent_tools._UPDATE_LOCKS["codex"]
+    lock.acquire()
+    try:
+        with pytest.raises(agent_tools.AgentToolUpdateBusyError, match="already being updated"):
+            agent_tools.update_agent_tool("codex")
+    finally:
+        lock.release()
+
+
+def test_normalized_agent_update_result_drops_untrusted_fields() -> None:
+    result = agent_tools.normalize_agent_update_result(
+        "codex",
+        {
+            "ok": True,
+            "agent": "rogue",
+            "command": "rm -rf /",
+            "output": "Authorization: Bearer secret-value",
+            "private": "must not cross the Hub boundary",
+        },
+    )
+
+    assert result["agent"] == "codex"
+    assert result["command"] == ""
+    assert "secret-value" not in str(result["output"])
+    assert "private" not in result
+
+
+def test_agent_update_subprocess_is_noninteractive_and_does_not_use_a_shell(monkeypatch) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, "updated", "")
+
+    monkeypatch.setattr(agent_tools.subprocess, "run", fake_run)
+
+    returncode, output = agent_tools.run_agent_update_command(["codex", "update"])
+
+    assert returncode == 0
+    assert output == "updated"
+    assert calls[0][0] == ["codex", "update"]
+    assert "shell" not in calls[0][1]
+    assert calls[0][1]["stdin"] is subprocess.DEVNULL
+    assert calls[0][1]["env"]["npm_config_update_notifier"] == "false"
+
+
 def test_agent_catalog_and_session_presets_cover_the_same_clis() -> None:
     from staragent.presets import command_presets_payload
 
@@ -164,7 +281,7 @@ def test_agent_catalog_and_session_presets_cover_the_same_clis() -> None:
         item["agent"] for item in command_presets_payload() if item["agent"] != "shell"
     }
 
-    assert catalog == {"codex", "claude", "gemini", "opencode"}
+    assert catalog == {"codex", "claude", "opencode"}
     assert preset_agents == catalog
     assert all("ops_compatible" in item for item in command_presets_payload())
 
@@ -316,7 +433,9 @@ def test_node_agent_tools_endpoint_is_authenticated(monkeypatch) -> None:
         "/api/sessions",
         headers={"Authorization": "Bearer node-secret"},
     ).json()
-    assert sessions["capabilities"]["agent_tools"] == 2
+    assert sessions["capabilities"]["agent_tools"] == 4
+    assert sessions["capabilities"]["agent_auth"] == 1
+    assert sessions["capabilities"]["agent_update"] == 1
     assert sessions["capabilities"]["agent_usage"] == 1
     assert sessions["capabilities"]["agent_history"] == 1
     assert "agent_tools" not in sessions
@@ -343,3 +462,136 @@ def test_dashboard_agent_tools_route_supports_manual_refresh(monkeypatch, tmp_pa
     assert response.status_code == 200
     assert response.json()["node"] == "local"
     assert calls == [("local", True)]
+
+
+def test_node_agent_update_endpoint_is_authenticated_and_logged(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_NODE_TOKEN", "node-secret")
+    events: list[tuple[str, str, dict[str, object]]] = []
+    result = {
+        "ok": True,
+        "agent": "codex",
+        "label": "Codex",
+        "before_version": "codex-cli 1.2.3",
+        "after_version": "codex-cli 1.2.4",
+        "changed": True,
+        "error": "",
+    }
+    monkeypatch.setattr(node_app, "update_agent_tool", lambda agent: result)
+    monkeypatch.setattr(
+        node_app,
+        "append_node_outbox_event",
+        lambda level, event, message, **kwargs: events.append(
+            (level, event, kwargs.get("details", {}))
+        ),
+    )
+    client = TestClient(node_app.create_app())
+
+    assert client.post("/api/agent-tools/codex/update").status_code == 401
+    response = client.post(
+        "/api/agent-tools/codex/update",
+        headers={"Authorization": "Bearer node-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["changed"] is True
+    assert events == [
+        (
+            "info",
+            "agent.update_succeeded",
+            {
+                "agent": "codex",
+                "before_version": "codex-cli 1.2.3",
+                "after_version": "codex-cli 1.2.4",
+                "changed": True,
+                "error": "",
+            },
+        )
+    ]
+
+
+def test_remote_agent_update_is_proxied_and_normalized(monkeypatch) -> None:
+    node = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
+    calls: list[tuple[str, str, float]] = []
+
+    def fake_request_json(selected, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        calls.append((method, path, timeout))
+        return {
+            "ok": True,
+            "agent": "rogue",
+            "label": "Untrusted label",
+            "command": "npm install -g @openai/codex@latest",
+            "before_version": "codex-cli 1.2.3",
+            "after_version": "codex-cli 1.2.4",
+            "changed": True,
+            "private": "do not forward",
+        }
+
+    monkeypatch.setattr(hub, "request_json", fake_request_json)
+
+    result = hub.node_agent_tool_update_payload(node, "codex")
+
+    assert calls == [
+        (
+            "POST",
+            "/api/agent-tools/codex/update",
+            hub.NODE_AGENT_UPDATE_REQUEST_TIMEOUT_SECONDS,
+        )
+    ]
+    assert result["agent"] == "codex"
+    assert result["label"] == "Codex"
+    assert result["node"] == "worker"
+    assert "private" not in result
+
+
+def test_remote_agent_update_explains_that_an_old_node_must_be_updated(monkeypatch) -> None:
+    node = hub.NodeEntry(name="old-worker", url="http://old-worker:8081", mode="lan")
+    monkeypatch.setattr(
+        hub,
+        "request_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            urllib.error.HTTPError("/api/agent-tools/codex/update", 404, "Not Found", {}, None)
+        ),
+    )
+
+    result = hub.node_agent_tool_update_payload(node, "codex")
+
+    assert result["ok"] is False
+    assert "Node update required" in str(result["error"])
+
+
+def test_dashboard_agent_update_route_targets_the_selected_node(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    node = hub.NodeEntry(name="local", url="local", mode="local")
+    calls: list[tuple[str, str]] = []
+    events: list[str] = []
+    monkeypatch.setattr(dashboard_app, "node_by_name", lambda name: node)
+
+    def fake_update(selected, agent):  # type: ignore[no-untyped-def]
+        calls.append((selected.name, agent))
+        return {
+            "ok": True,
+            "agent": agent,
+            "label": "Codex",
+            "node": selected.name,
+            "before_version": "codex-cli 1.2.3",
+            "after_version": "codex-cli 1.2.4",
+            "changed": True,
+            "error": "",
+        }
+
+    monkeypatch.setattr(dashboard_app, "node_agent_tool_update_payload", fake_update)
+    monkeypatch.setattr(
+        dashboard_app,
+        "append_hub_event",
+        lambda level, event, message, **kwargs: events.append(event),
+    )
+
+    response = TestClient(dashboard_app.create_app()).post(
+        "/api/nodes/local/agent-tools/codex/update"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["node"] == "local"
+    assert calls == [("local", "codex")]
+    assert events == ["agent.update_succeeded"]

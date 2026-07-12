@@ -31,7 +31,6 @@ COMMAND_PRESETS = [
         "claude",
     ),
     CommandPreset("claude", "Claude", "claude", "claude"),
-    CommandPreset("gemini", "Gemini", "gemini", "gemini"),
     CommandPreset("opencode", "OpenCode", "opencode", "opencode"),
     CommandPreset("shell", "Shell", "bash", "shell", ops_compatible=False),
 ]

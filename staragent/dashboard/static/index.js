@@ -27,16 +27,77 @@ if (workerForm) {
   const commandInput = workerForm.querySelector('input[name="command"]');
   const presetSelect = workerForm.querySelector('select[name="preset"]');
   const explorer = workerForm.querySelector(".explorer");
+  const maintenance = workerForm.querySelector(".worker-cli-maintenance");
+  const maintenanceTitle = maintenance.querySelector(".worker-cli-maintenance-title");
+  const maintenanceStatus = maintenance.querySelector(".worker-cli-maintenance-status");
+  const updateButton = maintenance.querySelector(".worker-cli-update");
+  const createButton = workerForm.querySelector('button[type="submit"]');
+  const agentLabels = {codex: "Codex", claude: "Claude Code", opencode: "OpenCode"};
+
+  const selectedAgent = () => presetSelect.selectedOptions[0]?.dataset.agent || "";
+  const selectedAgentLabel = () => agentLabels[selectedAgent()] || "Agent CLI";
+  const syncCliMaintenance = () => {
+    const agent = selectedAgent();
+    const supported = ["codex", "claude", "opencode"].includes(agent);
+    maintenance.hidden = !supported;
+    if (!supported) {
+      return;
+    }
+    const label = selectedAgentLabel();
+    maintenanceTitle.textContent = `Update ${label}`;
+    maintenanceStatus.textContent = `Run the managed update on ${nodeSelect.value} before creating the Session.`;
+    updateButton.textContent = `Update ${label}`;
+  };
 
   presetSelect.addEventListener("change", () => {
     if (presetSelect.value) {
       commandInput.value = presetSelect.value;
     }
+    syncCliMaintenance();
     commandInput.focus();
   });
   commandInput.addEventListener("input", () => {
     if (commandInput.value !== presetSelect.value) {
       presetSelect.value = "";
+      syncCliMaintenance();
+    }
+  });
+
+  updateButton.addEventListener("click", async () => {
+    const agent = selectedAgent();
+    const label = selectedAgentLabel();
+    const node = nodeSelect.value;
+    if (!agent || !confirm(`Update ${label} on ${node} before starting the Session?`)) {
+      return;
+    }
+    updateButton.disabled = true;
+    createButton.disabled = true;
+    maintenance.classList.add("is-updating");
+    maintenance.classList.remove("is-error", "is-success");
+    maintenanceStatus.textContent = `Updating ${label} on ${node}…`;
+    try {
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/update`,
+        {method: "POST"},
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        throw new Error(body.detail || body.error || "Update failed.");
+      }
+      const before = body.before_version || "previous version";
+      const after = body.after_version || "current version";
+      maintenanceStatus.textContent = body.changed
+        ? `${label} updated: ${before} → ${after}. You can create the Session now.`
+        : `${label} update completed; ${after} is already current.`;
+      maintenance.classList.add("is-success");
+    } catch (error) {
+      maintenanceStatus.textContent = error.message || "Update failed.";
+      maintenance.classList.add("is-error");
+    } finally {
+      maintenance.classList.remove("is-updating");
+      updateButton.disabled = false;
+      createButton.disabled = false;
+      updateButton.textContent = `Update ${label}`;
     }
   });
 
@@ -53,10 +114,12 @@ if (workerForm) {
   });
 
   cwdInput.addEventListener("change", () => workerExplorer.load(cwdInput.value));
-    nodeSelect.addEventListener("change", () => {
-      cwdInput.value = "";
-      workerExplorer.load("");
-    });
+  nodeSelect.addEventListener("change", () => {
+    cwdInput.value = "";
+    workerExplorer.load("");
+    syncCliMaintenance();
+  });
+  syncCliMaintenance();
   window.StarAgentAfterPaint(() => workerExplorer.load(cwdInput.value));
 
   workerForm.addEventListener("submit", async (event) => {
@@ -114,7 +177,7 @@ if (adoptForm) {
     sessionSelect.innerHTML = "";
     if (!sessions.length) {
       sessionSelect.innerHTML = '<option value="">No CLI tmux sessions</option>';
-      list.innerHTML = '<div class="explorer-empty">No adoptable Codex, Claude, Gemini, or OpenCode tmux sessions found.</div>';
+      list.innerHTML = '<div class="explorer-empty">No adoptable Codex, Claude, or OpenCode tmux sessions found.</div>';
       status.textContent = "No sessions found.";
       return;
     }

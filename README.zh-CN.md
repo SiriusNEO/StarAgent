@@ -69,9 +69,13 @@ Hub 与 Node 服务都由轻量守护进程运行，因此意外退出时会留�
 普通 HTTP 访问 URL 不会进入日志，疑似 token 的敏感值也会在落盘前脱敏。
 
 Dashboard 的 **Agents** 页面会检测每个 Node 服务进程的 `PATH` 中是否可以使用 Codex、
-Claude Code、Gemini CLI 和 OpenCode。版本检查会并行执行，使用短超时与 60 秒 Node 端缓存。
-其中 **ready** 只表示可执行文件能够正常启动，不会检查账号登录状态，也不会发起模型请求。
-页面会识别常见安装来源并给出可复制的官方安装/升级命令，但不会自动执行包管理器。
+Claude Code 和 OpenCode。版本检查会并行执行，使用短超时与 60 秒 Node 端缓存。
+其中 **ready** 只表示可执行文件能够正常启动；登录状态会单独显示，两种检查都不会发起模型请求。
+Codex 与 Claude Code 使用各自的只读登录状态命令，OpenCode 列出已配置的 provider credentials。
+账号身份、credential 和 token 都不会返回 Hub。页面会识别常见安装来源并给出可复制的官方
+安装/升级命令。对于已经安装的 CLI，**Update now** 会先要求确认，再根据 Node 刚刚重新检测到的
+安装来源执行内部白名单中的升级命令；浏览器不能提交命令文本，页面加载时也不会自动检查或执行升级。
+同一个可选升级入口也会出现在 **Sessions → Create Session**，方便在启动前完成更新。
 
 对于 Codex，每台机器还会通过 CLI 本地 app-server 的只读状态 RPC 显示真实的额度窗口、
 重置时间、plan、可用 credits 与 reset 次数；这个检查不会发起模型请求。Claude Code
