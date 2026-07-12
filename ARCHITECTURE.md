@@ -23,11 +23,11 @@ A Remote Node is a machine that runs tmux sessions for coding work.
 - Runs `staragent node --host 127.0.0.1 --port 8081`.
 - Is usually supervised by a tmux system session named `staragent-node`.
 - Exposes local tmux operations through HTTP and WebSocket APIs.
-- Exposes cached Codex, Claude Code, Gemini CLI, and OpenCode executable checks to the Hub.
+- Exposes cached Codex, Claude Code, and OpenCode executable and login checks to the Hub.
 - Requires `STARAGENT_NODE_TOKEN` or `STARAGENT_AUTH_TOKEN` for all non-health APIs.
 - Does not own dashboard state; it reports live local tmux state to the Hub.
 
-The word `agent` is reserved for coding CLIs such as Codex, Claude, Gemini, and OpenCode. A StarAgent node is infrastructure, not a coding agent session.
+The word `agent` is reserved for coding CLIs such as Codex, Claude, and OpenCode. A StarAgent node is infrastructure, not a coding agent session.
 
 ### Sessions
 
@@ -40,7 +40,8 @@ Agent sessions can be created from the Dashboard or adopted from existing tmux s
 
 The Agents page is the inventory and maintenance control plane for coding CLIs. A single preset
 registry feeds both its read-only catalog and **Sessions → Create Session**. General session creation
-remains on the Sessions page.
+remains on the Sessions page. Both surfaces can explicitly request an installed CLI update before a
+Session starts; no update runs during inventory probing or page load.
 
 ## Data Flow
 
@@ -61,7 +62,7 @@ StarAgent Node :8081
 tmux sessions
   |
   v
-Codex / Claude / Gemini / shell
+Codex / Claude / OpenCode / shell
 ```
 
 The browser only talks to the Hub. For remote sessions, the Hub talks to the node endpoint that was added in the Nodes page.
@@ -75,6 +76,8 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/logs` (Remote Node outbox on Nodes; centralized archive query on the Hub)
 - `GET /api/agent-tools` (Remote Node executable probe)
 - `GET /api/nodes/{node}/agent-tools` (Hub view of a local or remote Node probe)
+- `POST /api/agent-tools/{agent}/update` (Remote Node allowlisted CLI update)
+- `POST /api/nodes/{node}/agent-tools/{agent}/update` (Hub update proxy)
 - `GET /api/agent-history` (bounded, read-only Remote Node history scan)
 - `GET /api/nodes/{node}/agent-history` (Hub proxy for an explicitly requested scan)
 - `POST /api/workers`
@@ -105,14 +108,19 @@ File browsing and preview are served from the machine that owns the session:
 Changed Files are derived from the session workspace Git status.
 
 CLI inventory probes execute version commands and disable nonessential updater traffic. They cache
-results on the Node and expose suggested update commands without executing them. The same cached
-probe uses Codex's local read-only `account/rateLimits/read` app-server method for quota windows and
-Claude Code's non-billable `auth status --json` for authentication metadata; Claude remaining usage
-is intentionally left to its interactive `/status` command. All remote payloads are normalized to an
-allowlisted shape before display. Conversation history scanning is manual, reads only fixed
-Codex/Claude history locations, bounds both file count and bytes read, and returns an allowlisted
-metadata shape with a short prompt preview. It never modifies source history files or returns their
-paths.
+results on the Node and expose suggested update commands without executing them. An update begins
+only after a separate authenticated POST and user confirmation. The Node re-probes the executable,
+derives an argv list from the detected install source and an internal allowlist, and executes it
+without a shell or interactive stdin. Per-Agent locks reject duplicate updates; output is bounded and
+redacted, results are normalized at the Hub boundary, and success or failure is written to the
+centralized log without command output. Login probes use
+`codex login status`, `claude auth status --json`, and `opencode auth list`. The same cached probe uses Codex's local read-only
+`account/rateLimits/read` app-server method for quota windows; Claude remaining usage is intentionally
+left to its interactive `/status` command. No identity or credential values are returned, and all
+remote payloads are normalized to an allowlisted shape before display. Conversation history scanning
+is manual, reads only fixed Codex/Claude history locations, bounds both file count and bytes read, and
+returns an allowlisted metadata shape with a short prompt preview. It never modifies source history
+files or returns their paths.
 
 ## Logging and Supervision
 

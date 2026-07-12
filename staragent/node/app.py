@@ -12,7 +12,11 @@ from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.agent_history import agent_history_payload
-from staragent.agent_tools import agent_tools_payload
+from staragent.agent_tools import (
+    AgentToolUpdateBusyError,
+    agent_tools_payload,
+    update_agent_tool,
+)
 from staragent.auth import node_auth_token
 from staragent.event_log import append_node_outbox_event, node_outbox_payload
 from staragent.files import (
@@ -84,7 +88,9 @@ def create_app() -> FastAPI:
             "sessions": [session_payload(view) for view in collect_session_views()],
             "capabilities": {
                 "logs": 1,
-                "agent_tools": 2,
+                "agent_tools": 4,
+                "agent_auth": 1,
+                "agent_update": 1,
                 "agent_usage": 1,
                 "agent_history": 1,
                 "session_status": 2,
@@ -98,6 +104,30 @@ def create_app() -> FastAPI:
     @app.get("/api/agent-tools")
     def agent_tools(refresh: bool = False) -> dict[str, object]:
         return agent_tools_payload(force=refresh)
+
+    @app.post("/api/agent-tools/{agent}/update")
+    def update_agent_cli(agent: str) -> dict[str, object]:
+        try:
+            result = update_agent_tool(agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AgentToolUpdateBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "agent.update_succeeded" if result.get("ok") else "agent.update_failed",
+            f"{result.get('label') or agent} update "
+            f"{'completed' if result.get('ok') else 'failed'}.",
+            source="node.agents",
+            details={
+                "agent": result.get("agent") or agent,
+                "before_version": result.get("before_version") or "",
+                "after_version": result.get("after_version") or "",
+                "changed": bool(result.get("changed")),
+                "error": result.get("error") or "",
+            },
+        )
+        return result
 
     @app.get("/api/agent-history")
     def agent_history(agent: str = "", limit: int = 50, refresh: bool = False) -> dict[str, object]:

@@ -1625,9 +1625,13 @@ if (terminal) {
   await ensureTerminalAssets();
   const session = terminal.dataset.session;
   const node = terminal.dataset.node;
+  const parentTerminalBand = terminal.closest(".terminal-band");
+  const parentTerminalToggle = parentTerminalBand ? parentTerminalBand.querySelector(".terminal-toggle") : null;
   const screenEl = terminal.querySelector(".terminal-screen");
   const status = terminal.querySelector(".terminal-connection-state");
   const transportValue = terminal.querySelector(".terminal-transport-value");
+  const inputLockButton = parentTerminalBand.querySelector(".terminal-input-lock");
+  const inputLockLabel = inputLockButton.querySelector(".terminal-lock-label");
   const cssVar = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   const terminalTheme = () => ({
     background: cssVar("--terminal-bg", "#1e1e1e"),
@@ -1655,7 +1659,7 @@ if (terminal) {
     allowProposedApi: false,
     convertEol: true,
     cursorBlink: false,
-    disableStdin: false,
+    disableStdin: true,
     fontFamily: '"Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
     fontSize: 13,
     lineHeight: 1.15,
@@ -1687,7 +1691,7 @@ if (terminal) {
   let transport = "websocket";
   let httpTerminalId = "";
   let httpPolling = false;
-  let terminalSelected = false;
+  let terminalInputUnlocked = false;
   let terminalHistoryLoaded = false;
   let terminalHistoryPromise = null;
   let suppressInitialTerminalPaint = false;
@@ -1733,8 +1737,53 @@ if (terminal) {
     return false;
   };
 
+  const terminalTextarea = term.textarea;
+  const terminalTextareaTabIndex = terminalTextarea?.getAttribute("tabindex");
+  const terminalTextareaInputMode = terminalTextarea?.getAttribute("inputmode");
+  const setTerminalInputUnlocked = (unlocked, {focus = false} = {}) => {
+    terminalInputUnlocked = Boolean(unlocked);
+    term.options.disableStdin = !terminalInputUnlocked;
+    terminal.classList.toggle("is-input-locked", !terminalInputUnlocked);
+    terminal.classList.toggle("is-input-unlocked", terminalInputUnlocked);
+    inputLockButton.classList.toggle("is-locked", !terminalInputUnlocked);
+    inputLockButton.classList.toggle("is-unlocked", terminalInputUnlocked);
+    inputLockButton.setAttribute("aria-pressed", String(terminalInputUnlocked));
+    inputLockButton.setAttribute(
+      "aria-label",
+      terminalInputUnlocked ? "Lock terminal input" : "Unlock terminal input",
+    );
+    inputLockButton.title = terminalInputUnlocked
+      ? "Terminal input is unlocked"
+      : "Terminal input is locked";
+    inputLockLabel.textContent = terminalInputUnlocked ? "Unlocked" : "Locked";
+    if (terminalTextarea) {
+      terminalTextarea.readOnly = !terminalInputUnlocked;
+      terminalTextarea.setAttribute("aria-readonly", String(!terminalInputUnlocked));
+      if (terminalInputUnlocked) {
+        if (terminalTextareaTabIndex === null) {
+          terminalTextarea.removeAttribute("tabindex");
+        } else {
+          terminalTextarea.setAttribute("tabindex", terminalTextareaTabIndex);
+        }
+        if (terminalTextareaInputMode === null) {
+          terminalTextarea.removeAttribute("inputmode");
+        } else {
+          terminalTextarea.setAttribute("inputmode", terminalTextareaInputMode);
+        }
+      } else {
+        terminalTextarea.setAttribute("tabindex", "-1");
+        terminalTextarea.setAttribute("inputmode", "none");
+      }
+    }
+    if (terminalInputUnlocked && focus) {
+      term.focus();
+    } else if (!terminalInputUnlocked) {
+      term.blur();
+    }
+  };
+
   term.onData((data) => {
-    if (!terminalSelected) {
+    if (!terminalInputUnlocked) {
       return;
     }
     if (!sendTerminalMessage({type: "input", data})) {
@@ -1742,24 +1791,29 @@ if (terminal) {
     }
   });
 
-  const setTerminalSelected = (selected) => {
-    terminalSelected = selected;
-    terminal.classList.toggle("is-focused", selected);
-    if (selected) {
-      term.focus();
-    } else {
-      term.blur();
-    }
-  };
-
   const fit = () => {
     fitAddon.fit();
     sendTerminalMessage({type: "resize", cols: term.cols, rows: term.rows});
   };
-  screenEl.addEventListener("pointerdown", () => setTerminalSelected(true));
+  setTerminalInputUnlocked(false);
+  inputLockButton.disabled = false;
+  inputLockButton.addEventListener("click", () => {
+    const nextUnlocked = !terminalInputUnlocked;
+    if (nextUnlocked && parentTerminalBand && !parentTerminalBand.classList.contains("is-open")) {
+      parentTerminalToggle?.click();
+    }
+    setTerminalInputUnlocked(nextUnlocked, {focus: nextUnlocked});
+  });
+  screenEl.addEventListener("pointerdown", () => {
+    if (terminalInputUnlocked) {
+      term.focus();
+      return;
+    }
+    requestAnimationFrame(() => term.blur());
+  });
   document.addEventListener("pointerdown", (event) => {
     if (!terminal.contains(event.target)) {
-      setTerminalSelected(false);
+      term.blur();
     }
   });
   const activeTerminalBuffer = () => term.buffer?.active || term._core?._bufferService?.buffer || null;
@@ -2080,7 +2134,7 @@ if (terminal) {
 
   const pauseTerminal = () => {
     terminalPaused = true;
-    setTerminalSelected(false);
+    setTerminalInputUnlocked(false);
     stopSuppressingInitialTerminalPaint();
     clearKeepalive();
     if (reconnectTimer) {
@@ -2122,8 +2176,6 @@ if (terminal) {
     }
   });
 
-  const parentTerminalBand = terminal.closest(".terminal-band");
-  const parentTerminalToggle = parentTerminalBand ? parentTerminalBand.querySelector(".terminal-toggle") : null;
   if (parentTerminalBand && !parentTerminalBand.classList.contains("is-open")) {
     pauseTerminal();
   } else {

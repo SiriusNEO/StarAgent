@@ -218,7 +218,8 @@ def test_agents_page_renders_shared_catalog_and_presets(monkeypatch, tmp_path) -
 
     assert response.status_code == 200
     assert "Codex YOLO" in response.text
-    assert "Gemini CLI" in response.text
+    assert "Gemini CLI" not in response.text
+    assert "OpenCode" in response.text
     assert "Create Session →" in response.text
     assert "Start from a preset" not in response.text
     assert 'href="/agents"' in response.text

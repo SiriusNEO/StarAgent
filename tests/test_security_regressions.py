@@ -251,6 +251,35 @@ def test_session_heavy_assets_are_loaded_on_demand() -> None:
     assert "static_version('session.js')" in template
 
 
+def test_terminal_input_is_locked_until_the_explicit_toggle_is_used() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
+        encoding="utf-8"
+    )
+    styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="web-terminal is-input-locked"' in template
+    assert 'class="terminal-title-actions"' in template
+    assert 'class="terminal-input-lock is-locked"' in template
+    assert 'aria-label="Unlock terminal input"' in template
+    assert 'aria-pressed="false"' in template
+    assert "disableStdin: true" in script
+    assert "let terminalInputUnlocked = false" in script
+    assert "if (!terminalInputUnlocked)" in script
+    assert 'inputLockButton.addEventListener("click"' in script
+    assert "parentTerminalToggle?.click()" in script
+    assert 'terminalTextarea.setAttribute("inputmode", "none")' in script
+    assert 'screenEl.addEventListener("pointerdown", () => setTerminalSelected(true))' not in script
+    assert ".web-terminal.is-input-unlocked" in styles
+    assert ".terminal-input-lock.is-unlocked" in styles
+    assert ".terminal-band .section-title" in styles
+    assert "grid-template-columns: 1fr 1fr" in styles
+
+
 def test_session_detail_has_im_style_session_switcher() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
         encoding="utf-8"
@@ -270,6 +299,20 @@ def test_session_detail_has_im_style_session_switcher() -> None:
     assert "session-switcher-search" not in template
     assert "session-switcher-create" not in template
     assert "← Sessions" not in template
+    assert 'type="speculationrules"' in template
+    assert '"selector_matches": ".session-switcher-item:not(.is-current)"' in template
+    assert '"eagerness": "moderate"' in template
+    assert "@view-transition { navigation: auto; }" in template
+
+
+def test_speculative_session_navigation_does_not_count_as_a_view() -> None:
+    prefetch = SimpleNamespace(headers={"sec-purpose": "prefetch"})
+    prerender = SimpleNamespace(headers={"purpose": "prefetch;prerender"})
+    navigation = SimpleNamespace(headers={})
+
+    assert dashboard_app.request_is_speculative_navigation(prefetch) is True
+    assert dashboard_app.request_is_speculative_navigation(prerender) is True
+    assert dashboard_app.request_is_speculative_navigation(navigation) is False
 
 
 def test_page_root_contains_horizontal_overflow_without_breaking_inner_scrollers() -> None:
@@ -289,13 +332,25 @@ def test_chat_removes_only_the_middle_message_list_frame() -> None:
     styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
         encoding="utf-8"
     )
+    container_rule = styles.split(".mobile-chat {", 1)[1].split("}", 1)[0]
     log_rule = styles.split(".chat-log {", 1)[1].split("}", 1)[0]
     bubble_rule = styles.split(".chat-message pre {", 1)[1].split("}", 1)[0]
+    glass_surfaces = styles.split('html[data-surface-mode="glass"] :where(', 1)[1].split(
+        ") {", 1
+    )[0]
+    clear_glass_surfaces = styles.split(
+        'html[data-surface-mode="clear-glass"] :where(', 1
+    )[1].split(") {", 1)[0]
 
+    assert "background: transparent" in container_rule
+    assert "border: 0" in container_rule
+    assert "box-shadow: none" in container_rule
     assert "background: transparent" in log_rule
     assert "border: 0" in log_rule
     assert "border-radius: 0" in log_rule
     assert "border-radius: 8px" in bubble_rule
+    assert ".mobile-chat" not in glass_surfaces
+    assert ".mobile-chat" not in clear_glass_surfaces
     assert ".chat-user pre" in styles
     assert ".chat-agent pre" in styles
 
@@ -323,12 +378,20 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     )
 
     assert "Agent CLIs" in template
-    assert "Codex usage is read through its local account status RPC" in template
+    assert "Login is checked separately without sending a model request" in template
+    assert 'class="agent-cli-auth"' in template
     assert 'class="agent-cli-usage" hidden' in template
+    assert 'class="agent-cli-update-result" hidden' in template
+    assert "renderAgentAuth" in script
+    assert "tool.auth?.status" in script
+    assert 'copy.dataset.copy = auth.action' in script
     assert "renderAgentUsage" in script
     assert "remaining_percent" in script
     assert 'copy.dataset.copy = usage.action' in script
     assert "/agent-tools" in script
+    assert "/update`" in script
+    assert "payload.updates_supported" in script
+    assert "allowlisted update command" in script
     assert "window.StarAgentAfterPaint(() => loadAgentTools(false))" in script
     assert "/agent-history" in script
     assert "Scanning starts only when requested" in template
@@ -337,6 +400,15 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert 'class="agent-cli-node-row" data-node="{{ node.name }}"' in template
     assert "agent-tools-node" not in template
     assert "Promise.all(nodeNames.map" in script
+
+    styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    grid_rule = styles.split(".agent-cli-grid {", 1)[1].split("}", 1)[0]
+    node_row_rule = styles.split(".agent-cli-node-row {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr)" in grid_rule
+    assert "repeat(2" not in grid_rule
+    assert "grid-template-columns: minmax(120px, 160px) minmax(0, 1fr)" in node_row_rule
 
 
 def test_session_creation_stays_on_sessions_page() -> None:
@@ -351,6 +423,15 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert 'id="create-session"' in sessions
     assert "Create Worker" not in sessions
     assert "agent-launch-form" not in agents
+    assert 'class="worker-cli-maintenance" hidden' in sessions
+    assert 'data-agent="{{ preset.agent }}"' in sessions
+
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "index.js").read_text(
+        encoding="utf-8"
+    )
+    assert "const agentLabels = {codex:" in script
+    assert "/agent-tools/${encodeURIComponent(agent)}/update" in script
+    assert "Update ${label} on ${node} before starting the Session?" in script
 
 
 def test_sessions_page_groups_sessions_by_node() -> None:

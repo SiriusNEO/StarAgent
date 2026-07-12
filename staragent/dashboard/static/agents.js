@@ -109,6 +109,64 @@ if (agentToolsBand) {
     unknown: "optional",
   }[value] || "optional");
 
+  const authState = (value) => ({
+    authenticated: {label: "logged in", style: "connected"},
+    configured: {label: "configured", style: "connected"},
+    not_authenticated: {label: "signed out", style: "disconnected"},
+    not_configured: {label: "not configured", style: "disconnected"},
+    unavailable: {label: "unavailable", style: "optional"},
+    error: {label: "error", style: "error"},
+    unknown: {label: "unknown", style: "optional"},
+  }[value] || {label: "unknown", style: "optional"});
+
+  const renderAgentAuth = (container, auth) => {
+    container.replaceChildren();
+    const state = authState(auth?.status || "unknown");
+    container.className = `agent-cli-auth is-${auth?.status || "unknown"}`;
+
+    const head = document.createElement("div");
+    head.className = "agent-auth-head";
+    const title = document.createElement("strong");
+    title.textContent = "Login";
+    const statusPill = document.createElement("span");
+    statusPill.className = `pill node-status-${state.style}`;
+    statusPill.textContent = state.label;
+    head.append(title, statusPill);
+    container.appendChild(head);
+
+    const details = [];
+    if (auth?.method) {
+      details.push(auth.method);
+    }
+    if (Number(auth?.provider_count || 0) > 0) {
+      const count = Number(auth.provider_count);
+      details.push(`${count} source${count === 1 ? "" : "s"}`);
+    }
+    if (auth?.detail) {
+      details.push(auth.detail);
+    }
+    if (details.length) {
+      const detail = document.createElement("div");
+      detail.className = "agent-auth-detail";
+      detail.textContent = details.join(" · ");
+      container.appendChild(detail);
+    }
+
+    if (auth?.action) {
+      const action = document.createElement("div");
+      action.className = "agent-auth-action";
+      const command = document.createElement("code");
+      command.textContent = auth.action;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "copy-button inline-copy";
+      copy.dataset.copy = auth.action;
+      copy.textContent = "Copy login";
+      action.append(command, copy);
+      container.appendChild(action);
+    }
+  };
+
   const renderUsageWindow = (window) => {
     const remaining = Math.max(0, Math.min(100, Number(window.remaining_percent || 0)));
     const item = document.createElement("div");
@@ -202,11 +260,6 @@ if (agentToolsBand) {
     if (Number(usage.reset_credits || 0) > 0) {
       details.push(`${Number(usage.reset_credits)} reset${Number(usage.reset_credits) === 1 ? "" : "s"} available`);
     }
-    if (usage.authenticated === true) {
-      details.push(`Signed in${usage.auth_method ? ` via ${usage.auth_method}` : ""}`);
-    } else if (usage.authenticated === false) {
-      details.push("Not signed in");
-    }
     if (usage.checked_at) {
       details.push(`checked ${checkedTime(usage.checked_at)}`);
     }
@@ -237,11 +290,58 @@ if (agentToolsBand) {
     }
   };
 
+  const setAgentUpdateResult = (row, message, isError = false) => {
+    const result = row.querySelector(".agent-cli-update-result");
+    result.textContent = message || "";
+    result.hidden = !message;
+    result.classList.toggle("is-error", isError);
+  };
+
+  const runAgentUpdate = async (row, tool, button) => {
+    const node = row.dataset.node || "";
+    const label = tool.label || tool.name || "Agent CLI";
+    if (!confirm(`Update ${label} on ${node}?\n\nStarAgent will run the allowlisted update command shown here.`)) {
+      return;
+    }
+    row.classList.add("is-updating");
+    button.disabled = true;
+    button.textContent = "Updating…";
+    setAgentUpdateResult(row, `Updating ${label} on ${node}…`);
+    try {
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(tool.name)}/update`,
+        {method: "POST"},
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        throw new Error(body.detail || body.error || "Update failed.");
+      }
+      await loadAgentNode(node, true);
+      updateCardSummaries();
+      const before = body.before_version || "previous version";
+      const after = body.after_version || "current version";
+      const message = body.changed
+        ? `${label} updated: ${before} → ${after}`
+        : `${label} update completed; ${after} is already current.`;
+      setAgentUpdateResult(row, message);
+      status.textContent = message;
+    } catch (error) {
+      const message = error.message || "Update failed.";
+      setAgentUpdateResult(row, message, true);
+      status.textContent = `${label} update failed on ${node}: ${message}`;
+    } finally {
+      row.classList.remove("is-updating");
+      button.disabled = false;
+      button.textContent = "Update now";
+    }
+  };
+
   const renderAgentNode = (row, tool, payload) => {
     const state = toolState(tool.status);
     const version = row.querySelector(".agent-cli-version");
     const pill = row.querySelector(".agent-cli-status");
     const install = row.querySelector(".agent-cli-install");
+    const auth = row.querySelector(".agent-cli-auth");
     const usage = row.querySelector(".agent-cli-usage");
     const actions = row.querySelector(".agent-cli-actions");
     const meta = row.querySelector(".agent-cli-meta");
@@ -254,6 +354,7 @@ if (agentToolsBand) {
     pill.textContent = state.label;
     install.textContent = installDescription(tool);
     install.title = tool.update_note || "";
+    renderAgentAuth(auth, tool.auth || {});
     renderAgentUsage(usage, tool.usage || {});
 
     actions.replaceChildren();
@@ -266,6 +367,19 @@ if (agentToolsBand) {
       copy.dataset.copy = tool.update_command;
       copy.textContent = tool.update_action === "install" ? "Copy install" : "Copy update";
       actions.append(command, copy);
+      if (
+        tool.status === "available"
+        && tool.update_action === "update"
+        && payload.updates_supported
+        && !payload.stale
+      ) {
+        const update = document.createElement("button");
+        update.type = "button";
+        update.className = "agent-cli-update-button";
+        update.textContent = "Update now";
+        update.addEventListener("click", () => runAgentUpdate(row, tool, update));
+        actions.appendChild(update);
+      }
     }
 
     const parts = [checkedTime(payload.checked_at)];
@@ -280,6 +394,7 @@ if (agentToolsBand) {
     error.textContent = errorMessage;
     error.hidden = !errorMessage;
     row.dataset.toolStatus = tool.status || "unknown";
+    row.dataset.authStatus = tool.auth?.status || "unknown";
     row.dataset.stale = payload.stale ? "true" : "false";
     row.classList.toggle("is-stale", Boolean(payload.stale));
   };

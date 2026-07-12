@@ -31,7 +31,7 @@
       </div>
       <button type="button" class="agent-tools-refresh">Check again</button>
     </div>
-    <p class="form-hint">Ready means the executable exists and its version command succeeds. Codex usage is read through its local account status RPC without sending a model request; Claude Code currently exposes remaining allocation only through its interactive <code>/status</code> command.</p>
+    <p class="form-hint">Ready means the executable exists and its version command succeeds; Login is checked separately without sending a model request. Codex and Claude Code expose direct login status, while OpenCode reports configured providers.</p>
     <div class="agent-cli-grid">
       {% for tool in agent_catalog %}
         <article class="agent-cli-card" data-agent="{{ tool.name }}">
@@ -56,8 +56,10 @@
                     <span class="pill node-status-optional agent-cli-status">unknown</span>
                   </div>
                   <div class="agent-cli-install"></div>
+                  <div class="agent-cli-auth"></div>
                   <div class="agent-cli-usage" hidden></div>
                   <div class="agent-cli-actions"></div>
+                  <div class="agent-cli-update-result" hidden></div>
                   <div class="agent-cli-meta"></div>
                   <div class="agent-cli-error" hidden></div>
                 </div>
@@ -126,7 +128,7 @@
       </label>
       <button type="submit">Scan history</button>
     </form>
-    <p class="form-hint">Scanning starts only when requested, reads bounded metadata plus a short prompt preview, and never changes the CLI history files. Gemini and OpenCode history adapters are not enabled yet.</p>
+    <p class="form-hint">Scanning starts only when requested, reads bounded metadata plus a short prompt preview, and never changes the CLI history files. OpenCode history scanning is not enabled yet.</p>
     <div class="agent-history-status" aria-live="polite">Choose a machine, then scan when needed.</div>
     <div class="agent-history-list"></div>
   </section>

@@ -18,10 +18,14 @@ from staragent.agent_history import (
     unavailable_agent_history_payload,
 )
 from staragent.agent_tools import (
+    AGENT_TOOL_UPDATE_TIMEOUT_SECONDS,
+    AgentToolUpdateBusyError,
     agent_tools_payload,
     normalize_agent_tools_payload,
+    normalize_agent_update_result,
     payload_with_node,
     unknown_agent_tools_payload,
+    update_agent_tool,
 )
 from staragent.auth import node_auth_token
 from staragent.event_log import (
@@ -51,6 +55,7 @@ NODE_REQUEST_TIMEOUT_SECONDS = 5.0
 NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 2.0
 NODE_AGENT_TOOL_REQUEST_TIMEOUT_SECONDS = 5.0
+NODE_AGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = AGENT_TOOL_UPDATE_TIMEOUT_SECONDS + 15.0
 NODE_AGENT_TOOL_HUB_CACHE_SECONDS = 90.0
 NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS = 8.0
 
@@ -385,10 +390,21 @@ def cached_remote_node_view(node: NodeEntry) -> NodeView | None:
         return NodeView(entry=node, status="connected", sessions=heartbeat.sessions)
 
 
-def collect_node_session(node: NodeEntry, name: str) -> HubSession | None:
+def collect_node_session(
+    node: NodeEntry,
+    name: str,
+    *,
+    prefer_cached: bool = False,
+) -> HubSession | None:
     if node.is_local:
         view = collect_session_view(name)
         return HubSession(node_id=node.name, view=view) if view else None
+    if prefer_cached:
+        cached = cached_remote_node_view(node)
+        if cached and cached.status == "connected":
+            session = next((item for item in cached.sessions if item.name == name), None)
+            if session:
+                return session
     return next(
         (session for session in collect_node_view(node).sessions if session.name == name), None
     )
@@ -547,6 +563,42 @@ def node_agent_tools_payload(node: NodeEntry, *, refresh: bool = False) -> dict[
         return stale_or_unknown_node_agent_tools(node, cached, str(exc))
     remember_node_agent_tools(node, payload)
     return payload_with_node(payload, node.name)
+
+
+def node_agent_tool_update_payload(node: NodeEntry, agent: str) -> dict[str, object]:
+    if node.is_local:
+        result = update_agent_tool(agent)
+    else:
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/update"
+        try:
+            payload = request_json(
+                node,
+                "POST",
+                path,
+                timeout=NODE_AGENT_UPDATE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in {404, 405}:
+                error = "Node update required before browser-managed CLI updates are available."
+            elif exc.code == 409:
+                raise AgentToolUpdateBusyError(
+                    f"{agent} is already being updated on {node.name}."
+                ) from exc
+            else:
+                error = f"Node rejected the update request: HTTP {exc.code}."
+            payload = {"ok": False, "agent": agent, "error": error}
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "agent": agent,
+                "error": f"Node update request failed: {exc}",
+            }
+        result = normalize_agent_update_result(agent, payload)
+    result["node"] = node.name
+    if result.get("ok"):
+        with NODE_HEARTBEATS_LOCK:
+            NODE_AGENT_TOOLS.pop(node.name, None)
+    return result
 
 
 def node_agent_history_payload(

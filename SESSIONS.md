@@ -4,7 +4,7 @@ StarAgent sessions are real tmux sessions. The dashboard never treats config fil
 
 ## Types
 
-- `agent`: a coding CLI session, such as Codex, Claude, Gemini, OpenCode, or a shell worker.
+- `agent`: a coding CLI session, such as Codex, Claude, OpenCode, or a shell worker.
 - `system`: infrastructure tmux sessions owned by StarAgent or networking helpers.
 
 System sessions are long-running infrastructure processes. They are represented as tmux sessions so they can be inspected, restarted, and managed with the same tmux-first model as coding work.

@@ -112,15 +112,25 @@
             <span>Command Preset</span>
             <select name="preset">
               {% for preset in command_presets %}
-                <option value="{{ preset.command }}">{{ preset.label }}</option>
+                <option
+                  value="{{ preset.command }}"
+                  data-agent="{{ preset.agent }}"
+                >{{ preset.label }}</option>
               {% endfor %}
-              <option value="">Custom</option>
+              <option value="" data-agent="">Custom</option>
             </select>
           </label>
           <label class="command-field">
             <span>Coding CLI Command</span>
             <input name="command" value="{{ command_presets[0].command }}" autocomplete="off">
           </label>
+          <div class="worker-cli-maintenance" hidden>
+            <div>
+              <strong class="worker-cli-maintenance-title">Update Agent CLI</strong>
+              <span class="worker-cli-maintenance-status">Run the managed update on this Node before creating the Session.</span>
+            </div>
+            <button type="button" class="worker-cli-update">Update before start</button>
+          </div>
           <label>
             <span>Working Directory</span>
             <input name="cwd" value="{{ initial_explorer_path }}" autocomplete="off">

@@ -255,6 +255,46 @@ def test_local_session_lookup_does_not_collect_every_session(monkeypatch) -> Non
     assert result.view is view
 
 
+def test_remote_session_page_lookup_reuses_connected_heartbeat_cache(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    cached_sessions = tuple(hub.session_payloads_to_views(node, session_payload()))
+    hub.remember_node_heartbeat(node, cached_sessions)
+    monkeypatch.setattr(
+        hub,
+        "collect_node_view",
+        lambda selected: (_ for _ in ()).throw(
+            AssertionError("connected heartbeat cache should satisfy page lookup")
+        ),
+    )
+
+    result = hub.collect_node_session(node, "dev", prefer_cached=True)
+
+    assert result is not None
+    assert result.name == "dev"
+
+
+def test_remote_session_lookup_keeps_live_fallback_when_cache_misses(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    calls: list[str] = []
+
+    def collect_live(selected):  # type: ignore[no-untyped-def]
+        calls.append(selected.name)
+        return hub.NodeView(
+            entry=selected,
+            status="connected",
+            sessions=tuple(hub.session_payloads_to_views(selected, session_payload())),
+        )
+
+    monkeypatch.setattr(hub, "collect_node_view", collect_live)
+
+    result = hub.collect_node_session(node, "dev", prefer_cached=True)
+
+    assert result is not None
+    assert calls == ["worker"]
+
+
 def test_remote_node_drops_stale_cache_after_grace_period(monkeypatch) -> None:
     hub.clear_node_heartbeat_cache()
     node = remote_node()

@@ -37,7 +37,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
-from staragent.agent_tools import agent_catalog_payload
+from staragent.agent_tools import AgentToolUpdateBusyError, agent_catalog_payload
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
 from staragent.dependencies import dependencies_status, ensure_dependencies
@@ -67,6 +67,7 @@ from staragent.hub import (
     load_nodes,
     mark_hub_session_seen,
     node_agent_history_payload,
+    node_agent_tool_update_payload,
     node_agent_tools_payload,
     node_by_name,
     refresh_remote_node_heartbeats,
@@ -459,14 +460,14 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/sessions/{name}", response_class=HTMLResponse)
     def session_detail(request: Request, name: str) -> HTMLResponse:
-        view = node_session_view("local", name)
+        view = node_session_view("local", name, prefer_cached=True)
         if view:
             return session_response(request, view)
         raise HTTPException(status_code=404, detail="Session not found")
 
     @app.get("/nodes/{node_id}/sessions/{name}", response_class=HTMLResponse)
     def node_session_detail(request: Request, node_id: str, name: str) -> HTMLResponse:
-        view = node_session_view(node_id, name)
+        view = node_session_view(node_id, name, prefer_cached=True)
         if view:
             return session_response(request, view)
         raise HTTPException(status_code=404, detail="Session not found")
@@ -782,6 +783,35 @@ def register_nodes_routes(app: FastAPI) -> None:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
         return node_agent_tools_payload(node, refresh=refresh)
+
+    @app.post("/api/nodes/{node_id}/agent-tools/{agent}/update")
+    def update_node_agent_tool(node_id: str, agent: str) -> dict[str, object]:
+        try:
+            node = node_by_name(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
+        try:
+            result = node_agent_tool_update_payload(node, agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AgentToolUpdateBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if result.get("ok") else "warning",
+            "agent.update_succeeded" if result.get("ok") else "agent.update_failed",
+            f"{result.get('label') or agent} update "
+            f"{'completed' if result.get('ok') else 'failed'} on {node.name}.",
+            source="hub.agents",
+            details={
+                "node": node.name,
+                "agent": result.get("agent") or agent,
+                "before_version": result.get("before_version") or "",
+                "after_version": result.get("after_version") or "",
+                "changed": bool(result.get("changed")),
+                "error": result.get("error") or "",
+            },
+        )
+        return result
 
     @app.get("/api/nodes/{node_id}/agent-history")
     def node_agent_history(
@@ -1558,16 +1588,25 @@ class ChatMessageRequest(BaseModel):
     id: str = ""
 
 
-def node_session_view(node_id: str, name: str):
+def node_session_view(node_id: str, name: str, *, prefer_cached: bool = False):
     try:
         node = node_by_name(node_id)
     except KeyError:
         return None
-    return collect_node_session(node, name)
+    return collect_node_session(node, name, prefer_cached=prefer_cached)
+
+
+def request_is_speculative_navigation(request: Request) -> bool:
+    purpose = " ".join(
+        str(request.headers.get(name) or "")
+        for name in ("purpose", "sec-purpose", "sec-fetch-purpose")
+    ).lower()
+    return "prefetch" in purpose or "prerender" in purpose
 
 
 def session_response(request: Request, view) -> HTMLResponse:
-    mark_hub_session_seen(view)
+    if not request_is_speculative_navigation(request):
+        mark_hub_session_seen(view)
     attach_command = tmux_attach_command(view)
     sidebar_nodes = collect_session_navigation_nodes()
     return templates.TemplateResponse(
