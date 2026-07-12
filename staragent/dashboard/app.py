@@ -136,6 +136,8 @@ HTTP_TERMINAL_IDLE_SECONDS = 45.0
 HTTP_TERMINAL_MAX_AGE_SECONDS = 15 * 60.0
 CHAT_HISTORY_PATH = state_dir() / "chat_history.json"
 CHAT_HISTORY_LOCK = file_lock(CHAT_HISTORY_PATH)
+CHAT_MESSAGE_MATCH_WINDOW_MS = 5000
+CHAT_PENDING_USER_RETENTION_MS = 15 * 60 * 1000
 AUTH_COOKIE = "staragent_auth"
 THEME_BACKGROUND_DIR = state_dir() / "theme"
 THEME_BACKGROUND_STEM = "background"
@@ -2409,10 +2411,14 @@ def replace_chat_history_from_transcript(
         if message.source_id:
             row["id"] = message.source_id
         rows.append(row)
-    messages = sorted_chat_messages(rows)[-80:]
     with CHAT_HISTORY_LOCK:
         data = load_chat_histories()
         key = chat_key(node_id, session)
+        existing = data.get(key, [])
+        if not isinstance(existing, list):
+            existing = []
+        pending_users = pending_chat_user_messages(existing, rows, now)
+        messages = sorted_chat_messages([*rows, *pending_users])[-80:]
         if data.get(key) != messages:
             data[key] = messages
             save_chat_histories(data)
@@ -2464,6 +2470,57 @@ def looks_like_transcript_fragment(text: str) -> bool:
 
 def chat_fingerprint(text: str) -> str:
     return re.sub(r"\s+", "", text.strip()).lower()
+
+
+def same_chat_message_instance(
+    left: dict[str, object], right: dict[str, object]
+) -> bool:
+    left_id = str(left.get("id") or "")
+    right_id = str(right.get("id") or "")
+    if left_id and right_id and left_id == right_id:
+        return True
+    if left.get("role") != right.get("role"):
+        return False
+    if chat_fingerprint(str(left.get("text") or "")) != chat_fingerprint(
+        str(right.get("text") or "")
+    ):
+        return False
+    left_time = int(left.get("time") or 0)
+    right_time = int(right.get("time") or 0)
+    return bool(
+        left_time
+        and right_time
+        and abs(left_time - right_time) <= CHAT_MESSAGE_MATCH_WINDOW_MS
+    )
+
+
+def pending_chat_user_messages(
+    existing: list[dict[str, object]],
+    transcript: list[dict[str, object]],
+    now: int,
+) -> list[dict[str, object]]:
+    transcript_users = [message for message in transcript if message.get("role") == "user"]
+    matched_transcript: set[int] = set()
+    pending = []
+    for message in sorted_chat_messages(existing):
+        if message.get("role") != "user":
+            continue
+        match_index = next(
+            (
+                index
+                for index, transcript_message in enumerate(transcript_users)
+                if index not in matched_transcript
+                and same_chat_message_instance(message, transcript_message)
+            ),
+            -1,
+        )
+        if match_index >= 0:
+            matched_transcript.add(match_index)
+            continue
+        timestamp = int(message.get("time") or 0)
+        if timestamp and now - timestamp <= CHAT_PENDING_USER_RETENTION_MS:
+            pending.append(message)
+    return pending
 
 
 def tmux_attach_command(view) -> str:
