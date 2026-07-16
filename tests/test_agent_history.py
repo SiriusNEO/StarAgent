@@ -110,6 +110,39 @@ def test_claude_history_scan_finds_metadata_after_non_session_record(monkeypatch
     )
 
 
+def test_resume_worker_command_preserves_the_selected_agent_preset() -> None:
+    session_id = "11111111-2222-4333-8444-555555555555"
+
+    assert agent_history.resume_worker_command(
+        "codex", session_id, "/work/Star Agent", "codex --yolo"
+    ) == (
+        "codex resume --yolo -C '/work/Star Agent' "
+        "11111111-2222-4333-8444-555555555555"
+    )
+    assert agent_history.resume_worker_command(
+        "claude", session_id, "/work/project", "claude --dangerously-skip-permissions"
+    ) == (
+        "claude --dangerously-skip-permissions --resume "
+        "11111111-2222-4333-8444-555555555555"
+    )
+
+
+def test_resume_worker_command_rejects_mismatched_cli_or_invalid_id() -> None:
+    session_id = "11111111-2222-4333-8444-555555555555"
+
+    for agent, candidate_id, command in (
+        ("codex", session_id, "claude"),
+        ("claude", "not-a-session", "claude"),
+        ("opencode", session_id, "opencode"),
+    ):
+        try:
+            agent_history.resume_worker_command(agent, candidate_id, "/work", command)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid resume command should be rejected")
+
+
 def test_history_payload_rejects_unsupported_agents() -> None:
     try:
         agent_history.agent_history_payload(agent="unknown")
@@ -198,6 +231,92 @@ def test_dashboard_history_route_proxies_selected_node(monkeypatch, tmp_path) ->
     assert response.status_code == 200
     assert response.json()["node"] == "worker"
     assert calls == [("worker", "claude", 25, True)]
+
+
+def test_dashboard_worker_creation_resolves_structured_resume_on_the_hub(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(dashboard_app, "auth_enabled", lambda: False)
+    monkeypatch.setattr(
+        dashboard_app,
+        "node_by_name",
+        lambda _name: hub.NodeEntry(name="local", url="local", mode="local"),
+    )
+    started = []
+    monkeypatch.setattr(
+        dashboard_app,
+        "start_tmux_worker",
+        lambda name, cwd, command: started.append((name, cwd, command)),
+    )
+    monkeypatch.setattr(dashboard_app, "append_node_event", lambda *args, **kwargs: None)
+    session_id = "11111111-2222-4333-8444-555555555555"
+
+    response = TestClient(dashboard_app.create_app()).post(
+        "/api/workers",
+        json={
+            "node": "local",
+            "name": "resume-demo",
+            "cwd": "/work/Star Agent",
+            "command": "codex --yolo",
+            "resume": {"agent": "codex", "id": session_id},
+        },
+    )
+
+    assert response.status_code == 200
+    assert started == [
+        (
+            "resume-demo",
+            "/work/Star Agent",
+            "codex resume --yolo -C '/work/Star Agent' "
+            "11111111-2222-4333-8444-555555555555",
+        )
+    ]
+
+
+def test_dashboard_resolves_resume_before_forwarding_to_an_older_remote_node(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(dashboard_app, "auth_enabled", lambda: False)
+    node = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
+    monkeypatch.setattr(dashboard_app, "node_by_name", lambda _name: node)
+    forwarded = []
+
+    def fake_request(selected, method, path, payload=None):  # type: ignore[no-untyped-def]
+        forwarded.append((selected.name, method, path, payload))
+        return {"status": "created", "name": payload["name"]}
+
+    monkeypatch.setattr(dashboard_app, "request_json", fake_request)
+    session_id = "11111111-2222-4333-8444-555555555555"
+
+    response = TestClient(dashboard_app.create_app()).post(
+        "/api/workers",
+        json={
+            "node": "worker",
+            "name": "resume-remote",
+            "cwd": "/work/project",
+            "command": "claude --dangerously-skip-permissions",
+            "resume": {"agent": "claude", "id": session_id},
+        },
+    )
+
+    assert response.status_code == 200
+    assert forwarded == [
+        (
+            "worker",
+            "POST",
+            "/api/workers",
+            {
+                "name": "resume-remote",
+                "cwd": "/work/project",
+                "command": (
+                    "claude --dangerously-skip-permissions --resume "
+                    "11111111-2222-4333-8444-555555555555"
+                ),
+            },
+        )
+    ]
 
 
 def test_agents_page_renders_shared_catalog_and_presets(monkeypatch, tmp_path) -> None:

@@ -115,11 +115,30 @@
                 <option
                   value="{{ preset.command }}"
                   data-agent="{{ preset.agent }}"
+                  data-preset="{{ preset.name }}"
                 >{{ preset.label }}</option>
               {% endfor %}
               <option value="" data-agent="">Custom</option>
             </select>
           </label>
+          <div class="worker-history">
+            <div class="worker-history-head">
+              <div>
+                <strong>Conversation</strong>
+                <span>Start fresh or resume a scanned CLI conversation</span>
+              </div>
+              <button type="button" class="worker-history-scan">Scan history</button>
+            </div>
+            <select class="worker-history-select" aria-label="Conversation to resume" disabled>
+              <option value="">Start a new conversation</option>
+            </select>
+            <div class="worker-history-status" aria-live="polite">Select a supported Codex or Claude Code preset.</div>
+            <div class="worker-history-selection" hidden>
+              <strong class="worker-history-title"></strong>
+              <span class="worker-history-meta"></span>
+              <code class="worker-history-cwd"></code>
+            </div>
+          </div>
           <label class="command-field">
             <span>Coding CLI Command</span>
             <input name="command" value="{{ command_presets[0].command }}" autocomplete="off">

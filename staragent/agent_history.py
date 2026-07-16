@@ -17,6 +17,7 @@ MAX_HISTORY_FILES_PER_AGENT = 160
 MAX_HISTORY_INDEX_BYTES = 2 * 1024 * 1024
 MAX_METADATA_BYTES = 1024 * 1024
 HISTORY_AGENTS = ("codex", "claude")
+HISTORY_AGENT_EXECUTABLES = {"codex": "codex", "claude": "claude"}
 HISTORY_PRIVACY_NOTE = (
     "Metadata and short prompt previews only; source history files are not modified."
 )
@@ -332,15 +333,42 @@ def public_history_entry(item: dict[str, object]) -> dict[str, object]:
 
 
 def codex_resume_command(session_id: str, cwd: str) -> str:
-    command = "codex resume"
-    if cwd:
-        command += f" -C {shlex.quote(cwd)}"
-    return f"{command} {shlex.quote(session_id)}"
+    return resume_worker_command("codex", session_id, cwd, "codex")
 
 
 def claude_resume_command(session_id: str, cwd: str) -> str:
-    command = f"claude --resume {shlex.quote(session_id)}"
+    command = resume_worker_command("claude", session_id, cwd, "claude")
     return f"cd {shlex.quote(cwd)} && {command}" if cwd else command
+
+
+def resume_worker_command(agent: str, session_id: str, cwd: str, command: str) -> str:
+    normalized_agent = clean_tool_text(agent, max_chars=20).lower()
+    expected_executable = HISTORY_AGENT_EXECUTABLES.get(normalized_agent)
+    if not expected_executable:
+        raise ValueError(f"Conversation resume is not supported for: {normalized_agent or 'unknown'}")
+    normalized_session_id = clean_tool_text(session_id, max_chars=100)
+    if not SESSION_ID_PATTERN.fullmatch(normalized_session_id):
+        raise ValueError("Conversation resume requires a valid session ID")
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError("Coding CLI command could not be parsed") from exc
+    if not argv or Path(argv[0]).name != expected_executable:
+        raise ValueError(
+            f"Selected conversation requires a {expected_executable} command preset"
+        )
+    if normalized_agent == "codex":
+        if "resume" in argv[1:]:
+            raise ValueError("Codex command already contains a resume subcommand")
+        argv = [argv[0], "resume", *argv[1:]]
+        if cwd:
+            argv.extend(["-C", cwd])
+        argv.append(normalized_session_id)
+    else:
+        if any(item in {"--resume", "-r", "--continue", "-c"} for item in argv[1:]):
+            raise ValueError("Claude command already contains a resume option")
+        argv.extend(["--resume", normalized_session_id])
+    return shlex.join(argv)
 
 
 def clean_preview(value: object) -> str:

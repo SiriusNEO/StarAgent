@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.agent_history import resume_worker_command
 from staragent.agent_tools import AgentToolUpdateBusyError, agent_catalog_payload
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
@@ -680,7 +681,18 @@ def register_nodes_routes(app: FastAPI) -> None:
             node = node_by_name(payload.node)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"node not found: {payload.node}") from exc
-        worker = CreateWorker(name=payload.name, cwd=payload.cwd, command=payload.command)
+        command = payload.command
+        if payload.resume:
+            try:
+                command = resume_worker_command(
+                    payload.resume.agent,
+                    payload.resume.id,
+                    payload.cwd,
+                    payload.command,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        worker = CreateWorker(name=payload.name, cwd=payload.cwd, command=command)
         if not node.is_local:
             return request_json(node, "POST", "/api/workers", worker.model_dump())
         try:
@@ -1548,11 +1560,17 @@ def websocket_connect_kwargs(node: NodeEntry) -> dict[str, object]:
     return {}
 
 
+class ResumeConversationRequest(BaseModel):
+    agent: str
+    id: str
+
+
 class CreateWorkerRequest(BaseModel):
     node: str = "local"
     name: str
     cwd: str
     command: str
+    resume: ResumeConversationRequest | None = None
 
 
 class LarkConfigRequest(BaseModel):

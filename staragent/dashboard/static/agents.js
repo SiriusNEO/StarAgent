@@ -533,37 +533,17 @@ if (historyBand) {
     container.appendChild(item);
   };
 
-  const startHistorySession = async (entry, button) => {
-    if (!entry.cwd || !entry.resume_command) {
-      status.textContent = "This history entry has no working directory or resume command.";
+  const openHistoryInCreateSession = (entry) => {
+    if (!entry.cwd || !entry.id || !entry.agent) {
+      status.textContent = "This history entry is missing the metadata required to resume it.";
       return;
     }
-    const suffix = Date.now().toString(36).slice(-4);
-    const shortId = String(entry.id || "history").slice(0, 8).replace(/[^A-Za-z0-9_.:-]/g, "");
-    const name = `${entry.agent}-resume-${shortId}-${suffix}`.slice(0, 80);
-    button.disabled = true;
-    button.textContent = "Starting…";
-    const response = await fetch("/api/workers", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        node: nodeSelect.value,
-        name,
-        cwd: entry.cwd,
-        command: entry.resume_command,
-      }),
+    const query = new URLSearchParams({
+      node: nodeSelect.value,
+      agent: entry.agent,
+      resume: entry.id,
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      status.textContent = body.detail || "Resume failed.";
-      button.disabled = false;
-      button.textContent = "Resume";
-      return;
-    }
-    status.textContent = "Resumed conversation. Opening session…";
-    setTimeout(() => {
-      window.location.href = `/nodes/${encodeURIComponent(nodeSelect.value)}/sessions/${encodeURIComponent(name)}`;
-    }, 350);
+    window.location.href = `/sessions?${query}#create-session`;
   };
 
   const renderHistory = (payload) => {
@@ -616,9 +596,9 @@ if (historyBand) {
       const resume = document.createElement("button");
       resume.type = "button";
       resume.className = "agent-history-resume";
-      resume.textContent = "Resume";
-      resume.disabled = !entry.cwd || !entry.resume_command;
-      resume.addEventListener("click", () => startHistorySession(entry, resume));
+      resume.textContent = "Use in Create";
+      resume.disabled = !entry.cwd || !entry.id || !entry.agent;
+      resume.addEventListener("click", () => openHistoryInCreateSession(entry));
       actions.append(resumeCode, copy, resume);
       card.append(header, title, cwd, metadata, actions);
       list.appendChild(card);
