@@ -455,6 +455,9 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert "agent-launch-form" not in agents
     assert 'class="worker-cli-maintenance" hidden' in sessions
     assert 'data-agent="{{ preset.agent }}"' in sessions
+    assert 'data-preset="{{ preset.name }}"' in sessions
+    assert 'class="worker-history"' in sessions
+    assert "Start a new conversation" in sessions
 
     script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "index.js").read_text(
         encoding="utf-8"
@@ -462,6 +465,16 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert "const agentLabels = {codex:" in script
     assert "/agent-tools/${encodeURIComponent(agent)}/update" in script
     assert "Update ${label} on ${node} before starting the Session?" in script
+    assert "/agent-history?${query}" in script
+    assert "payload.resume = {agent: resume.agent, id: resume.id}" in script
+    assert "initialParams.get(\"resume\")" in script
+
+    agent_script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agents.js").read_text(
+        encoding="utf-8"
+    )
+    assert "Use in Create" in agent_script
+    assert "`/sessions?${query}#create-session`" in agent_script
+    assert 'fetch("/api/workers"' not in agent_script
 
 
 def test_sessions_page_groups_sessions_by_node() -> None:

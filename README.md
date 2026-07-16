@@ -91,7 +91,9 @@ instead of estimating a percentage.
 The same command-preset registry powers **Sessions → Create Session** and the read-only preset
 catalog on the Agents page. General session creation stays on the Sessions page. Agents can also
 perform an explicitly requested, bounded, read-only scan of Codex and Claude Code conversation
-history and launch a new session with the CLI's resume command.
+history. A history card opens the shared Create Session flow with its Node, CLI, and conversation
+preselected; Create Session can also scan directly. Resume commands are derived from the selected
+preset, so options such as Codex YOLO or Claude permission mode stay consistent with fresh sessions.
 
 ## Remote Node
 

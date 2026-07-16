@@ -41,7 +41,9 @@ Agent sessions can be created from the Dashboard or adopted from existing tmux s
 The Agents page is the inventory and maintenance control plane for coding CLIs. A single preset
 registry feeds both its read-only catalog and **Sessions → Create Session**. General session creation
 remains on the Sessions page. Both surfaces can explicitly request an installed CLI update before a
-Session starts; no update runs during inventory probing or page load.
+Session starts; no update runs during inventory probing or page load. The same bounded conversation
+history API feeds Agents discovery and the Create Session resume picker. The Agents page hands a selected
+conversation to Create Session by URL; only Create Session owns the launch flow.
 
 ## Data Flow
 
@@ -120,7 +122,9 @@ left to its interactive `/status` command. No identity or credential values are 
 remote payloads are normalized to an allowlisted shape before display. Conversation history scanning
 is manual, reads only fixed Codex/Claude history locations, bounds both file count and bytes read, and
 returns an allowlisted metadata shape with a short prompt preview. It never modifies source history
-files or returns their paths.
+files or returns their paths. Resume creation sends a structured Agent/session ID to the Hub. The Hub
+combines it with the selected preset before forwarding a normal worker command, so preset permissions
+are retained and older Remote Nodes remain protocol-compatible.
 
 ## Logging and Supervision
 
