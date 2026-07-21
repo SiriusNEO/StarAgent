@@ -37,14 +37,21 @@ StarAgent 使用中心化架构：`StarAgent Hub` 运行 Web Dashboard，同时�
 
 ## 预览
 
-在一个地方管理所有 session：
+以下截图使用的是脱敏 demo 数据。二次元风格背景完全可选：可以从主题菜单上传任意图片，
+再搭配主题色与玻璃面板效果。
 
-![](assets/sessions.png)
+在一个地方查看跨机器的所有 session：
+
+![带有二次元星空背景的 StarAgent Sessions 页面](assets/demo-sessions-anime.webp)
 
 每个 session 都包含一个轻量 Chat 控制台，用来和 agent 交互，同时也提供 Terminal 和 File Explorer。
 Session 详情页左侧提供类似 IM 的会话切换栏，不需要先返回列表；窄屏设备上会折叠成可搜索的抽屉。
 
-![](assets/chat.png)
+![StarAgent Session 中的 Chat 与锁定状态 PTY Terminal](assets/demo-session-anime.webp)
+
+跨机器查看 Agent CLI 的可用性、登录状态、升级方式和启动 preset：
+
+![展示 Codex、Claude Code 与 OpenCode 的 StarAgent Agents 页面](assets/demo-agents-anime.webp)
 
 **注意：** 这不会影响你手动 SSH 到服务器并 attach 到对应 tmux session 进行开发。Web 界面本质上只是 parser；服务器上的 tmux CLI session 始终是 ground truth。
 
@@ -59,32 +66,9 @@ staragent hub --host 0.0.0.0 --port 8080
 
 `staragent hub` 默认会创建 `staragent-hub` 这个 tmux system session。
 打开 `http://<hub-node>:8080`，使用 `staragent hub` 打印出来的 token 登录。
-Hub 认证信息会保存在 `<staragent-source>/.staragent/auth_token`；如果你希望自己指定 token，可以在启动 Hub 前设置 `STARAGENT_AUTH_TOKEN`。
-运行状态默认保存在 `<staragent-source>/.staragent`；如果需要覆盖，可以设置 `STARAGENT_STATE_DIR`。
 
-Dashboard 的 **Logs** 页面会在 Hub 上集中保存 Hub 与各个 Node 的服务事件。
-归档文件按来源分别轮转存放在 `.staragent/logs/`（`hub.jsonl` 与
-`nodes/<node>.jsonl`）；远端 Node 只保留一个有大小上限的待同步 outbox，由 Hub 在心跳刷新时增量拉取。
-Hub 与 Node 服务都由轻量守护进程运行，因此意外退出时会留下退出码、运行时长、进程输出和自动重启事件。
-普通 HTTP 访问 URL 不会进入日志，疑似 token 的敏感值也会在落盘前脱敏。
-
-Dashboard 的 **Agents** 页面会检测每个 Node 服务进程的 `PATH` 中是否可以使用 Codex、
-Claude Code 和 OpenCode。版本检查会并行执行，使用短超时与 60 秒 Node 端缓存。
-其中 **ready** 只表示可执行文件能够正常启动；登录状态会单独显示，两种检查都不会发起模型请求。
-Codex 与 Claude Code 使用各自的只读登录状态命令，OpenCode 列出已配置的 provider credentials。
-账号身份、credential 和 token 都不会返回 Hub。页面会识别常见安装来源并给出可复制的官方
-安装/升级命令。对于已经安装的 CLI，**Update now** 会先要求确认，再根据 Node 刚刚重新检测到的
-安装来源执行内部白名单中的升级命令；浏览器不能提交命令文本，页面加载时也不会自动检查或执行升级。
-同一个可选升级入口也会出现在 **Sessions → Create Session**，方便在启动前完成更新。
-
-对于 Codex，每台机器还会通过 CLI 本地 app-server 的只读状态 RPC 显示真实的额度窗口、
-重置时间、plan、可用 credits 与 reset 次数；这个检查不会发起模型请求。Claude Code
-目前没有等价的非交互 quota 响应，因此页面只显示认证状态并提供官方交互式 `/status`
-命令，不会猜测一个百分比。
-
-**Sessions → Create Session** 与 Agents 页面的只读 preset 清单共用同一份 command preset
-注册表；通用 session 创建入口只保留在 Sessions 页面。Agents 页面还可以在用户明确点击后，
-对 Codex 与 Claude Code 的历史对话做有读取上限的只读扫描，并用 CLI 的 resume 命令恢复为新 session。
+认证与状态目录、Dashboard 页面、集中日志、Agent CLI 检测与升级、额度信息、preset 和历史会话恢复等
+详细说明见 [HUB.md](HUB.md)。
 
 ## Remote Node
 
