@@ -137,7 +137,7 @@ HTTP_TERMINAL_IDLE_SECONDS = 45.0
 HTTP_TERMINAL_MAX_AGE_SECONDS = 15 * 60.0
 CHAT_HISTORY_PATH = state_dir() / "chat_history.json"
 CHAT_HISTORY_LOCK = file_lock(CHAT_HISTORY_PATH)
-CHAT_MESSAGE_MATCH_WINDOW_MS = 5000
+CHAT_OPTIMISTIC_MATCH_WINDOW_MS = 2 * 60 * 1000
 CHAT_PENDING_USER_RETENTION_MS = 15 * 60 * 1000
 AUTH_COOKIE = "staragent_auth"
 THEME_BACKGROUND_DIR = state_dir() / "theme"
@@ -2490,22 +2490,41 @@ def chat_fingerprint(text: str) -> str:
     return re.sub(r"\s+", "", text.strip()).lower()
 
 
-def same_chat_message_instance(left: dict[str, object], right: dict[str, object]) -> bool:
-    left_id = str(left.get("id") or "")
-    right_id = str(right.get("id") or "")
-    if left_id and right_id and left_id == right_id:
+def optimistic_chat_message_matches_transcript(
+    optimistic: dict[str, object], transcript: dict[str, object]
+) -> bool:
+    """Pair a browser placeholder only with the later CLI record for that turn."""
+    optimistic_id = str(optimistic.get("id") or "")
+    transcript_id = str(transcript.get("id") or "")
+    if optimistic_id and transcript_id and optimistic_id == transcript_id:
         return True
-    if left.get("role") != right.get("role"):
+    if optimistic.get("role") != transcript.get("role"):
         return False
-    if chat_fingerprint(str(left.get("text") or "")) != chat_fingerprint(
-        str(right.get("text") or "")
+    if chat_fingerprint(str(optimistic.get("text") or "")) != chat_fingerprint(
+        str(transcript.get("text") or "")
     ):
         return False
-    left_time = int(left.get("time") or 0)
-    right_time = int(right.get("time") or 0)
+    optimistic_time = int(optimistic.get("time") or 0)
+    transcript_time = int(transcript.get("time") or 0)
     return bool(
-        left_time and right_time and abs(left_time - right_time) <= CHAT_MESSAGE_MATCH_WINDOW_MS
+        optimistic_time
+        and transcript_time
+        # CLI transcript persistence can lag tmux input by several seconds. Keeping this
+        # directional avoids consuming an older identical command from a previous turn.
+        and optimistic_time <= transcript_time <= optimistic_time + CHAT_OPTIMISTIC_MATCH_WINDOW_MS
     )
+
+
+def is_optimistic_chat_user_message(
+    message: dict[str, object], latest_transcript_time: int
+) -> bool:
+    if message.get("role") != "user":
+        return False
+    message_id = str(message.get("id") or "")
+    if message_id:
+        return message_id.startswith("client:")
+    timestamp = int(message.get("time") or 0)
+    return bool(timestamp and timestamp > latest_transcript_time)
 
 
 def pending_chat_user_messages(
@@ -2514,17 +2533,20 @@ def pending_chat_user_messages(
     now: int,
 ) -> list[dict[str, object]]:
     transcript_users = [message for message in transcript if message.get("role") == "user"]
+    latest_transcript_time = max(
+        (int(message.get("time") or 0) for message in transcript), default=0
+    )
     matched_transcript: set[int] = set()
     pending = []
     for message in sorted_chat_messages(existing):
-        if message.get("role") != "user":
+        if not is_optimistic_chat_user_message(message, latest_transcript_time):
             continue
         match_index = next(
             (
                 index
                 for index, transcript_message in enumerate(transcript_users)
                 if index not in matched_transcript
-                and same_chat_message_instance(message, transcript_message)
+                and optimistic_chat_message_matches_transcript(message, transcript_message)
             ),
             -1,
         )
