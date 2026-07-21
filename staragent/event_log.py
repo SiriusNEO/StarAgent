@@ -33,8 +33,8 @@ SENSITIVE_PAIR_PATTERN = re.compile(
     r"\b\s*[=:]\s*)([^\s&;,\"']+)"
 )
 SENSITIVE_JSON_PATTERN = re.compile(
-    r'(?i)([\"\'](?:access[_-]?token|auth(?:orization)?|api[_-]?key|password|secret|token)'
-    r'[\"\']\s*:\s*[\"\'])(.*?)([\"\'])'
+    r"(?i)([\"\'](?:access[_-]?token|auth(?:orization)?|api[_-]?key|password|secret|token)"
+    r"[\"\']\s*:\s*[\"\'])(.*?)([\"\'])"
 )
 SENSITIVE_DETAIL_KEYS = ("auth", "password", "secret", "token", "api_key", "apikey")
 
@@ -272,11 +272,7 @@ def node_ingest_cursor(node_name: str) -> str:
 
 
 def ingest_node_events(node_name: str, events: Sequence[object]) -> int:
-    normalized = [
-        normalize_received_event(item)
-        for item in events
-        if isinstance(item, Mapping)
-    ]
+    normalized = [normalize_received_event(item) for item in events if isinstance(item, Mapping)]
     if not normalized:
         return 0
     cursors_path = log_cursors_path()
@@ -314,11 +310,7 @@ def archived_node_names() -> list[str]:
     except OSError:
         return []
     return sorted(
-        {
-            urllib.parse.unquote(path.name.removesuffix(".jsonl"))
-            for path in paths
-            if path.is_file()
-        }
+        {urllib.parse.unquote(path.name.removesuffix(".jsonl")) for path in paths if path.is_file()}
     )
 
 

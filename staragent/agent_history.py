@@ -345,7 +345,9 @@ def resume_worker_command(agent: str, session_id: str, cwd: str, command: str) -
     normalized_agent = clean_tool_text(agent, max_chars=20).lower()
     expected_executable = HISTORY_AGENT_EXECUTABLES.get(normalized_agent)
     if not expected_executable:
-        raise ValueError(f"Conversation resume is not supported for: {normalized_agent or 'unknown'}")
+        raise ValueError(
+            f"Conversation resume is not supported for: {normalized_agent or 'unknown'}"
+        )
     normalized_session_id = clean_tool_text(session_id, max_chars=100)
     if not SESSION_ID_PATTERN.fullmatch(normalized_session_id):
         raise ValueError("Conversation resume requires a valid session ID")
@@ -354,9 +356,7 @@ def resume_worker_command(agent: str, session_id: str, cwd: str, command: str) -
     except ValueError as exc:
         raise ValueError("Coding CLI command could not be parsed") from exc
     if not argv or Path(argv[0]).name != expected_executable:
-        raise ValueError(
-            f"Selected conversation requires a {expected_executable} command preset"
-        )
+        raise ValueError(f"Selected conversation requires a {expected_executable} command preset")
     if normalized_agent == "codex":
         if "resume" in argv[1:]:
             raise ValueError("Codex command already contains a resume subcommand")

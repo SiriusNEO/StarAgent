@@ -365,12 +365,12 @@ def test_chat_removes_only_the_middle_message_list_frame() -> None:
     container_rule = styles.split(".mobile-chat {", 1)[1].split("}", 1)[0]
     log_rule = styles.split(".chat-log {", 1)[1].split("}", 1)[0]
     bubble_rule = styles.split(".chat-message pre {", 1)[1].split("}", 1)[0]
-    glass_surfaces = styles.split('html[data-surface-mode="glass"] :where(', 1)[1].split(
-        ") {", 1
-    )[0]
-    clear_glass_surfaces = styles.split(
-        'html[data-surface-mode="clear-glass"] :where(', 1
-    )[1].split(") {", 1)[0]
+    glass_surfaces = styles.split('html[data-surface-mode="glass"] :where(', 1)[1].split(") {", 1)[
+        0
+    ]
+    clear_glass_surfaces = styles.split('html[data-surface-mode="clear-glass"] :where(', 1)[
+        1
+    ].split(") {", 1)[0]
 
     assert "background: transparent" in container_rule
     assert "border: 0" in container_rule
@@ -414,10 +414,10 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert 'class="agent-cli-update-result" hidden' in template
     assert "renderAgentAuth" in script
     assert "tool.auth?.status" in script
-    assert 'copy.dataset.copy = auth.action' in script
+    assert "copy.dataset.copy = auth.action" in script
     assert "renderAgentUsage" in script
     assert "remaining_percent" in script
-    assert 'copy.dataset.copy = usage.action' in script
+    assert "copy.dataset.copy = usage.action" in script
     assert "/agent-tools" in script
     assert "/update`" in script
     assert "payload.updates_supported" in script
@@ -467,7 +467,7 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert "Update ${label} on ${node} before starting the Session?" in script
     assert "/agent-history?${query}" in script
     assert "payload.resume = {agent: resume.agent, id: resume.id}" in script
-    assert "initialParams.get(\"resume\")" in script
+    assert 'initialParams.get("resume")' in script
 
     agent_script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agents.js").read_text(
         encoding="utf-8"
@@ -486,7 +486,7 @@ def test_sessions_page_groups_sessions_by_node() -> None:
     assert 'class="sessions-node-group" data-node="{{ node.name }}"' in template
     assert "{% for node in node_views %}" in template
     assert "{% for view in node.sessions|sort(attribute='name') %}" in template
-    assert 'node-status-{{ node.status }}' in template
+    assert "node-status-{{ node.status }}" in template
     assert "<th>Node</th>" not in template
 
 
@@ -732,9 +732,7 @@ def test_unchanged_transcript_history_is_not_rewritten(monkeypatch, tmp_path) ->
     assert writes == 1
 
 
-def test_transcript_sync_preserves_a_recent_optimistic_user_message(
-    monkeypatch, tmp_path
-) -> None:
+def test_transcript_sync_preserves_a_recent_optimistic_user_message(monkeypatch, tmp_path) -> None:
     history_path = tmp_path / "chat_history.json"
     monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
     now = int(datetime.now().timestamp() * 1000)
@@ -767,9 +765,7 @@ def test_transcript_sync_preserves_a_recent_optimistic_user_message(
         ),
     )
 
-    matching = [
-        message for message in after_rollout_catches_up if message["text"] == "commit/push"
-    ]
+    matching = [message for message in after_rollout_catches_up if message["text"] == "commit/push"]
     assert matching == [
         {
             "role": "user",
@@ -806,9 +802,7 @@ def test_chat_history_accepts_repeated_text_with_distinct_message_ids(
     monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
     now = int(datetime.now().timestamp() * 1000)
 
-    dashboard_app.append_chat_message(
-        "local", "dev", "user", "commit/push", now, "client:first"
-    )
+    dashboard_app.append_chat_message("local", "dev", "user", "commit/push", now, "client:first")
     dashboard_app.append_chat_message(
         "local", "dev", "user", "commit/push", now + 10_000, "client:second"
     )

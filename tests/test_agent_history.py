@@ -115,16 +115,10 @@ def test_resume_worker_command_preserves_the_selected_agent_preset() -> None:
 
     assert agent_history.resume_worker_command(
         "codex", session_id, "/work/Star Agent", "codex --yolo"
-    ) == (
-        "codex resume --yolo -C '/work/Star Agent' "
-        "11111111-2222-4333-8444-555555555555"
-    )
+    ) == ("codex resume --yolo -C '/work/Star Agent' 11111111-2222-4333-8444-555555555555")
     assert agent_history.resume_worker_command(
         "claude", session_id, "/work/project", "claude --dangerously-skip-permissions"
-    ) == (
-        "claude --dangerously-skip-permissions --resume "
-        "11111111-2222-4333-8444-555555555555"
-    )
+    ) == ("claude --dangerously-skip-permissions --resume 11111111-2222-4333-8444-555555555555")
 
 
 def test_resume_worker_command_rejects_mismatched_cli_or_invalid_id() -> None:
@@ -268,8 +262,7 @@ def test_dashboard_worker_creation_resolves_structured_resume_on_the_hub(
         (
             "resume-demo",
             "/work/Star Agent",
-            "codex resume --yolo -C '/work/Star Agent' "
-            "11111111-2222-4333-8444-555555555555",
+            "codex resume --yolo -C '/work/Star Agent' 11111111-2222-4333-8444-555555555555",
         )
     ]
 
