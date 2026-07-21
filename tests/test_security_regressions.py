@@ -571,6 +571,10 @@ def test_session_chat_allows_the_same_user_command_in_multiple_turns() -> None:
 
     assert "const createChatMessageId" in script
     assert "const sameMessageInstance" in script
+    assert "const optimisticMessageMatchesTranscript" in script
+    assert "const isOptimisticUserMessage" in script
+    assert "const reconcileOptimisticMessages" in script
+    assert "for (const message of reconcileOptimisticMessages(list))" in script
     assert "id: createChatMessageId()" in script
     assert "chatHistory.some((message) => message.role === role" not in script
 
@@ -761,7 +765,7 @@ def test_transcript_sync_preserves_a_recent_optimistic_user_message(monkeypatch,
         "dev",
         (
             TranscriptMessage("agent", "Previous result", now - 1000, "agent:previous"),
-            TranscriptMessage("user", "commit/push", now + 100, "rollout:new-turn"),
+            TranscriptMessage("user", "commit/push", now + 10_000, "rollout:new-turn"),
         ),
     )
 
@@ -770,9 +774,64 @@ def test_transcript_sync_preserves_a_recent_optimistic_user_message(monkeypatch,
         {
             "role": "user",
             "text": "commit/push",
-            "time": now + 100,
+            "time": now + 10_000,
             "id": "rollout:new-turn",
         }
+    ]
+
+
+def test_transcript_sync_heals_an_existing_optimistic_duplicate(monkeypatch, tmp_path) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    now = int(datetime.now().timestamp() * 1000)
+    dashboard_app.append_chat_message(
+        "local", "dev", "user", "merge conflict", now, "client:new-turn"
+    )
+    dashboard_app.append_chat_message(
+        "local", "dev", "user", "merge conflict", now + 10_000, "rollout:new-turn"
+    )
+
+    messages = dashboard_app.replace_chat_history_from_transcript(
+        "local",
+        "dev",
+        (TranscriptMessage("user", "merge conflict", now + 10_000, "rollout:new-turn"),),
+    )
+
+    assert [message["id"] for message in messages] == ["rollout:new-turn"]
+
+
+def test_transcript_sync_does_not_match_a_new_optimistic_turn_to_an_older_turn(
+    monkeypatch, tmp_path
+) -> None:
+    history_path = tmp_path / "chat_history.json"
+    monkeypatch.setattr(dashboard_app, "CHAT_HISTORY_PATH", history_path)
+    now = int(datetime.now().timestamp() * 1000)
+    old_turn = TranscriptMessage("user", "commit/push", now - 1000, "rollout:old-turn")
+
+    dashboard_app.replace_chat_history_from_transcript("local", "dev", (old_turn,))
+    dashboard_app.append_chat_message("local", "dev", "user", "commit/push", now, "client:new-turn")
+
+    before_new_turn_arrives = dashboard_app.replace_chat_history_from_transcript(
+        "local", "dev", (old_turn,)
+    )
+
+    assert [message["id"] for message in before_new_turn_arrives] == [
+        "rollout:old-turn",
+        "client:new-turn",
+    ]
+
+    after_new_turn_arrives = dashboard_app.replace_chat_history_from_transcript(
+        "local",
+        "dev",
+        (
+            old_turn,
+            TranscriptMessage("user", "commit/push", now + 10_000, "rollout:new-turn"),
+        ),
+    )
+
+    assert [message["id"] for message in after_new_turn_arrives] == [
+        "rollout:old-turn",
+        "rollout:new-turn",
     ]
 
 

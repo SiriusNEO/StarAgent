@@ -933,6 +933,7 @@ if (chat) {
   const longMessageChars = 900;
   const longMessageLines = 14;
   const messageMatchWindowMs = 5000;
+  const optimisticMatchWindowMs = 2 * 60 * 1000;
   const pendingUserRetentionMs = 15 * 60 * 1000;
 
   const localChatHistory = () => {
@@ -969,9 +970,63 @@ if (chat) {
     const rightTime = Number(right?.time || 0);
     return Boolean(leftTime && rightTime && Math.abs(leftTime - rightTime) <= messageMatchWindowMs);
   };
+  const optimisticMessageMatchesTranscript = (optimistic, transcript) => {
+    const optimisticId = String(optimistic?.id || "");
+    const transcriptId = String(transcript?.id || "");
+    if (optimisticId && transcriptId && optimisticId === transcriptId) {
+      return true;
+    }
+    if (
+      optimistic?.role !== transcript?.role
+      || messageFingerprint(optimistic?.text) !== messageFingerprint(transcript?.text)
+    ) {
+      return false;
+    }
+    const optimisticTime = Number(optimistic?.time || 0);
+    const transcriptTime = Number(transcript?.time || 0);
+    return Boolean(
+      optimisticTime
+      && transcriptTime
+      // Transcript persistence normally trails the browser placeholder. Directionality
+      // keeps an older identical command from consuming a new optimistic turn.
+      && optimisticTime <= transcriptTime
+      && transcriptTime <= optimisticTime + optimisticMatchWindowMs
+    );
+  };
+  const isOptimisticUserMessage = (message, latestTranscriptTime) => {
+    if (message?.role !== "user") {
+      return false;
+    }
+    const id = String(message.id || "");
+    if (id) {
+      return id.startsWith("client:");
+    }
+    const timestamp = Number(message.time || 0);
+    return Boolean(timestamp && timestamp > latestTranscriptTime);
+  };
   const looksLikeTranscriptFragment = (role, text) => {
     const first = String(text || "").split("\n").find((line) => line.trim())?.trim() || "";
     return role === "agent" && (first.startsWith("›") || first.startsWith("◦ Working"));
+  };
+
+  const reconcileOptimisticMessages = (messages) => {
+    const transcriptUsers = (messages || []).filter((message) => (
+      message.role === "user" && !String(message.id || "").startsWith("client:")
+    ));
+    const matchedTranscript = new Set();
+    return (messages || []).filter((message) => {
+      if (message.role !== "user" || !String(message.id || "").startsWith("client:")) {
+        return true;
+      }
+      const transcriptIndex = transcriptUsers.findIndex((transcript, index) => (
+        !matchedTranscript.has(index) && optimisticMessageMatchesTranscript(message, transcript)
+      ));
+      if (transcriptIndex < 0) {
+        return true;
+      }
+      matchedTranscript.add(transcriptIndex);
+      return false;
+    });
   };
 
   const saveChatMessageRemote = (message) => {
@@ -1031,7 +1086,7 @@ if (chat) {
     for (const list of lists) {
       const previousCount = merged.length;
       const matchedPrevious = new Set();
-      for (const message of list || []) {
+      for (const message of reconcileOptimisticMessages(list)) {
         const role = ["user", "agent", "session"].includes(message.role) ? message.role : "agent";
         const text = String(message.text || "").trim();
         if (!text || looksLikeTranscriptFragment(role, text)) {
@@ -1068,13 +1123,17 @@ if (chat) {
 
   const pendingLocalUserMessages = (local, remote) => {
     const remoteUsers = (remote || []).filter((message) => message.role === "user");
+    const latestRemoteTime = (remote || []).reduce(
+      (latest, message) => Math.max(latest, Number(message.time || 0)),
+      0,
+    );
     const matchedRemote = new Set();
     return (local || []).filter((message) => {
-      if (message.role !== "user") {
+      if (!isOptimisticUserMessage(message, latestRemoteTime)) {
         return false;
       }
       const remoteIndex = remoteUsers.findIndex((remoteMessage, index) => (
-        !matchedRemote.has(index) && sameMessageInstance(message, remoteMessage)
+        !matchedRemote.has(index) && optimisticMessageMatchesTranscript(message, remoteMessage)
       ));
       if (remoteIndex >= 0) {
         matchedRemote.add(remoteIndex);
