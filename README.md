@@ -37,15 +37,22 @@ For the technical architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Preview
 
-Managing your session in one place:
+The screenshots below use sanitized demo data. The anime-inspired background is optional —
+upload any image from the theme menu, then pair it with a color theme and glass surfaces.
 
-![](assets/sessions.png)
+Manage sessions across machines at a glance:
+
+![StarAgent Sessions dashboard with an anime-inspired observatory background](assets/demo-sessions-anime.webp)
 
 Each session includes a lightweight chat console for interacting with agents, plus a Terminal and File Explorer.
 Session detail pages keep an IM-style switcher on the left for moving between sessions without
 returning to the session table; on narrow screens it collapses into a searchable drawer.
 
-![](assets/chat.png)
+![StarAgent session chat and locked PTY terminal](assets/demo-session-anime.webp)
+
+Inspect Agent CLI availability, login state, update paths, and launch presets across machines:
+
+![StarAgent Agents dashboard with Codex, Claude Code, and OpenCode](assets/demo-agents-anime.webp)
 
 **NOTICE:** None of this gets in the way of manually SSHing into the server and attaching to the corresponding tmux session for development. The web interface is implemented entirely as a parser — the tmux CLI sessions on the server are always the ground truth.
 
@@ -60,40 +67,9 @@ staragent hub --host 0.0.0.0 --port 8080
 
 `staragent hub` creates the `staragent-hub` tmux system session by default.
 Open `http://<hub-node>:8080` and log in with the token printed by `staragent hub`.
-Hub auth is saved in `<staragent-source>/.staragent/auth_token`; set `STARAGENT_AUTH_TOKEN`
-before starting the Hub if you want to choose the token yourself.
-Runtime state defaults to `<staragent-source>/.staragent`; set `STARAGENT_STATE_DIR` to override it.
 
-The Dashboard **Logs** page keeps Hub and per-Node service events in one central archive.
-Files rotate under `.staragent/logs/` (`hub.jsonl` and `nodes/<node>.jsonl`). Remote Nodes
-only keep a bounded delivery outbox until the Hub pulls it during heartbeat refreshes. Hub and
-Node services run behind a lightweight supervisor, so unexpected exits include the exit code,
-uptime, recent process output, and automatic-restart event. HTTP access URLs are not logged, and
-sensitive token-like values are redacted before persistence.
-
-The Dashboard **Agents** page checks whether Codex, Claude Code, and OpenCode are usable
-in every Node service's `PATH`. Version checks run in parallel with a short timeout and a 60-second
-Node-side cache. A **ready** result verifies only that the executable starts; login is reported
-separately and neither check makes a model request. Codex and Claude Code use their read-only login
-status commands, while OpenCode lists configured provider credentials. No account identity,
-credential, or token is returned to the Hub. The page identifies common install sources and offers
-copyable official install/update commands. For an installed CLI, **Update now** asks for confirmation
-and runs only the allowlisted command selected from that Node's freshly detected install source; the
-browser cannot submit command text, and StarAgent never checks or applies updates automatically on
-page load. The same optional update action appears in **Sessions → Create Session** before launch.
-
-For Codex, each machine also shows live account rate-limit windows, reset times, plan, available
-credits, and reset count through the CLI's read-only local app-server status RPC. This does not send
-a model request. Claude Code does not expose an equivalent non-interactive quota response, so the
-page reports its authentication state and provides the official interactive `/status` command
-instead of estimating a percentage.
-
-The same command-preset registry powers **Sessions → Create Session** and the read-only preset
-catalog on the Agents page. General session creation stays on the Sessions page. Agents can also
-perform an explicitly requested, bounded, read-only scan of Codex and Claude Code conversation
-history. A history card opens the shared Create Session flow with its Node, CLI, and conversation
-preselected; Create Session can also scan directly. Resume commands are derived from the selected
-preset, so options such as Codex YOLO or Claude permission mode stay consistent with fresh sessions.
+See [HUB.md](HUB.md) for authentication and state settings, Dashboard surfaces, centralized logs,
+Agent CLI checks and updates, usage reporting, presets, and conversation resume behavior.
 
 ## Remote Node
 
