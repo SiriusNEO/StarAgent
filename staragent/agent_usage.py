@@ -9,6 +9,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
+from staragent import __version__
 from staragent.text import strip_ansi
 
 AGENT_USAGE_STATUSES = {"available", "manual", "unavailable", "error", "unknown", "unsupported"}
@@ -136,7 +137,7 @@ def codex_app_server_request(
                     "clientInfo": {
                         "name": "staragent",
                         "title": "StarAgent",
-                        "version": "0.1.0",
+                        "version": __version__,
                     },
                     "capabilities": {"experimentalApi": True},
                 },

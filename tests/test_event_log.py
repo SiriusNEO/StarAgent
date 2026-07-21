@@ -68,9 +68,7 @@ def test_node_event_ingestion_is_persistently_deduplicated(monkeypatch, tmp_path
 
     assert event_log.ingest_node_events("worker", [source]) == 1
     assert event_log.ingest_node_events("worker", [source]) == 0
-    assert [item["event"] for item in event_log.read_node_events("worker")] == [
-        "service.exited"
-    ]
+    assert [item["event"] for item in event_log.read_node_events("worker")] == ["service.exited"]
     cursors = json.loads(event_log.log_cursors_path().read_text(encoding="utf-8"))
     assert cursors["nodes"]["worker"]["cursor"] == source["id"]
 

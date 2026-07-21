@@ -2490,9 +2490,7 @@ def chat_fingerprint(text: str) -> str:
     return re.sub(r"\s+", "", text.strip()).lower()
 
 
-def same_chat_message_instance(
-    left: dict[str, object], right: dict[str, object]
-) -> bool:
+def same_chat_message_instance(left: dict[str, object], right: dict[str, object]) -> bool:
     left_id = str(left.get("id") or "")
     right_id = str(right.get("id") or "")
     if left_id and right_id and left_id == right_id:
@@ -2506,9 +2504,7 @@ def same_chat_message_instance(
     left_time = int(left.get("time") or 0)
     right_time = int(right.get("time") or 0)
     return bool(
-        left_time
-        and right_time
-        and abs(left_time - right_time) <= CHAT_MESSAGE_MATCH_WINDOW_MS
+        left_time and right_time and abs(left_time - right_time) <= CHAT_MESSAGE_MATCH_WINDOW_MS
     )
 
 
