@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}{{ current_node.name }} · StarAgent{% endblock %}
+{% block content %}
+  <section class="page-head node-overview-head">
+    <div class="page-title">
+      <span class="page-kicker">{{ t("overview.kicker") }}</span>
+      <h1>{{ current_node.name }}</h1>
+      <p>{{ t("overview.description") }}</p>
+    </div>
+    <span class="pill node-status-{{ current_node.status }}">{{ t("status." ~ current_node.status) }}</span>
+  </section>
+
+  <section class="node-workspace-grid" aria-label="{{ t('overview.sections', node=current_node.name) }}">
+    <a class="node-workspace-card" href="/nodes/{{ current_node.name | urlencode }}/sessions">
+      <div class="node-workspace-card-head">
+        <span>{{ t("node.sessions") }}</span>
+        <strong>{{ stats.total }}</strong>
+      </div>
+      <p>{{ t("overview.sessions_description") }}</p>
+      <div class="node-workspace-card-meta">
+        <span>{{ t("overview.working_count", count=stats.working) }}</span>
+        <span>{{ t("overview.review_count", count=stats.review) }}</span>
+        <span>{{ t("overview.idle_count", count=stats.idle) }}</span>
+      </div>
+      <span class="node-workspace-card-open">{{ t("overview.open_sessions") }}</span>
+    </a>
+
+    <a class="node-workspace-card" href="/nodes/{{ current_node.name | urlencode }}/agents">
+      <div class="node-workspace-card-head">
+        <span>{{ t("node.agents") }}</span>
+        <strong>CLI</strong>
+      </div>
+      <p>{{ t("overview.agents_description") }}</p>
+      <span class="node-workspace-card-open">{{ t("overview.open_agents") }}</span>
+    </a>
+
+    <a class="node-workspace-card" href="/nodes/{{ current_node.name | urlencode }}/logs">
+      <div class="node-workspace-card-head">
+        <span>{{ t("node.logs") }}</span>
+        <strong>JSONL</strong>
+      </div>
+      <p>{{ t("overview.logs_description") }}</p>
+      <span class="node-workspace-card-open">{{ t("overview.open_logs") }}</span>
+    </a>
+  </section>
+
+  <section class="band node-connection-band">
+    <div class="section-title">
+      <h2>{{ t("overview.connection") }}</h2>
+      <span>{{ t("overview.connection_subtitle") }}</span>
+    </div>
+    <dl class="node-overview-details">
+      <div>
+        <dt>{{ t("common.status") }}</dt>
+        <dd><span class="pill node-status-{{ current_node.status }}">{{ t("status." ~ current_node.status) }}</span></dd>
+      </div>
+      <div>
+        <dt>{{ t("common.route") }}</dt>
+        <dd>{{ t("node.direct") if current_node.mode == "lan" else (t("node.proxy") if current_node.mode == "remote" else t("node.local")) }}</dd>
+      </div>
+      <div>
+        <dt>{{ t("common.endpoint") }}</dt>
+        <dd><code>{{ current_node.endpoint }}</code></dd>
+      </div>
+      <div>
+        <dt>{{ t("overview.last_error") }}</dt>
+        <dd class="{{ 'node-connection-error' if current_node.error else '' }}">{{ current_node.error or t("common.none") }}</dd>
+      </div>
+    </dl>
+  </section>
+{% endblock %}

@@ -1,4 +1,6 @@
 (() => {
+  const t = (key) => window.StarAgentI18n?.t(key) || key;
+
   function optionValue(value, fallback = "") {
     return typeof value === "function" ? value() : (value ?? fallback);
   }
@@ -92,7 +94,7 @@
     async function load(path, selectedPath = optionValue(options.selectedPath)) {
       const targetPath = path || optionValue(options.getPath, root.dataset.path || "/");
       loadingPath = targetPath;
-      listEl.innerHTML = `<div class="explorer-empty">${options.loadingText || "Loading..."}</div>`;
+      listEl.innerHTML = `<div class="explorer-empty">${options.loadingText || t("explorer.loading")}</div>`;
       const node = optionValue(options.node, "local");
       const includeFiles = options.includeFiles ? "&include_files=true" : "";
       const rootPath = optionValue(options.rootPath, "");
@@ -102,7 +104,7 @@
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        listEl.innerHTML = `<div class="explorer-empty">${body.detail || options.errorText || "Could not load directory."}</div>`;
+        listEl.innerHTML = `<div class="explorer-empty">${body.detail || options.errorText || t("explorer.load_failed")}</div>`;
         return;
       }
       const nextData = await response.json();
@@ -132,7 +134,7 @@
       if (data.parent) {
         listEl.appendChild(
           createEntry(
-            {name: "Parent directory", path: data.parent, type: "directory", parent: true},
+            {name: t("explorer.parent"), path: data.parent, type: "directory", parent: true},
             options,
             load,
             selectedPath,
@@ -145,7 +147,7 @@
       if (!entries.length) {
         const empty = document.createElement("div");
         empty.className = "explorer-empty";
-        empty.textContent = options.emptyText || "No matching entries.";
+        empty.textContent = options.emptyText || t("explorer.empty");
         listEl.appendChild(empty);
       }
     }
@@ -157,7 +159,7 @@
         if (!data) {
           return;
         }
-        const name = window.prompt("New folder name");
+        const name = window.prompt(t("explorer.new_folder_prompt"));
         if (!name) {
           return;
         }
@@ -173,7 +175,7 @@
           });
           if (!response.ok) {
             const body = await response.json().catch(() => ({}));
-            window.alert(body.detail || "Could not create folder.");
+            window.alert(body.detail || t("explorer.create_failed"));
             return;
           }
           const body = await response.json();

@@ -1,149 +1,154 @@
 {% extends "base.html" %}
-{% block title %}Nodes · StarAgent{% endblock %}
+{% block title %}{{ t("nav.nodes") }} · StarAgent{% endblock %}
 {% block content %}
   <section class="page-head">
     <div class="page-title">
-      <h1>Nodes</h1>
-      <p>Manage local, direct, and proxied agent nodes.</p>
+      <h1>{{ t("nav.nodes") }}</h1>
+      <p>{{ t("nodes.description") }}</p>
     </div>
     <div class="dashboard-stats dashboard-stats-nodes">
       <div class="stat-group">
-        <span class="stat-group-title">Nodes</span>
+        <span class="stat-group-title">{{ t("nodes.connections") }}</span>
         <div class="stat-row">
-          <div><strong>{{ stats.nodes }}</strong><span>Total</span></div>
-          <div><strong>{{ stats.connected_nodes }}</strong><span>Online</span></div>
-          <div><strong>{{ stats.disconnected_nodes }}</strong><span>Offline</span></div>
+          <div><strong>{{ stats.nodes }}</strong><span>{{ t("common.total") }}</span></div>
+          <div><strong>{{ stats.connected_nodes }}</strong><span>{{ t("common.online") }}</span></div>
+          <div><strong>{{ stats.disconnected_nodes }}</strong><span>{{ t("common.offline") }}</span></div>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="band">
+  <section class="band nodes-overview-band">
     <div class="section-title">
-      <h2>Dependencies</h2>
-      <span>tmux required · Tailscale optional</span>
+      <h2>{{ t("nodes.available") }}</h2>
+      <span>{{ t("nodes.online_count", connected=stats.connected_nodes, total=stats.nodes) }}</span>
     </div>
-    <div class="dependency-panel">
-      <div class="dependency-status">Checking dependencies...</div>
-      <div class="dependency-list"></div>
+    <div class="node-card-grid">
+      {% for node in node_views %}
+        <article class="node-card node-card-{{ node.status }}">
+          <a class="node-card-main" href="/nodes/{{ node.name | urlencode }}">
+            <header class="node-card-head">
+              <div class="node-card-identity">
+                <span class="node-card-status node-status-{{ node.status }}" aria-hidden="true"></span>
+                <div>
+                  <strong>{{ node.name }}</strong>
+                  <span>{{ t("node.direct") if node.mode == "lan" else (t("node.proxy") if node.mode == "remote" else t("node.local")) }}</span>
+                </div>
+              </div>
+              <span class="pill node-status-{{ node.status }}">{{ t("status." ~ node.status) }}</span>
+            </header>
+            <div class="node-card-facts">
+              <div><span>{{ t("node.sessions") }}</span><strong>{{ node.session_count }}</strong></div>
+              <div><span>{{ t("common.endpoint") }}</span><code title="{{ node.endpoint }}">{{ node.endpoint }}</code></div>
+            </div>
+            {% if node.error %}
+              <p class="node-card-error" title="{{ node.error }}">{{ node.error }}</p>
+            {% else %}
+              <p class="node-card-ready">{{ t("nodes.ready") }}</p>
+            {% endif %}
+            <span class="node-card-open">{{ t("nodes.open_workspace") }}</span>
+          </a>
+          <footer class="node-card-footer">
+            {% if node.is_removable %}
+              <button type="button" class="node-remove" data-node="{{ node.name }}">{{ t("nodes.remove") }}</button>
+            {% else %}
+              <span>{{ t("nodes.builtin") }}</span>
+            {% endif %}
+          </footer>
+        </article>
+      {% endfor %}
     </div>
   </section>
 
   <section class="band deferred-render">
     <div class="section-title">
-      <h2>Nodes</h2>
-      <span>{{ stats.connected_nodes }} / {{ stats.nodes }} online</span>
+      <h2>{{ t("nodes.add") }}</h2>
+      <span>{{ t("nodes.add_subtitle") }}</span>
     </div>
     <div class="tailscale-dashboard" hidden>
       <div class="tailscale-summary">
         <div>
           <strong>Tailnet</strong>
-          <span class="tailscale-tailnet">Checking Hub Tailscale...</span>
+          <span class="tailscale-tailnet">{{ t("nodes.tailnet_checking") }}</span>
         </div>
         <div>
-          <strong>Hub IP</strong>
+          <strong>{{ t("nodes.hub_ip") }}</strong>
           <span class="tailscale-hub-ip">-</span>
         </div>
         <div>
-          <strong>Peers</strong>
+          <strong>{{ t("nodes.peers") }}</strong>
           <span class="tailscale-peer-count">-</span>
         </div>
-        <button type="button" class="tailscale-refresh">Refresh</button>
+        <button type="button" class="tailscale-refresh">{{ t("common.refresh") }}</button>
       </div>
       <div class="tailscale-peers"></div>
-    </div>
-    <div class="tailscale-tips">
-      <div class="section-title compact-title">
-        <h2>Tailscale Tips</h2>
-        <span>from shell</span>
-      </div>
-      <div class="command tmux-command-box tips-command-box">
-        <div class="tmux-help-row tailscale-tip-row">
-          <span>Status</span>
-          <code>tailscale status</code>
-          <button type="button" class="copy-button inline-copy" data-copy="tailscale status">Copy</button>
-        </div>
-        <div class="tmux-help-row tailscale-tip-row">
-          <span>IP</span>
-          <code>tailscale ip -4</code>
-          <button type="button" class="copy-button inline-copy" data-copy="tailscale ip -4">Copy</button>
-        </div>
-        <div class="tmux-help-row tailscale-tip-row">
-          <span>Start</span>
-          <code>staragent node</code>
-          <button type="button" class="copy-button inline-copy" data-copy="staragent node">Copy</button>
-        </div>
-        <div class="tmux-help-row tailscale-tip-row">
-          <span>Start+TS</span>
-          <code>staragent node-ts --sudo</code>
-          <button type="button" class="copy-button inline-copy" data-copy="staragent node-ts --sudo">Copy</button>
-        </div>
-        <div class="tmux-help-row tailscale-tip-row">
-          <span>Verify</span>
-          <code>staragent verify-node &lt;node-host-or-100.x-ip&gt;</code>
-          <button type="button" class="copy-button inline-copy" data-copy="staragent verify-node &lt;node-host-or-100.x-ip&gt;">Copy</button>
-        </div>
-      </div>
     </div>
     <form class="node-form">
       <div class="node-grid">
         <label>
-          <span>Route</span>
+          <span>{{ t("common.route") }}</span>
           <select name="mode">
-            <option value="lan">Direct · LAN / Tailscale</option>
-            <option value="remote">System proxy</option>
+            <option value="lan">{{ t("nodes.route_direct") }}</option>
+            <option value="remote">{{ t("nodes.route_proxy") }}</option>
           </select>
         </label>
         <label>
-          <span>Name</span>
+          <span>{{ t("common.name") }}</span>
           <input name="name" placeholder="w1" autocomplete="off">
         </label>
         <label>
-          <span>Host</span>
+          <span>{{ t("nodes.host") }}</span>
           <input name="host" placeholder="192.168.1.20, 100.x.x.x, or node.tailnet.ts.net" autocomplete="off">
         </label>
         <label>
-          <span>Port</span>
+          <span>{{ t("nodes.port") }}</span>
           <input name="port" type="number" min="1" max="65535" value="8081" inputmode="numeric">
         </label>
-        <button type="submit">Add Node</button>
+        <button type="submit">{{ t("nodes.add") }}</button>
       </div>
-      <p class="form-hint">Run a StarAgent node on the target machine, then add the host and port that the Hub can reach.</p>
+      <p class="form-hint">{{ t("nodes.add_hint") }}</p>
       <div class="node-status" aria-live="polite"></div>
     </form>
-    <div class="node-table">
-      <table>
-        <thead>
-          <tr>
-            <th>Node</th>
-            <th>Route</th>
-            <th>Status</th>
-            <th>Sessions</th>
-            <th>Endpoint</th>
-            <th>Last error</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for node in node_views %}
-            <tr>
-              <td data-label="Node"><strong>{{ node.name }}</strong></td>
-              <td data-label="Route"><span class="pill mode-{{ node.mode }}">{{ "direct" if node.mode == "lan" else ("proxy" if node.mode == "remote" else "local") }}</span></td>
-              <td data-label="Status"><span class="pill node-status-{{ node.status }}">{{ node.status }}</span></td>
-              <td data-label="Sessions">{{ node.session_count }}</td>
-              <td data-label="Endpoint"><code class="inline-command">{{ node.endpoint }}</code></td>
-              <td data-label="Last error">{{ node.error or "-" }}</td>
-              <td data-label="Actions">
-                {% if node.is_removable %}
-                  <button type="button" class="node-remove" data-node="{{ node.name }}">Remove</button>
-                {% else %}
-                  <span class="muted-cell">Built in</span>
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <details class="tailscale-tips">
+      <summary>{{ t("nodes.tips") }}</summary>
+      <div class="command tmux-command-box tips-command-box">
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>{{ t("common.status") }}</span>
+          <code>tailscale status</code>
+          <button type="button" class="copy-button inline-copy" data-copy="tailscale status">{{ t("common.copy") }}</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>{{ t("nodes.ip") }}</span>
+          <code>tailscale ip -4</code>
+          <button type="button" class="copy-button inline-copy" data-copy="tailscale ip -4">{{ t("common.copy") }}</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>{{ t("nodes.start") }}</span>
+          <code>staragent node</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent node">{{ t("common.copy") }}</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>{{ t("nodes.start_ts") }}</span>
+          <code>staragent node-ts --sudo</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent node-ts --sudo">{{ t("common.copy") }}</button>
+        </div>
+        <div class="tmux-help-row tailscale-tip-row">
+          <span>{{ t("nodes.verify") }}</span>
+          <code>staragent verify-node &lt;node-host-or-100.x-ip&gt;</code>
+          <button type="button" class="copy-button inline-copy" data-copy="staragent verify-node &lt;node-host-or-100.x-ip&gt;">{{ t("common.copy") }}</button>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <section class="band deferred-render">
+    <div class="section-title">
+      <h2>{{ t("nodes.dependencies") }}</h2>
+      <span>{{ t("nodes.dependencies_subtitle") }}</span>
+    </div>
+    <div class="dependency-panel">
+      <div class="dependency-status">{{ t("nodes.dependencies_checking") }}</div>
+      <div class="dependency-list"></div>
     </div>
   </section>
 

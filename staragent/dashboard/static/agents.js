@@ -1,6 +1,8 @@
+const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
+
 const agentCatalog = Array.from(document.querySelectorAll(".agent-catalog-data [data-name]")).map((item) => ({
   name: item.dataset.name || "",
-  label: item.dataset.label || item.dataset.name || "Agent CLI",
+  label: item.dataset.label || item.dataset.name || t("sessions.agent_cli"),
   command: item.dataset.command || item.dataset.name || "",
 }));
 
@@ -10,7 +12,7 @@ async function copyAgentText(button, value) {
     if (navigator.clipboard?.writeText) {
       try {
         await navigator.clipboard.writeText(value);
-        button.textContent = "Copied";
+        button.textContent = t("nodes.copied");
         setTimeout(() => {
           button.textContent = original;
         }, 1200);
@@ -30,9 +32,9 @@ async function copyAgentText(button, value) {
     if (!copied) {
       throw new Error("Clipboard is unavailable");
     }
-    button.textContent = "Copied";
+    button.textContent = t("nodes.copied");
   } catch (_error) {
-    button.textContent = "Copy failed";
+    button.textContent = t("agents.copy_failed");
   }
   setTimeout(() => {
     button.textContent = original;
@@ -51,36 +53,61 @@ const agentToolsBand = document.querySelector(".agent-tools-band");
 if (agentToolsBand) {
   const cards = Array.from(agentToolsBand.querySelectorAll(".agent-cli-card"));
   const rows = Array.from(agentToolsBand.querySelectorAll(".agent-cli-node-row"));
+  const sidebarItems = Array.from(document.querySelectorAll(".agent-switcher-item[data-agent]"));
   const nodeNames = [...new Set(rows.map((row) => row.dataset.node || "").filter(Boolean))];
   const catalogByName = new Map(agentCatalog.map((tool) => [tool.name, tool]));
   const refreshButton = agentToolsBand.querySelector(".agent-tools-refresh");
   const status = agentToolsBand.querySelector(".agent-tools-status");
+  const updateDialog = agentToolsBand.querySelector(".agent-update-dialog");
 
   const toolState = (value) => ({
-    available: {label: "ready", style: "connected"},
-    missing: {label: "missing", style: "disconnected"},
-    error: {label: "error", style: "error"},
-    unknown: {label: "unknown", style: "optional"},
-  }[value] || {label: "unknown", style: "optional"});
+    available: {label: t("agents.state.ready"), style: "connected"},
+    missing: {label: t("agents.state.missing"), style: "disconnected"},
+    error: {label: t("agents.state.error"), style: "error"},
+    unknown: {label: t("agents.state.checking"), style: "optional"},
+  }[value] || {label: t("agents.state.checking"), style: "optional"});
 
   const checkedTime = (value) => {
     const date = new Date(value || "");
-    return Number.isNaN(date.getTime()) ? "not checked" : date.toLocaleString();
+    return Number.isNaN(date.getTime())
+      ? t("agents.not_checked")
+      : date.toLocaleString(window.StarAgentI18n?.language || []);
   };
 
   const fallbackTool = (name, message) => {
     const catalog = catalogByName.get(name) || {name, label: name, command: name};
-    return {...catalog, status: "unknown", error: message};
+    return {...catalog, status: message ? "error" : "unknown", error: message};
+  };
+
+  const renderSidebarItem = (item, tool, payload) => {
+    const statusName = tool.status || "unknown";
+    const state = toolState(statusName);
+    const stateElement = item.querySelector("[data-agent-state]");
+    const stateLabel = stateElement?.querySelector("span");
+    const stale = Boolean(payload.stale);
+    item.dataset.status = statusName;
+    item.classList.toggle("is-stale", stale);
+    if (stateLabel) {
+      stateLabel.textContent = stale && statusName === "available" ? t("agents.state.stale") : state.label;
+    }
+    const details = [state.label];
+    if (tool.version) {
+      details.push(tool.version);
+    }
+    if (stale) {
+      details.push(t("agents.cached_result"));
+    }
+    item.title = details.join(" · ");
   };
 
   const installDescription = (tool) => {
     if (tool.status === "missing") {
-      return "Not installed in the Node service PATH.";
+      return t("agents.not_installed");
     }
     if (!tool.install_method || tool.install_method === "unknown") {
-      return "Install source unknown.";
+      return t("agents.install_unknown");
     }
-    return `${tool.install_method} installation`;
+    return t("agents.installation", {method: tool.install_method});
   };
 
   const formatPercent = (value) => {
@@ -90,16 +117,18 @@ if (agentToolsBand) {
 
   const formatResetTime = (value) => {
     const date = new Date(value || "");
-    return Number.isNaN(date.getTime()) ? "Reset time unavailable" : `Resets ${date.toLocaleString()}`;
+    return Number.isNaN(date.getTime())
+      ? t("agents.reset_unavailable")
+      : t("agents.resets", {time: date.toLocaleString(window.StarAgentI18n?.language || [])});
   };
 
   const usageStatusLabel = (value) => ({
-    available: "live",
-    manual: "manual",
-    unavailable: "unavailable",
-    error: "error",
-    unknown: "unknown",
-  }[value] || "unknown");
+    available: t("agents.usage.live"),
+    manual: t("agents.usage.manual"),
+    unavailable: t("agents.usage.unavailable"),
+    error: t("agents.usage.error"),
+    unknown: t("agents.usage.unknown"),
+  }[value] || t("agents.usage.unknown"));
 
   const usageStatusStyle = (value) => ({
     available: "connected",
@@ -110,14 +139,14 @@ if (agentToolsBand) {
   }[value] || "optional");
 
   const authState = (value) => ({
-    authenticated: {label: "logged in", style: "connected"},
-    configured: {label: "configured", style: "connected"},
-    not_authenticated: {label: "signed out", style: "disconnected"},
-    not_configured: {label: "not configured", style: "disconnected"},
-    unavailable: {label: "unavailable", style: "optional"},
-    error: {label: "error", style: "error"},
-    unknown: {label: "unknown", style: "optional"},
-  }[value] || {label: "unknown", style: "optional"});
+    authenticated: {label: t("agents.auth.authenticated"), style: "connected"},
+    configured: {label: t("agents.auth.configured"), style: "connected"},
+    not_authenticated: {label: t("agents.auth.not_authenticated"), style: "disconnected"},
+    not_configured: {label: t("agents.auth.not_configured"), style: "disconnected"},
+    unavailable: {label: t("agents.auth.unavailable"), style: "optional"},
+    error: {label: t("agents.auth.error"), style: "error"},
+    unknown: {label: t("agents.auth.unknown"), style: "optional"},
+  }[value] || {label: t("agents.auth.unknown"), style: "optional"});
 
   const renderAgentAuth = (container, auth) => {
     container.replaceChildren();
@@ -127,7 +156,7 @@ if (agentToolsBand) {
     const head = document.createElement("div");
     head.className = "agent-auth-head";
     const title = document.createElement("strong");
-    title.textContent = "Login";
+    title.textContent = t("agents.login");
     const statusPill = document.createElement("span");
     statusPill.className = `pill node-status-${state.style}`;
     statusPill.textContent = state.label;
@@ -140,7 +169,7 @@ if (agentToolsBand) {
     }
     if (Number(auth?.provider_count || 0) > 0) {
       const count = Number(auth.provider_count);
-      details.push(`${count} source${count === 1 ? "" : "s"}`);
+      details.push(count === 1 ? t("agents.source_count_one") : t("agents.source_count", {count}));
     }
     if (auth?.detail) {
       details.push(auth.detail);
@@ -161,7 +190,7 @@ if (agentToolsBand) {
       copy.type = "button";
       copy.className = "copy-button inline-copy";
       copy.dataset.copy = auth.action;
-      copy.textContent = "Copy login";
+      copy.textContent = t("agents.copy_login");
       action.append(command, copy);
       container.appendChild(action);
     }
@@ -174,14 +203,14 @@ if (agentToolsBand) {
     const copy = document.createElement("div");
     copy.className = "agent-usage-window-copy";
     const label = document.createElement("span");
-    label.textContent = window.label || "Limit";
+    label.textContent = window.label || t("agents.limit");
     const value = document.createElement("strong");
-    value.textContent = `${formatPercent(remaining)}% left`;
+    value.textContent = t("agents.left", {percent: formatPercent(remaining)});
     copy.append(label, value);
     const meter = document.createElement("div");
     meter.className = "agent-usage-meter";
     meter.setAttribute("role", "progressbar");
-    meter.setAttribute("aria-label", `${window.label || "Usage"} remaining`);
+    meter.setAttribute("aria-label", t("agents.usage_remaining", {label: window.label || t("agents.usage_title")}));
     meter.setAttribute("aria-valuemin", "0");
     meter.setAttribute("aria-valuemax", "100");
     meter.setAttribute("aria-valuenow", String(remaining));
@@ -214,12 +243,12 @@ if (agentToolsBand) {
     }
     const notes = [];
     if (bucket.credits?.unlimited) {
-      notes.push("Unlimited credits");
+      notes.push(t("agents.unlimited_credits"));
     } else if (bucket.credits?.has_credits && bucket.credits.balance) {
-      notes.push(`Credits ${bucket.credits.balance}`);
+      notes.push(t("agents.credits", {balance: bucket.credits.balance}));
     }
     if (bucket.individual_limit) {
-      notes.push(`${formatPercent(bucket.individual_limit.remaining_percent)}% spend limit left`);
+      notes.push(t("agents.spend_left", {percent: formatPercent(bucket.individual_limit.remaining_percent)}));
     }
     if (bucket.reached) {
       notes.push(bucket.reached.replaceAll("_", " "));
@@ -245,7 +274,7 @@ if (agentToolsBand) {
     const head = document.createElement("div");
     head.className = "agent-usage-head";
     const title = document.createElement("strong");
-    title.textContent = "Usage";
+    title.textContent = t("agents.usage_title");
     const statusPill = document.createElement("span");
     statusPill.className = `pill node-status-${usageStatusStyle(state)}`;
     statusPill.textContent = usageStatusLabel(state);
@@ -258,10 +287,11 @@ if (agentToolsBand) {
 
     const details = [];
     if (Number(usage.reset_credits || 0) > 0) {
-      details.push(`${Number(usage.reset_credits)} reset${Number(usage.reset_credits) === 1 ? "" : "s"} available`);
+      const count = Number(usage.reset_credits);
+      details.push(count === 1 ? t("agents.reset_available_one") : t("agents.resets_available", {count}));
     }
     if (usage.checked_at) {
-      details.push(`checked ${checkedTime(usage.checked_at)}`);
+      details.push(t("agents.checked", {time: checkedTime(usage.checked_at)}));
     }
     if (details.length) {
       const meta = document.createElement("div");
@@ -284,7 +314,7 @@ if (agentToolsBand) {
       copy.type = "button";
       copy.className = "copy-button inline-copy";
       copy.dataset.copy = usage.action;
-      copy.textContent = "Copy command";
+      copy.textContent = t("agents.copy_command");
       action.append(command, copy);
       container.appendChild(action);
     }
@@ -297,16 +327,62 @@ if (agentToolsBand) {
     result.classList.toggle("is-error", isError);
   };
 
+  const confirmAgentUpdate = (row, tool) => {
+    const node = row.dataset.node || t("agents.this_node");
+    const label = tool.label || tool.name || t("sessions.agent_cli");
+    if (!updateDialog || typeof updateDialog.showModal !== "function") {
+      return Promise.resolve(window.confirm(t("agents.update_confirm", {agent: label, node})));
+    }
+
+    const card = row.closest(".agent-cli-card");
+    const sourceIcon = sidebarItems
+      .find((item) => item.dataset.agent === tool.name)
+      ?.querySelector("img");
+    const dialogIcon = updateDialog.querySelector(".agent-update-dialog-icon img");
+    const accent = card ? getComputedStyle(card).getPropertyValue("--agent-brand").trim() : "";
+    updateDialog.dataset.agent = tool.name || "";
+    updateDialog.style.setProperty("--agent-brand", accent || "var(--accent)");
+    updateDialog.querySelector("#agent-update-title").textContent = t("agents.update", {agent: label});
+    updateDialog.querySelector(".agent-update-dialog-node").textContent = node;
+    updateDialog.querySelector(".agent-update-dialog-version").textContent = tool.version
+      || row.querySelector(".agent-cli-version")?.textContent
+      || t("agents.unknown");
+    updateDialog.querySelector(".agent-update-dialog-command code").textContent = tool.update_command
+      || t("agents.no_update_command");
+    if (sourceIcon && dialogIcon) {
+      dialogIcon.src = sourceIcon.src;
+    }
+
+    updateDialog.returnValue = "cancel";
+    return new Promise((resolve) => {
+      updateDialog.addEventListener(
+        "close",
+        () => resolve(updateDialog.returnValue === "confirm"),
+        {once: true},
+      );
+      updateDialog.showModal();
+      requestAnimationFrame(() => {
+        updateDialog.querySelector(".agent-update-dialog-cancel")?.focus({preventScroll: true});
+      });
+    });
+  };
+
+  updateDialog?.addEventListener("click", (event) => {
+    if (event.target === updateDialog) {
+      updateDialog.close("cancel");
+    }
+  });
+
   const runAgentUpdate = async (row, tool, button) => {
     const node = row.dataset.node || "";
-    const label = tool.label || tool.name || "Agent CLI";
-    if (!confirm(`Update ${label} on ${node}?\n\nStarAgent will run the allowlisted update command shown here.`)) {
+    const label = tool.label || tool.name || t("sessions.agent_cli");
+    if (!await confirmAgentUpdate(row, tool)) {
       return;
     }
     row.classList.add("is-updating");
     button.disabled = true;
-    button.textContent = "Updating…";
-    setAgentUpdateResult(row, `Updating ${label} on ${node}…`);
+    button.textContent = t("agents.updating");
+    setAgentUpdateResult(row, t("agents.updating_on", {agent: label, node}));
     try {
       const response = await fetch(
         `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(tool.name)}/update`,
@@ -314,25 +390,25 @@ if (agentToolsBand) {
       );
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.ok) {
-        throw new Error(body.detail || body.error || "Update failed.");
+        throw new Error(body.detail || body.error || t("agents.update_failed"));
       }
       await loadAgentNode(node, true);
       updateCardSummaries();
-      const before = body.before_version || "previous version";
-      const after = body.after_version || "current version";
+      const before = body.before_version || t("sessions.previous_version");
+      const after = body.after_version || t("sessions.current_version");
       const message = body.changed
-        ? `${label} updated: ${before} → ${after}`
-        : `${label} update completed; ${after} is already current.`;
+        ? t("agents.updated", {agent: label, before, after})
+        : t("agents.already_current", {agent: label, version: after});
       setAgentUpdateResult(row, message);
       status.textContent = message;
     } catch (error) {
-      const message = error.message || "Update failed.";
+      const message = error.message || t("agents.update_failed");
       setAgentUpdateResult(row, message, true);
-      status.textContent = `${label} update failed on ${node}: ${message}`;
+      status.textContent = t("agents.update_failed_on", {agent: label, node, message});
     } finally {
       row.classList.remove("is-updating");
       button.disabled = false;
-      button.textContent = "Update now";
+      button.textContent = t("agents.update_now");
     }
   };
 
@@ -348,7 +424,9 @@ if (agentToolsBand) {
     const error = row.querySelector(".agent-cli-error");
 
     version.textContent = tool.version
-      || (tool.status === "missing" ? `${tool.command || tool.name} not found` : "No version reported");
+      || (tool.status === "missing"
+        ? t("agents.not_found", {command: tool.command || tool.name})
+        : t("agents.no_version"));
     version.title = tool.executable || "";
     pill.className = `pill node-status-${state.style} agent-cli-status`;
     pill.textContent = state.label;
@@ -365,7 +443,7 @@ if (agentToolsBand) {
       copy.type = "button";
       copy.className = "copy-button inline-copy";
       copy.dataset.copy = tool.update_command;
-      copy.textContent = tool.update_action === "install" ? "Copy install" : "Copy update";
+      copy.textContent = tool.update_action === "install" ? t("agents.copy_install") : t("agents.copy_update");
       actions.append(command, copy);
       if (
         tool.status === "available"
@@ -376,7 +454,7 @@ if (agentToolsBand) {
         const update = document.createElement("button");
         update.type = "button";
         update.className = "agent-cli-update-button";
-        update.textContent = "Update now";
+        update.textContent = t("agents.update_now");
         update.addEventListener("click", () => runAgentUpdate(row, tool, update));
         actions.appendChild(update);
       }
@@ -384,10 +462,10 @@ if (agentToolsBand) {
 
     const parts = [checkedTime(payload.checked_at)];
     if (payload.stale) {
-      parts.push("stale");
+      parts.push(t("agents.state.stale"));
     }
     if (!payload.supported) {
-      parts.push("Node update required");
+      parts.push(t("agents.node_update_required"));
     }
     meta.textContent = parts.join(" · ");
     const errorMessage = tool.status === "error" ? tool.error : (payload.error || "");
@@ -405,11 +483,19 @@ if (agentToolsBand) {
         .filter((tool) => tool && tool.name)
         .map((tool) => [tool.name, tool]),
     );
+    for (const item of sidebarItems) {
+      const agent = item.dataset.agent || "";
+      renderSidebarItem(
+        item,
+        tools.get(agent) || fallbackTool(agent, payload.error || t("agents.no_result")),
+        payload,
+      );
+    }
     for (const row of rows.filter((item) => item.dataset.node === node)) {
       const agent = row.closest(".agent-cli-card")?.dataset.agent || "";
       renderAgentNode(
         row,
-        tools.get(agent) || fallbackTool(agent, payload.error || "No result reported."),
+        tools.get(agent) || fallbackTool(agent, payload.error || t("agents.no_result")),
         payload,
       );
     }
@@ -423,19 +509,40 @@ if (agentToolsBand) {
         const value = row.dataset.toolStatus || "unknown";
         counts[value] = (counts[value] || 0) + 1;
       }
-      const parts = [`${counts.available} / ${cardRows.length} machines ready`];
-      if (counts.missing) {
-        parts.push(`${counts.missing} missing`);
-      }
+      let cardStatus = "unknown";
       if (counts.error) {
-        parts.push(`${counts.error} error`);
+        cardStatus = "error";
+      } else if (counts.missing) {
+        cardStatus = "missing";
+      } else if (counts.available === cardRows.length && cardRows.length) {
+        cardStatus = "available";
       }
-      if (counts.unknown) {
-        parts.push(`${counts.unknown} unknown`);
+      card.dataset.status = cardStatus;
+
+      const summary = card.querySelector(".agent-cli-summary");
+      if (!cardRows.length) {
+        summary.textContent = t("agents.no_node");
+      } else if (cardRows.length === 1) {
+        const node = cardRows[0].dataset.node || t("agents.this_node");
+        summary.textContent = ({
+          available: t("agents.ready_on", {node}),
+          missing: t("agents.install_on", {node}),
+          error: t("agents.attention_on", {node}),
+          unknown: t("agents.checking_availability", {node}),
+        })[cardStatus];
+      } else {
+        const parts = [t("agents.nodes_ready", {ready: counts.available, total: cardRows.length})];
+        if (counts.missing) {
+          parts.push(t("agents.missing_count", {count: counts.missing}));
+        }
+        if (counts.error) {
+          parts.push(t("agents.error_count", {count: counts.error}));
+        }
+        if (counts.unknown) {
+          parts.push(t("agents.checking_count", {count: counts.unknown}));
+        }
+        summary.textContent = parts.join(" · ");
       }
-      card.querySelector(".agent-cli-summary").textContent = cardRows.length
-        ? parts.join(" · ")
-        : "No machines configured.";
       card.classList.toggle(
         "is-stale",
         cardRows.some((row) => row.dataset.stale === "true"),
@@ -448,17 +555,24 @@ if (agentToolsBand) {
     for (const row of nodeRows) {
       row.classList.add("is-loading");
     }
+    for (const item of sidebarItems) {
+      item.classList.add("is-loading");
+      const stateLabel = item.querySelector("[data-agent-state] span");
+      if (stateLabel) {
+        stateLabel.textContent = t("agents.state.checking");
+      }
+    }
     try {
       const query = refresh ? "?refresh=true" : "";
       const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/agent-tools${query}`);
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(body.detail || "Agent CLI check failed.");
+        throw new Error(body.detail || t("agents.check_failed"));
       }
       renderNodePayload(node, body);
       return true;
     } catch (error) {
-      const message = error.message || "Agent CLI check failed.";
+      const message = error.message || t("agents.check_failed");
       renderNodePayload(node, {
         supported: false,
         stale: true,
@@ -470,6 +584,9 @@ if (agentToolsBand) {
       for (const row of nodeRows) {
         row.classList.remove("is-loading");
       }
+      for (const item of sidebarItems) {
+        item.classList.remove("is-loading");
+      }
     }
   };
 
@@ -477,17 +594,23 @@ if (agentToolsBand) {
     refreshButton.disabled = true;
     if (!nodeNames.length) {
       updateCardSummaries();
-      status.textContent = "No machines configured.";
+      status.textContent = t("agents.no_node");
       refreshButton.disabled = false;
       return;
     }
-    status.textContent = `Checking ${nodeNames.length} machine${nodeNames.length === 1 ? "" : "s"}…`;
+    status.textContent = nodeNames.length === 1
+      ? t("agents.checking_node", {node: nodeNames[0]})
+      : t("agents.checking_nodes", {count: nodeNames.length});
     const results = await Promise.all(nodeNames.map((node) => loadAgentNode(node, refresh)));
     updateCardSummaries();
     const failed = results.filter((ok) => !ok).length;
     status.textContent = failed
-      ? `${nodeNames.length - failed} / ${nodeNames.length} machines checked; ${failed} request${failed === 1 ? "" : "s"} failed.`
-      : `${nodeNames.length} machine${nodeNames.length === 1 ? "" : "s"} checked.`;
+      ? (failed === 1
+        ? t("agents.check_result_one_failed", {ready: nodeNames.length - failed, total: nodeNames.length})
+        : t("agents.check_result", {ready: nodeNames.length - failed, total: nodeNames.length, failed}))
+      : nodeNames.length === 1
+        ? t("agents.node_current", {node: nodeNames[0]})
+        : t("agents.nodes_checked", {count: nodeNames.length});
     refreshButton.disabled = false;
   };
 
@@ -498,8 +621,8 @@ if (agentToolsBand) {
 const historyBand = document.querySelector(".agent-history-band");
 if (historyBand) {
   const form = historyBand.querySelector(".agent-history-controls");
-  const nodeSelect = form.querySelector('select[name="node"]');
-  const agentSelect = form.querySelector('select[name="agent"]');
+  const nodeSelect = form.querySelector('[name="node"]');
+  const agentSelect = form.querySelector('[name="agent"]');
   const limitSelect = form.querySelector('select[name="limit"]');
   const scanButton = form.querySelector('button[type="submit"]');
   const status = historyBand.querySelector(".agent-history-status");
@@ -507,7 +630,9 @@ if (historyBand) {
 
   const formatTime = (value) => {
     const date = new Date(value || "");
-    return Number.isNaN(date.getTime()) ? "unknown time" : date.toLocaleString();
+    return Number.isNaN(date.getTime())
+      ? t("sessions.unknown_time")
+      : date.toLocaleString(window.StarAgentI18n?.language || []);
   };
 
   const formatSize = (value) => {
@@ -535,7 +660,7 @@ if (historyBand) {
 
   const openHistoryInCreateSession = (entry) => {
     if (!entry.cwd || !entry.id || !entry.agent) {
-      status.textContent = "This history entry is missing the metadata required to resume it.";
+      status.textContent = t("agents.history_missing_metadata");
       return;
     }
     const query = new URLSearchParams({
@@ -543,7 +668,7 @@ if (historyBand) {
       agent: entry.agent,
       resume: entry.id,
     });
-    window.location.href = `/sessions?${query}#create-session`;
+    window.location.href = `/nodes/${encodeURIComponent(nodeSelect.value)}/sessions?${query}#create-session`;
   };
 
   const renderHistory = (payload) => {
@@ -557,7 +682,7 @@ if (historyBand) {
       const identity = document.createElement("div");
       const label = document.createElement("span");
       label.className = "pill mode-agent";
-      label.textContent = entry.label || entry.agent || "Agent";
+      label.textContent = entry.label || entry.agent || t("detail.agent");
       const updated = document.createElement("span");
       updated.className = "agent-history-updated";
       updated.textContent = formatTime(entry.updated_at);
@@ -569,34 +694,34 @@ if (historyBand) {
 
       const title = document.createElement("strong");
       title.className = "agent-history-preview";
-      title.textContent = entry.title || "Untitled conversation";
+      title.textContent = entry.title || t("agents.untitled");
 
       const cwd = document.createElement("code");
       cwd.className = "agent-history-cwd";
-      cwd.textContent = entry.cwd || "Working directory unavailable";
+      cwd.textContent = entry.cwd || t("sessions.cwd_unavailable");
       cwd.title = entry.cwd || "";
 
       const metadata = document.createElement("div");
       metadata.className = "agent-history-metadata";
-      appendMetadata(metadata, "Prompts", entry.prompt_count);
-      appendMetadata(metadata, "Version", entry.cli_version);
-      appendMetadata(metadata, "Branch", entry.git_branch);
-      appendMetadata(metadata, "File", formatSize(entry.size_bytes));
+      appendMetadata(metadata, t("agents.prompts"), entry.prompt_count);
+      appendMetadata(metadata, t("agents.version"), entry.cli_version);
+      appendMetadata(metadata, t("agents.branch"), entry.git_branch);
+      appendMetadata(metadata, t("agents.file"), formatSize(entry.size_bytes));
 
       const actions = document.createElement("div");
       actions.className = "agent-history-actions";
       const resumeCode = document.createElement("code");
-      resumeCode.textContent = entry.resume_command || "Resume command unavailable";
+      resumeCode.textContent = entry.resume_command || t("agents.resume_unavailable");
       const copy = document.createElement("button");
       copy.type = "button";
       copy.className = "copy-button inline-copy";
       copy.dataset.copy = entry.resume_command || "";
-      copy.textContent = "Copy";
+      copy.textContent = t("common.copy");
       copy.disabled = !entry.resume_command;
       const resume = document.createElement("button");
       resume.type = "button";
       resume.className = "agent-history-resume";
-      resume.textContent = "Use in Create";
+      resume.textContent = t("agents.use_in_create");
       resume.disabled = !entry.cwd || !entry.id || !entry.agent;
       resume.addEventListener("click", () => openHistoryInCreateSession(entry));
       actions.append(resumeCode, copy, resume);
@@ -606,15 +731,17 @@ if (historyBand) {
     if (!sessions.length) {
       const empty = document.createElement("div");
       empty.className = "agent-empty";
-      empty.textContent = payload.error || "No matching conversation histories were found.";
+      empty.textContent = payload.error || t("agents.no_history");
       list.appendChild(empty);
     }
-    const parts = [`${sessions.length} conversation${sessions.length === 1 ? "" : "s"}`];
+    const parts = [sessions.length === 1
+      ? t("agents.history_count_one")
+      : t("agents.history_count", {count: sessions.length})];
     if (payload.truncated) {
-      parts.push("limited result; narrow the CLI filter to see more");
+      parts.push(t("agents.history_limited"));
     }
     if (payload.scanned_at) {
-      parts.push(`scanned ${formatTime(payload.scanned_at)}`);
+      parts.push(t("agents.scanned", {time: formatTime(payload.scanned_at)}));
     }
     if (payload.error) {
       parts.push(payload.error);
@@ -625,7 +752,7 @@ if (historyBand) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     scanButton.disabled = true;
-    status.textContent = `Scanning ${nodeSelect.value}…`;
+    status.textContent = t("agents.scanning_node", {node: nodeSelect.value});
     list.replaceChildren();
     const query = new URLSearchParams({
       agent: agentSelect.value,
@@ -636,11 +763,11 @@ if (historyBand) {
       const response = await fetch(`/api/nodes/${encodeURIComponent(nodeSelect.value)}/agent-history?${query}`);
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(body.detail || "History scan failed.");
+        throw new Error(body.detail || t("sessions.history_failed"));
       }
       renderHistory(body);
     } catch (error) {
-      renderHistory({sessions: [], error: error.message || "History scan failed."});
+      renderHistory({sessions: [], error: error.message || t("sessions.history_failed")});
     } finally {
       scanButton.disabled = false;
     }

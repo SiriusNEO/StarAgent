@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ view.name }} · StarAgent{% endblock %}
+{% block title %}{{ view.name }} · {{ view.node_id }} · StarAgent{% endblock %}
 {% block shell_class %}session-shell{% endblock %}
 {% block head_extra %}
   <script src="{{ url_for('static', path='explorer.js') }}?v={{ static_version('explorer.js') }}"></script>
@@ -20,6 +20,9 @@
     }
   </script>
 {% endblock %}
+{% block node_sidebar_extra %}
+  {% include "_session_sidebar.html" %}
+{% endblock %}
 {% block content %}
   <div
     class="session-assets"
@@ -30,86 +33,39 @@
     data-highlight-js="{{ url_for('static', path='vendor/highlight.js/highlight.min.js') }}?v={{ static_version('vendor/highlight.js/highlight.min.js') }}"
     hidden
   ></div>
-  <div class="session-detail-layout">
-    <aside class="session-switcher" aria-label="Session switcher">
-      <div class="session-switcher-head">
-        <a href="/sessions">
-          <strong>Sessions</strong>
-          <span>{{ sidebar_session_count }} total</span>
-        </a>
-        <button
-          type="button"
-          class="session-switcher-toggle"
-          aria-expanded="false"
-          aria-controls="session-switcher-body"
-        >Browse</button>
-      </div>
-      <div class="session-switcher-body" id="session-switcher-body">
-        <nav class="session-switcher-list" aria-label="Available sessions">
-          {% for node in sidebar_nodes %}
-            {% if node.sessions %}
-              <section class="session-switcher-group" data-node="{{ node.name }}">
-                <div class="session-switcher-group-head">
-                  <strong>{{ node.name }}</strong>
-                  <span class="pill node-status-{{ node.status }}">{{ node.status }}</span>
-                </div>
-                <div class="session-switcher-items">
-                  {% for item in node.sessions|sort(attribute='name') %}
-                    <a
-                      class="session-switcher-item{{ ' is-current' if item.node_id == view.node_id and item.name == view.name else '' }}"
-                      href="/nodes/{{ item.node_id }}/sessions/{{ item.name }}"
-                      {% if item.node_id == view.node_id and item.name == view.name %}aria-current="page"{% endif %}
-                    >
-                      <span class="session-switcher-item-copy">
-                        <strong>{{ item.name }}</strong>
-                        <span>{{ item.agent if item.session_type == 'agent' else item.session_type }} · {{ relative_time(item.last_updated) }}</span>
-                      </span>
-                      <span class="session-switcher-state pill status-{{ item.status }}">{{ item.status }}</span>
-                    </a>
-                  {% endfor %}
-                </div>
-              </section>
-            {% endif %}
-          {% endfor %}
-          {% if not sidebar_session_count %}
-            <p class="session-switcher-empty">No sessions available.</p>
-          {% endif %}
-        </nav>
-      </div>
-    </aside>
-    <div class="session-detail-main">
+  <div class="session-detail-main">
   <section class="page-head">
     <div>
       <h1>{{ view.name }}</h1>
       <p>{{ view.node_id }} · {{ view.task }}</p>
     </div>
-    <span class="pill status-{{ view.status }}">{{ view.status }}</span>
+    <span class="pill status-{{ view.status }}">{{ t("status." ~ view.status) }}</span>
   </section>
 
   <section class="detail-grid">
     <div class="panel session-panel">
       <div class="compact-panel-head">
-        <h2>Session</h2>
+        <h2>{{ t("detail.session") }}</h2>
         {% if view.session_type == "agent" and (view.status_report.source if view.status_report else "") != "adopted" %}
-          <button type="button" class="danger-button detail-stop-session" data-node="{{ view.node_id }}" data-session="{{ view.name }}">Stop</button>
+          <button type="button" class="danger-button detail-stop-session" data-node="{{ view.node_id }}" data-session="{{ view.name }}">{{ t("common.stop") }}</button>
         {% endif %}
       </div>
       <dl class="session-stats">
-        <dt>Node</dt><dd>{{ view.node_name }}</dd>
-        <dt>Agent</dt><dd>{{ view.agent }}</dd>
-        <dt>Type</dt><dd>{{ view.session_type }}</dd>
-        <dt>Backend</dt><dd>{{ view.backend }}</dd>
-        <dt>Repo</dt><dd>{{ view.repo }}</dd>
-        <dt>Last updated</dt><dd>{{ relative_time(view.last_updated) }}</dd>
-        <dt>Source</dt><dd>{{ view.status_report.source if view.status_report else "config" }}</dd>
+        <dt>{{ t("detail.node") }}</dt><dd>{{ view.node_name }}</dd>
+        <dt>{{ t("common.agent") }}</dt><dd>{{ view.agent }}</dd>
+        <dt>{{ t("common.type") }}</dt><dd>{{ view.session_type }}</dd>
+        <dt>{{ t("detail.backend") }}</dt><dd>{{ view.backend }}</dd>
+        <dt>{{ t("detail.repo") }}</dt><dd>{{ view.repo }}</dd>
+        <dt>{{ t("detail.last_updated") }}</dt><dd>{{ relative_time(view.last_updated, current_language(request)) }}</dd>
+        <dt>{{ t("common.source") }}</dt><dd>{{ view.status_report.source if view.status_report else "config" }}</dd>
       </dl>
       {% if (view.status_report.source if view.status_report else "") == "adopted" %}
-        <p class="session-note">Adopted sessions are controlled from their original tmux session. StarAgent will not kill them.</p>
+        <p class="session-note">{{ t("detail.adopted_note") }}</p>
       {% endif %}
       <div class="session-attach">
         <div class="section-title compact-title">
-          <h2>tmux Tips</h2>
-          <span>from shell</span>
+          <h2>{{ t("detail.tmux_tips") }}</h2>
+          <span>{{ t("detail.from_shell") }}</span>
         </div>
         <div class="command tmux-command-box">
           {% for item in tmux_commands %}
@@ -117,7 +73,7 @@
               <span>{{ item.label }}</span>
               <code>{{ item.command }}</code>
               {% if item.command.startswith("tmux ") %}
-                <button type="button" class="copy-button inline-copy" data-copy="{{ item.command }}">Copy</button>
+                <button type="button" class="copy-button inline-copy" data-copy="{{ item.command }}">{{ t("common.copy") }}</button>
               {% else %}
                 <span></span>
               {% endif %}
@@ -129,19 +85,19 @@
 
     {% if view.is_agent_session %}
       <div class="panel token-panel" data-token-panel>
-        <h2>CLI Metadata</h2>
+        <h2>{{ t("detail.cli_metadata") }}</h2>
         <div class="token-total" data-token-total>{{ initial_token_usage.total if initial_token_usage else "--" }}</div>
-        <div class="token-subtitle" data-token-source>{{ initial_token_usage.source if initial_token_usage else "Waiting for CLI usage" }}</div>
+        <div class="token-subtitle" data-token-source>{{ initial_token_usage.source if initial_token_usage else t("detail.waiting_usage") }}</div>
         <dl class="token-stats">
-          <dt>Model</dt><dd data-token-model>{{ initial_token_usage.model if initial_token_usage else "--" }}</dd>
-          <dt>Reasoning</dt><dd data-token-effort>{{ initial_token_usage.reasoning_effort if initial_token_usage else "--" }}</dd>
-          <dt>Plan</dt><dd data-token-plan>{{ initial_token_usage.plan if initial_token_usage else "--" }}</dd>
-          <dt>Context</dt><dd data-token-context>{{ initial_token_usage.context if initial_token_usage else "--" }}</dd>
-          <dt>Rate</dt><dd data-token-rate>{{ initial_token_usage.rate if initial_token_usage else "--" }}</dd>
-          <dt>Last Turn</dt><dd data-token-last>{{ initial_token_usage.last if initial_token_usage else "--" }}</dd>
-          <dt>Cached</dt><dd data-token-cached>{{ initial_token_usage.cached if initial_token_usage else "--" }}</dd>
-          <dt>Output</dt><dd data-token-output>{{ initial_token_usage.output if initial_token_usage else "--" }}</dd>
-          <dt>Reasoning Tokens</dt><dd data-token-reasoning>{{ initial_token_usage.reasoning if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.model") }}</dt><dd data-token-model>{{ initial_token_usage.model if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.reasoning") }}</dt><dd data-token-effort>{{ initial_token_usage.reasoning_effort if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.plan") }}</dt><dd data-token-plan>{{ initial_token_usage.plan if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.context") }}</dt><dd data-token-context>{{ initial_token_usage.context if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.rate") }}</dt><dd data-token-rate>{{ initial_token_usage.rate if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.last_turn") }}</dt><dd data-token-last>{{ initial_token_usage.last if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.cached") }}</dt><dd data-token-cached>{{ initial_token_usage.cached if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.output") }}</dt><dd data-token-output>{{ initial_token_usage.output if initial_token_usage else "--" }}</dd>
+          <dt>{{ t("detail.reasoning_tokens") }}</dt><dd data-token-reasoning>{{ initial_token_usage.reasoning if initial_token_usage else "--" }}</dd>
         </dl>
       </div>
     {% endif %}
@@ -152,17 +108,17 @@
     {% if view.is_agent_session %}
       <section class="band mobile-chat-band">
         <div class="section-title">
-          <h2>Chat</h2>
+          <h2>{{ t("detail.chat") }}</h2>
         </div>
         <div class="mobile-chat" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
           <div class="chat-log" aria-live="polite"></div>
           <div class="chat-meta"></div>
           <form class="chat-form">
-            <textarea name="message" rows="4" placeholder="Message {{ view.agent or 'agent' }}"></textarea>
+            <textarea name="message" rows="4" placeholder="{{ t('detail.message_agent', agent=view.agent or 'agent') }}"></textarea>
             <div class="chat-actions">
               <span class="chat-status"></span>
-              <button type="button" class="chat-refresh">Refresh</button>
-              <button type="submit">Send</button>
+              <button type="button" class="chat-refresh">{{ t("common.refresh") }}</button>
+              <button type="submit">{{ t("detail.send") }}</button>
             </div>
           </form>
         </div>
@@ -170,43 +126,43 @@
     {% else %}
       <section class="band">
         <div class="section-title">
-          <h2>System Session</h2>
-          <span>terminal attach</span>
+          <h2>{{ t("detail.system_session") }}</h2>
+          <span>{{ t("detail.terminal_attach") }}</span>
         </div>
-        <p class="summary">This tmux session runs StarAgent infrastructure. Chat is disabled; use Terminal to inspect or interact directly.</p>
+        <p class="summary">{{ t("detail.system_hint") }}</p>
       </section>
     {% endif %}
 
       <section class="band terminal-band">
         <div class="section-title">
-          <h2>Terminal</h2>
+          <h2>{{ t("detail.terminal") }}</h2>
           <div class="terminal-title-actions">
             <button
               type="button"
               class="terminal-input-lock is-locked"
-              aria-label="Unlock terminal input"
+              aria-label="{{ t('detail.unlock_terminal') }}"
               aria-pressed="false"
-              title="Terminal input is locked"
+              title="{{ t('detail.terminal_locked_title') }}"
               disabled
             >
               <span class="terminal-lock-icon" aria-hidden="true"></span>
-              <span class="terminal-lock-label">Locked</span>
+              <span class="terminal-lock-label">{{ t("detail.locked") }}</span>
             </button>
-            <button type="button" class="terminal-toggle">Show Terminal</button>
+            <button type="button" class="terminal-toggle">{{ t("detail.show_terminal") }}</button>
           </div>
         </div>
         <div class="terminal-wrap">
           <div class="web-terminal is-input-locked" data-node="{{ view.node_id }}" data-session="{{ view.name }}">
           <div class="terminal-screen"></div>
           <div class="terminal-status">
-            <span class="terminal-connection-meta" aria-label="Terminal connection method">
-              <span class="terminal-connection-label">Backend</span>
+            <span class="terminal-connection-meta" aria-label="{{ t('detail.connection_method') }}">
+              <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
               <strong class="terminal-connection-value">PTY</strong>
               <span class="terminal-connection-divider" aria-hidden="true">·</span>
-              <span class="terminal-connection-label">Transport</span>
+              <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
               <strong class="terminal-connection-value terminal-transport-value">WebSocket</strong>
             </span>
-            <span class="terminal-connection-state" aria-live="polite">Initializing</span>
+            <span class="terminal-connection-state" aria-live="polite">{{ t("detail.initializing") }}</span>
           </div>
         </div>
       </div>
@@ -215,7 +171,7 @@
     {% if view.is_agent_session and view.repo %}
       <section class="band workspace-band deferred-render">
         <div class="section-title">
-          <h2>Workspace</h2>
+          <h2>{{ t("detail.workspace") }}</h2>
           <span>{{ view.repo }}</span>
         </div>
         <div class="workspace-layout">
@@ -223,23 +179,23 @@
             <div class="explorer session-explorer" data-node="{{ view.node_id }}" data-path="{{ view.repo }}">
               <div class="explorer-head">
                 <div>
-                  <strong>File Explorer</strong>
+                  <strong>{{ t("detail.file_explorer") }}</strong>
                   <span class="explorer-selected">{{ view.repo }}</span>
                 </div>
-                <button type="button" class="explorer-refresh" aria-label="Refresh directory">Refresh</button>
+                <button type="button" class="explorer-refresh" aria-label="{{ t('sessions.refresh_directory') }}">{{ t("common.refresh") }}</button>
               </div>
               <div class="explorer-toolbar">
                 <div class="explorer-roots"></div>
-                <input class="explorer-filter" placeholder="Filter files" autocomplete="off">
+                <input class="explorer-filter" placeholder="{{ t('detail.filter_files') }}" autocomplete="off">
               </div>
-              <div class="explorer-path" aria-label="Current path"></div>
+              <div class="explorer-path" aria-label="{{ t('sessions.current_path') }}"></div>
               <div class="explorer-list"></div>
             </div>
             <div class="explorer changed-panel">
               <div class="explorer-head">
                 <div>
-                  <strong>Changed Files</strong>
-                  <span class="explorer-selected">{{ view.status_report.changed_files|length }} files</span>
+                  <strong>{{ t("detail.changed_files") }}</strong>
+                  <span class="explorer-selected">{{ t("detail.file_count", count=view.status_report.changed_files|length) }}</span>
                 </div>
               </div>
               {% if view.status_report.changed_files %}
@@ -255,25 +211,25 @@
                   {% endfor %}
                 </div>
               {% else %}
-                <p class="empty">No git changes in this workspace.</p>
+                <p class="empty">{{ t("detail.no_changes") }}</p>
               {% endif %}
             </div>
           </div>
           <div class="preview-panel">
             <div class="section-title compact-title">
-              <h2>Preview</h2>
+              <h2>{{ t("detail.preview") }}</h2>
               <div class="preview-title-actions">
-                <span class="preview-meta">No file selected</span>
+                <span class="preview-meta">{{ t("detail.no_file") }}</span>
                 <div class="preview-actions" hidden>
-                  <button type="button" class="preview-mode-button is-active" data-preview-mode="preview">Preview</button>
-                  <button type="button" class="preview-mode-button" data-preview-mode="source">Source</button>
+                  <button type="button" class="preview-mode-button is-active" data-preview-mode="preview">{{ t("detail.preview") }}</button>
+                  <button type="button" class="preview-mode-button" data-preview-mode="source">{{ t("detail.source") }}</button>
                 </div>
               </div>
             </div>
             <div class="preview-content">
-              <pre class="file-preview"><code class="file-preview-code">Select a file from Explorer or Changed Files.</code></pre>
+              <pre class="file-preview"><code class="file-preview-code">{{ t("detail.select_file") }}</code></pre>
               <div class="markdown-preview" hidden></div>
-              <iframe class="pdf-preview" title="PDF preview" hidden></iframe>
+              <iframe class="pdf-preview" title="{{ t('detail.pdf_preview') }}" hidden></iframe>
             </div>
           </div>
         </div>
@@ -282,10 +238,9 @@
 
   {% else %}
     <section class="band">
-      <p class="empty">No status report found for this session.</p>
+      <p class="empty">{{ t("detail.no_report") }}</p>
     </section>
   {% endif %}
-    </div>
   </div>
   <script src="{{ url_for('static', path='session.js') }}?v={{ static_version('session.js') }}"></script>
 {% endblock %}

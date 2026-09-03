@@ -7,34 +7,34 @@
   <section class="page-head lark-page-head">
     <div class="page-title">
       <h1>Lark</h1>
-      <p>Use private chat for session management and Feishu group chats for agent sessions.</p>
+      <p>{{ t("lark.description") }}</p>
     </div>
   </section>
 
   <section class="band lark-status-band">
     <div class="lark-status-grid">
       <div class="lark-status-item">
-        <span>Worker</span>
-        <strong class="lark-worker-value">{{ lark.worker.status }}</strong>
+        <span>{{ t("lark.worker") }}</span>
+        <strong class="lark-worker-value">{{ t("lark.state." ~ lark.worker.status) }}</strong>
         <small>{{ lark.worker.session }}</small>
       </div>
       <div class="lark-status-item">
-        <span>Config</span>
-        <strong class="lark-config-value">{{ "ready" if not missing else "missing" }}</strong>
-        <small class="lark-config-count">{{ missing | length }} blocking</small>
+        <span>{{ t("lark.config") }}</span>
+        <strong class="lark-config-value">{{ t("lark.ready") if not missing else t("lark.missing") }}</strong>
+        <small class="lark-config-count">{{ t("lark.blocking", count=missing|length) }}</small>
       </div>
       <div class="lark-status-item">
-        <span>Runtime</span>
-        <strong class="lark-sdk-value">{{ "ready" if lark.sdk.venv_ready else "missing" }}</strong>
-        <small class="lark-runtime-short">{{ "SDK installed" if lark.sdk.installed else "SDK missing" }}</small>
+        <span>{{ t("lark.runtime") }}</span>
+        <strong class="lark-sdk-value">{{ t("lark.ready") if lark.sdk.venv_ready else t("lark.missing") }}</strong>
+        <small class="lark-runtime-short">{{ t("lark.sdk_installed") if lark.sdk.installed else t("lark.sdk_missing") }}</small>
       </div>
     </div>
     <div class="lark-actions">
-      <button type="button" class="lark-refresh">Refresh</button>
-      <button type="button" class="lark-test">Test Connection</button>
-      <button type="button" class="lark-start">Start Worker</button>
-      <a class="lark-session-link" href="{{ lark.worker.session_url }}">Open tmux Session</a>
-      <button type="button" class="lark-stop danger-button">Stop Worker</button>
+      <button type="button" class="lark-refresh">{{ t("common.refresh") }}</button>
+      <button type="button" class="lark-test">{{ t("lark.test_connection") }}</button>
+      <button type="button" class="lark-start">{{ t("lark.start_worker") }}</button>
+      <a class="lark-session-link" href="{{ lark.worker.session_url }}">{{ t("lark.open_session") }}</a>
+      <button type="button" class="lark-stop danger-button">{{ t("lark.stop_worker") }}</button>
       <span class="lark-action-status" aria-live="polite"></span>
     </div>
     <div class="lark-test-result" hidden></div>
@@ -43,15 +43,15 @@
   <div class="lark-settings-layout">
     <section class="band lark-config-band">
       <div class="section-title">
-        <h2>Configuration</h2>
-        <span class="lark-config-summary">{{ "ready" if not missing else "missing values" }}</span>
+        <h2>{{ t("lark.configuration") }}</h2>
+        <span class="lark-config-summary">{{ t("lark.ready") if not missing else t("lark.missing_values") }}</span>
       </div>
 
       <form class="lark-config-form">
         <div class="lark-setting-row">
           <div class="lark-setting-copy">
-            <strong>App credentials</strong>
-            <span>Copy these from the Feishu/Lark developer console.</span>
+            <strong>{{ t("lark.app_credentials") }}</strong>
+            <span>{{ t("lark.app_credentials_hint") }}</span>
           </div>
           <div class="lark-setting-fields lark-two-fields">
             <label>
@@ -60,36 +60,36 @@
             </label>
             <label>
               <span>App Secret</span>
-              <input name="app_secret" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.app_secret else 'Required' }}">
+              <input name="app_secret" type="password" autocomplete="new-password" placeholder="{{ t('lark.saved_placeholder') if secrets.app_secret else t('common.required') }}">
             </label>
           </div>
         </div>
 
         <div class="lark-setting-row">
           <div class="lark-setting-copy">
-            <strong>Allowed senders</strong>
-            <span>Allow users for private management. Allow chats for groups that host agent sessions.</span>
+            <strong>{{ t("lark.allowed_senders") }}</strong>
+            <span>{{ t("lark.allowed_senders_hint") }}</span>
           </div>
           <div class="lark-setting-fields">
             <label>
-              <span>Allowed chat IDs (group optional)</span>
+              <span>{{ t("lark.allowed_chats") }}</span>
               <textarea name="allowed_chats" rows="2" placeholder="oc_xxx, oc_yyy">{{ lark.form.allowed_chats }}</textarea>
             </label>
             <label>
-              <span>Allowed user IDs (direct chat)</span>
+              <span>{{ t("lark.allowed_users") }}</span>
               <textarea name="allowed_users" rows="2" placeholder="ou_xxx, on_xxx">{{ lark.form.allowed_users }}</textarea>
             </label>
             <label class="lark-check">
               <input name="allow_all" type="checkbox" {% if lark.form.allow_all %}checked{% endif %}>
-              <span>Allow all senders while testing</span>
+              <span>{{ t("lark.allow_all") }}</span>
             </label>
           </div>
         </div>
 
         <div class="lark-setting-row">
           <div class="lark-setting-copy">
-            <strong>Dashboard links</strong>
-            <span>Used by the /open command in Lark.</span>
+            <strong>{{ t("lark.dashboard_links") }}</strong>
+            <span>{{ t("lark.dashboard_links_hint") }}</span>
           </div>
           <div class="lark-setting-fields">
             <label>
@@ -100,32 +100,32 @@
         </div>
 
         <details class="lark-advanced">
-          <summary>Advanced connection options</summary>
+          <summary>{{ t("lark.advanced") }}</summary>
           <div class="lark-setting-row">
             <div class="lark-setting-copy">
-              <strong>Optional secrets</strong>
-              <span>Only fill these if your app or remote nodes require them.</span>
+              <strong>{{ t("lark.optional_secrets") }}</strong>
+              <span>{{ t("lark.optional_secrets_hint") }}</span>
             </div>
             <div class="lark-setting-fields lark-two-fields">
               <label>
-                <span>Node token</span>
-                <input name="node_token" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.node_token else 'Optional for remote nodes' }}">
+                <span>{{ t("lark.node_token") }}</span>
+                <input name="node_token" type="password" autocomplete="new-password" placeholder="{{ t('lark.saved_placeholder') if secrets.node_token else t('lark.optional_remote') }}">
               </label>
               <label>
-                <span>Verification token</span>
-                <input name="verification_token" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.verification_token else 'Optional' }}">
+                <span>{{ t("lark.verification_token") }}</span>
+                <input name="verification_token" type="password" autocomplete="new-password" placeholder="{{ t('lark.saved_placeholder') if secrets.verification_token else t('common.optional') }}">
               </label>
               <label>
-                <span>Encrypt key</span>
-                <input name="encrypt_key" type="password" autocomplete="new-password" placeholder="{{ 'Saved; leave blank to keep' if secrets.encrypt_key else 'Optional' }}">
+                <span>{{ t("lark.encrypt_key") }}</span>
+                <input name="encrypt_key" type="password" autocomplete="new-password" placeholder="{{ t('lark.saved_placeholder') if secrets.encrypt_key else t('common.optional') }}">
               </label>
             </div>
           </div>
         </details>
 
         <div class="lark-form-actions">
-          <button type="submit">Save Config</button>
-          <button type="button" class="lark-clear-config danger-button">Clear Saved Config</button>
+          <button type="submit">{{ t("lark.save_config") }}</button>
+          <button type="button" class="lark-clear-config danger-button">{{ t("lark.clear_config") }}</button>
           <span class="lark-save-status" aria-live="polite"></span>
         </div>
       </form>
@@ -133,99 +133,99 @@
 
     <aside class="band lark-readiness-band">
       <div class="section-title">
-        <h2>Readiness</h2>
-        <span class="lark-status-label">{{ lark.worker.status }}</span>
+        <h2>{{ t("lark.readiness") }}</h2>
+        <span class="lark-status-label">{{ t("lark.state." ~ lark.worker.status) }}</span>
       </div>
       <div class="lark-readiness-list">
         <div class="lark-readiness-row">
           <div>
-            <strong>tmux worker</strong>
+            <strong>{{ t("lark.tmux_worker") }}</strong>
             <span>{{ lark.worker.session }}</span>
           </div>
-          <span class="pill node-status-{{ 'connected' if lark.worker.running else 'disconnected' }} lark-worker-pill">{{ lark.worker.status }}</span>
+          <span class="pill node-status-{{ 'connected' if lark.worker.running else 'disconnected' }} lark-worker-pill">{{ t("lark.state." ~ lark.worker.status) }}</span>
         </div>
         <div class="lark-readiness-row">
           <div>
-            <strong>StarAgent executable</strong>
+            <strong>{{ t("lark.executable") }}</strong>
             <span class="lark-runtime-path">{{ lark.sdk.venv_executable }}</span>
           </div>
-          <span class="pill node-status-{{ 'connected' if lark.sdk.venv_ready else 'disconnected' }} lark-runtime-pill">{{ "ready" if lark.sdk.venv_ready else "missing" }}</span>
+          <span class="pill node-status-{{ 'connected' if lark.sdk.venv_ready else 'disconnected' }} lark-runtime-pill">{{ t("lark.ready") if lark.sdk.venv_ready else t("lark.missing") }}</span>
         </div>
         <div class="lark-readiness-row">
           <div>
             <strong>lark-oapi</strong>
-            <span>Worker Python import check</span>
+            <span>{{ t("lark.import_check") }}</span>
           </div>
-          <span class="pill node-status-{{ 'connected' if lark.sdk.installed else 'disconnected' }} lark-sdk-pill">{{ "installed" if lark.sdk.installed else "missing" }}</span>
+          <span class="pill node-status-{{ 'connected' if lark.sdk.installed else 'disconnected' }} lark-sdk-pill">{{ t("common.installed") if lark.sdk.installed else t("lark.missing") }}</span>
         </div>
       </div>
       <p class="form-hint lark-missing-message">
         {% if missing %}
-          Missing: {{ ", ".join(missing) }}
+          {{ t("lark.missing_list", names=", ".join(missing)) }}
         {% elif lark.worker.running %}
-          Lark worker is running.
+          {{ t("lark.worker_running") }}
         {% else %}
-          Ready to start the Lark worker.
+          {{ t("lark.ready_to_start") }}
         {% endif %}
       </p>
       <details class="lark-config-details">
-        <summary>Environment details</summary>
+        <summary>{{ t("lark.environment_details") }}</summary>
         <div class="lark-config-list">
           {% for item in lark.config["items"] %}
             <div class="lark-config-row" data-config-name="{{ item.name }}">
               <div>
                 <strong>{{ item.label }}</strong>
-                <span>{{ item.value or ("required" if item.required else "optional") }}{% if item.source %} · {{ item.source }}{% endif %}</span>
+                <span>{{ item.value or (t("lark.required") if item.required else t("lark.optional")) }}{% if item.source %} · {{ item.source }}{% endif %}</span>
               </div>
-              <span class="pill node-status-{{ 'connected' if item.present else ('disconnected' if item.required else 'optional') }}">{{ "set" if item.present else ("missing" if item.required else "optional") }}</span>
+              <span class="pill node-status-{{ 'connected' if item.present else ('disconnected' if item.required else 'optional') }}">{{ t("lark.set") if item.present else (t("lark.missing") if item.required else t("lark.optional")) }}</span>
             </div>
           {% endfor %}
         </div>
       </details>
-      <p class="form-hint">Saved config: <span class="lark-config-path">{{ lark.config.path }}</span></p>
+      <p class="form-hint">{{ t("lark.saved_config") }} <span class="lark-config-path">{{ lark.config.path }}</span></p>
     </aside>
   </div>
 
   <div class="lark-guide-grid deferred-render">
     <section class="band lark-setup-band">
       <div class="section-title">
-        <h2>Usage Model</h2>
-        <span>private management · group-bound agents</span>
+        <h2>{{ t("lark.usage_model") }}</h2>
+        <span>{{ t("lark.usage_subtitle") }}</span>
       </div>
       <div class="lark-setup-list">
         <div class="lark-setup-step">
           <span>01</span>
           <div>
-            <strong>Private chat manages sessions</strong>
-            <p>和 StarAgent Bot 私聊只用于管理 session：<code>/help</code>、<code>/sessions</code>、<code>/status local/dev</code>、<code>/history local/dev 20</code>、<code>/tail local/dev 120</code>、<code>/open local/dev</code>。私聊不会把普通消息发给 agent。</p>
+            <strong>{{ t("lark.usage.1.title") }}</strong>
+            <p>{{ t("lark.usage.1.body") | safe }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>02</span>
           <div>
-            <strong>Agent chat lives in a Feishu group</strong>
-            <p>每个 agent session 对应一个飞书对话群。在群设置的“群机器人 / 添加机器人”里添加 StarAgent，然后发送 <code>/use local/my-session</code> 绑定这个群。</p>
+            <strong>{{ t("lark.usage.2.title") }}</strong>
+            <p>{{ t("lark.usage.2.body") | safe }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>03</span>
           <div>
-            <strong>Talk inside the bound group</strong>
-            <p>绑定后，同一个群里的普通消息会发到对应 agent session。群里命令默认使用当前绑定：<code>/status</code>、<code>/history 20</code>、<code>/tail 120</code>、<code>/open</code>。</p>
+            <strong>{{ t("lark.usage.3.title") }}</strong>
+            <p>{{ t("lark.usage.3.body") | safe }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>04</span>
           <div>
-            <strong>Inspect output on demand</strong>
-            <p>需要看终端细节时，在绑定群里用 <code>/tail 120</code> 主动拉取最近输出，或用 <code>/open</code> 打开 Dashboard terminal。没有结构化 transcript 时，<code>/history</code> 会提示改用 <code>/tail</code>。</p>
+            <strong>{{ t("lark.usage.4.title") }}</strong>
+            <p>{{ t("lark.usage.4.body") | safe }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>05</span>
           <div>
-            <strong>Command quick reference</strong>
-            <p>私聊：<code>/sessions</code>、<code>/status local/dev</code>、<code>/history local/dev 20</code>。群聊：<code>/use local/dev</code> 绑定，之后直接发消息，或用 <code>/status</code>、<code>/history 20</code>、<code>/tail 120</code>、<code>/open</code>。</p>
+            <strong>{{ t("lark.usage.5.title") }}</strong>
+            <p>{{ t("lark.usage.5.body") | safe }}</p>
           </div>
         </div>
       </div>
@@ -233,47 +233,47 @@
 
     <section class="band lark-setup-band">
       <div class="section-title">
-        <h2>Feishu Setup</h2>
-        <span>app · events · permissions · allowlist</span>
+        <h2>{{ t("lark.feishu_setup") }}</h2>
+        <span>{{ t("lark.feishu_subtitle") }}</span>
       </div>
       <div class="lark-setup-list">
         <div class="lark-setup-step">
           <span>01</span>
           <div>
-            <strong>Create an internal app</strong>
-            <p>飞书开放平台里创建“企业自建应用”。在“凭证与基础信息”复制 App ID 和 App Secret，填到上面的表单。</p>
+            <strong>{{ t("lark.setup.1.title") }}</strong>
+            <p>{{ t("lark.setup.1.body") }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>02</span>
           <div>
-            <strong>Enable the bot</strong>
-            <p>在“应用能力”里启用机器人，设置名称和头像。私聊用于 session 管理；agent 对话需要把机器人从群设置里的“群机器人 / 添加机器人”入口加入对应对话群。</p>
+            <strong>{{ t("lark.setup.2.title") }}</strong>
+            <p>{{ t("lark.setup.2.body") }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>03</span>
           <div>
-            <strong>Subscribe to message events</strong>
-            <p>在“事件与回调”里启用事件订阅，使用 WebSocket/长连接模式，订阅 <code>im.message.receive_v1</code>。</p>
+            <strong>{{ t("lark.setup.3.title") }}</strong>
+            <p>{{ t("lark.setup.3.body") | safe }}</p>
           </div>
         </div>
         <div class="lark-setup-step">
           <span>04</span>
           <div>
-            <strong>Grant permissions and publish</strong>
-            <p>添加消息接收、机器人发消息、发送和删除消息表情回复权限，发布应用版本并完成企业管理员审批。</p>
+            <strong>{{ t("lark.setup.4.title") }}</strong>
+            <p>{{ t("lark.setup.4.body") }}</p>
             <div class="copy-command lark-scope-copy">
               <pre class="command">{{ lark.commands.scopes }}</pre>
-              <button type="button" class="copy-button" data-copy="{{ lark.commands.scopes }}">Copy</button>
+              <button type="button" class="copy-button" data-copy="{{ lark.commands.scopes }}">{{ t("common.copy") }}</button>
             </div>
           </div>
         </div>
         <div class="lark-setup-step lark-setup-wide">
           <span>05</span>
           <div>
-            <strong>Lock down access</strong>
-            <p>第一次联调可以临时勾选 Allow all。私聊里发送 <code>/sessions</code>；对话群里发送 <code>@StarAgent /use local/dev</code>。Worker Output 会打印 <code>open_id</code>、<code>chat_id</code>、<code>root_id</code>、<code>thread_id</code>，复制可信用户或群聊到 allowlist 后关闭 Allow all。</p>
+            <strong>{{ t("lark.setup.5.title") }}</strong>
+            <p>{{ t("lark.setup.5.body") | safe }}</p>
           </div>
         </div>
       </div>
@@ -283,34 +283,34 @@
   <div class="lark-lower-grid deferred-render">
     <section class="band lark-command-band">
       <div class="section-title">
-        <h2>Commands</h2>
-        <span>shell fallback</span>
+        <h2>{{ t("lark.commands") }}</h2>
+        <span>{{ t("lark.shell_fallback") }}</span>
       </div>
       <div class="lark-command-grid">
         <div class="copy-command">
-          <strong>Install</strong>
+          <strong>{{ t("lark.install") }}</strong>
           <pre class="command">{{ lark.commands.install }}</pre>
-          <button type="button" class="copy-button" data-copy="{{ lark.commands.install }}">Copy</button>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.install }}">{{ t("common.copy") }}</button>
         </div>
         <div class="copy-command">
-          <strong>Start</strong>
+          <strong>{{ t("lark.start") }}</strong>
           <pre class="command">{{ lark.commands.start }}</pre>
-          <button type="button" class="copy-button" data-copy="{{ lark.commands.start }}">Copy</button>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.start }}">{{ t("common.copy") }}</button>
         </div>
         <div class="copy-command">
-          <strong>Attach</strong>
+          <strong>{{ t("lark.attach") }}</strong>
           <pre class="command">{{ lark.commands.tmux }}</pre>
-          <button type="button" class="copy-button" data-copy="{{ lark.commands.tmux }}">Copy</button>
+          <button type="button" class="copy-button" data-copy="{{ lark.commands.tmux }}">{{ t("common.copy") }}</button>
         </div>
       </div>
     </section>
 
     <section class="band lark-output-band">
       <div class="section-title">
-        <h2>Worker Output</h2>
-        <span>latest tmux capture</span>
+        <h2>{{ t("lark.worker_output") }}</h2>
+        <span>{{ t("lark.latest_capture") }}</span>
       </div>
-      <pre class="lark-output">{{ lark.worker.recent_output or "No Lark worker output." }}</pre>
+      <pre class="lark-output">{{ lark.worker.recent_output or t("lark.no_output") }}</pre>
     </section>
   </div>
 

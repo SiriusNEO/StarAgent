@@ -1,17 +1,19 @@
 (() => {
   const settings = window.StarAgentThemeSettings;
-  const themeButton = document.querySelector(".brand-theme-button");
-  const menu = document.querySelector(".theme-menu");
-  if (!settings || !themeButton || !menu) {
+  if (!settings) {
     return;
   }
 
+  const controlRoot = document.querySelector("[data-theme-settings]");
+  const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
+  const controls = (selector) => controlRoot ? controlRoot.querySelectorAll(selector) : [];
   const {storageKey, legacyKey, backgroundModeKey, backgroundImageKey, surfaceModeKey, legacyMap} = settings;
   const themes = new Set(settings.themes);
   const backgroundModes = new Set(settings.backgroundModes);
   const surfaceModes = new Set(settings.surfaceModes);
   let backgrounds = [];
   let selectedBackgroundId = "";
+
   const selectedBackground = () => backgrounds.find((item) => item.id === selectedBackgroundId) || null;
   const applyTheme = (theme, persist = false) => {
     if (!themes.has(theme)) {
@@ -19,8 +21,10 @@
     }
     const root = document.documentElement;
     root.dataset.theme = theme;
-    for (const option of menu.querySelectorAll(".theme-option")) {
-      option.classList.toggle("is-active", option.dataset.theme === theme);
+    for (const option of controls(".theme-option")) {
+      const active = option.dataset.theme === theme;
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-checked", String(active));
     }
     if (persist) {
       localStorage.setItem(storageKey, theme);
@@ -29,7 +33,7 @@
     window.dispatchEvent(new CustomEvent("staragent:themechange", {detail: {theme}}));
   };
   const setThemeStatus = (message) => {
-    const status = menu.querySelector(".theme-upload-status");
+    const status = controlRoot?.querySelector(".theme-upload-status");
     if (status) {
       status.textContent = message || "";
     }
@@ -65,13 +69,15 @@
     if (!backgroundModes.has(mode)) {
       return;
     }
-    if (mode === "image" && !selectedBackground()) {
-      setThemeStatus("Upload or select a background image first.");
+    if (mode === "image" && !selectedBackground() && persist) {
+      setThemeStatus(t("theme.image_required"));
       return;
     }
     document.documentElement.dataset.bgMode = mode;
-    for (const button of menu.querySelectorAll("[data-bg-mode]")) {
-      button.classList.toggle("is-active", button.dataset.bgMode === mode);
+    for (const button of controls("[data-bg-mode]")) {
+      const active = button.dataset.bgMode === mode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
     }
     if (persist) {
       localStorage.setItem(backgroundModeKey, mode);
@@ -79,7 +85,11 @@
     }
   };
   const renderBackgroundLibrary = () => {
-    const library = menu.querySelector(".theme-background-library");
+    const library = controlRoot?.querySelector(".theme-background-library");
+    const empty = controlRoot?.querySelector(".settings-gallery-empty");
+    if (empty) {
+      empty.hidden = backgrounds.length > 0;
+    }
     if (!library) {
       return;
     }
@@ -95,14 +105,20 @@
       item.className = "theme-background-thumb";
       item.dataset.bgId = background.id;
       item.style.backgroundImage = `url("${backgroundThumbUrl(background)}")`;
-      item.setAttribute("aria-label", "Select background image");
-      item.classList.toggle("is-active", background.id === selectedBackgroundId);
+      const active = background.id === selectedBackgroundId;
+      item.setAttribute("aria-label", `${t("settings.gallery.select")}: ${background.id}`);
+      item.setAttribute("aria-pressed", String(active));
+      item.classList.toggle("is-active", active);
+      if (active) {
+        item.title = t("settings.gallery.active");
+      }
 
       const deleteButton = document.createElement("span");
       deleteButton.className = "theme-background-delete";
       deleteButton.dataset.bgDelete = background.id;
       deleteButton.setAttribute("role", "button");
-      deleteButton.setAttribute("aria-label", "Delete background image");
+      deleteButton.setAttribute("aria-label", `${t("settings.gallery.delete")}: ${background.id}`);
+      deleteButton.setAttribute("tabindex", "0");
       deleteButton.textContent = "×";
       item.append(deleteButton);
       library.append(item);
@@ -126,7 +142,7 @@
     const root = document.documentElement;
     root.style.setProperty("--custom-bg-image", background ? `url("${backgroundImageUrl(background)}")` : "none");
     renderBackgroundLibrary();
-    const clearButton = menu.querySelector(".theme-clear-background");
+    const clearButton = controlRoot?.querySelector(".theme-clear-background");
     if (clearButton) {
       clearButton.disabled = !background;
     }
@@ -139,11 +155,14 @@
       return;
     }
     document.documentElement.dataset.surfaceMode = mode;
-    for (const button of menu.querySelectorAll("[data-surface-mode]")) {
-      button.classList.toggle("is-active", button.dataset.surfaceMode === mode);
+    for (const button of controls("[data-surface-mode]")) {
+      const active = button.dataset.surfaceMode === mode;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
     }
     if (persist) {
-      setThemeStatus(`Surface: ${mode === "clear-glass" ? "Clear" : mode === "glass" ? "Glass" : "Solid"}`);
+      const surfaceKey = mode === "clear-glass" ? "clear" : mode;
+      setThemeStatus(t("theme.surface_changed", {surface: t(`settings.surface.${surfaceKey}`)}));
       localStorage.setItem(surfaceModeKey, mode);
     }
   };
@@ -160,7 +179,7 @@
       const legacyImageMode = localStorage.getItem(backgroundImageKey) === "on" ? "image" : savedMode;
       applyBackgroundMode(legacyImageMode);
     } catch {
-      setThemeStatus("Theme settings unavailable.");
+      setThemeStatus(t("theme.unavailable"));
     }
   };
   const ensureThemeConfig = () => {
@@ -185,22 +204,12 @@
     window.StarAgentAfterPaint(ensureThemeConfig);
   }
 
-  const closeMenu = () => {
-    menu.hidden = true;
-    themeButton.setAttribute("aria-expanded", "false");
-  };
-  const openMenu = () => {
-    menu.hidden = false;
-    themeButton.setAttribute("aria-expanded", "true");
-    ensureThemeConfig();
-  };
+  if (!controlRoot) {
+    window.StarAgentTheme = {applyTheme, applyBackgroundMode, applySurfaceMode, ensureThemeConfig};
+    return;
+  }
 
-  themeButton.addEventListener("click", (event) => {
-    event.stopPropagation();
-    menu.hidden ? openMenu() : closeMenu();
-  });
-  menu.addEventListener("click", async (event) => {
-    event.stopPropagation();
+  controlRoot.addEventListener("click", async (event) => {
     const option = event.target.closest(".theme-option");
     if (option) {
       applyTheme(option.dataset.theme, true);
@@ -219,7 +228,7 @@
     const deleteBackgroundButton = event.target.closest("[data-bg-delete]");
     if (deleteBackgroundButton) {
       const backgroundId = deleteBackgroundButton.dataset.bgDelete;
-      setThemeStatus("Deleting background...");
+      setThemeStatus(t("theme.deleting"));
       try {
         const response = await fetch(`/api/theme/backgrounds/${encodeURIComponent(backgroundId)}`, {method: "DELETE"});
         const body = await response.json().catch(() => ({}));
@@ -230,16 +239,16 @@
         if (!selectedBackground()) {
           applyBackgroundMode("gradient", true);
         }
-        setThemeStatus("Background deleted.");
-      } catch (error) {
-        setThemeStatus(error.message || "Failed to delete background.");
+        setThemeStatus(t("theme.deleted"));
+      } catch {
+        setThemeStatus(t("theme.delete_failed"));
       }
       return;
     }
     const backgroundButton = event.target.closest("[data-bg-id]");
     if (backgroundButton) {
       const backgroundId = backgroundButton.dataset.bgId;
-      setThemeStatus("Selecting background...");
+      setThemeStatus(t("theme.selecting"));
       try {
         const response = await fetch(`/api/theme/backgrounds/${encodeURIComponent(backgroundId)}/select`, {method: "POST"});
         const body = await response.json().catch(() => ({}));
@@ -250,9 +259,9 @@
         await preloadBackground(nextBackground);
         applyThemeConfig(body);
         applyBackgroundMode("image", true);
-        setThemeStatus("Background selected.");
-      } catch (error) {
-        setThemeStatus(error.message || "Failed to select background.");
+        setThemeStatus(t("theme.selected"));
+      } catch {
+        setThemeStatus(t("theme.select_failed"));
       }
       return;
     }
@@ -261,7 +270,7 @@
       return;
     }
     clearButton.disabled = true;
-    setThemeStatus("Clearing background...");
+    setThemeStatus(t("theme.clearing"));
     try {
       const response = await fetch("/api/theme/background", {method: "DELETE"});
       const body = await response.json().catch(() => ({}));
@@ -270,13 +279,22 @@
       }
       applyThemeConfig(body);
       applyBackgroundMode("gradient", true);
-      setThemeStatus("Background cleared.");
-    } catch (error) {
+      setThemeStatus(t("theme.cleared"));
+    } catch {
       clearButton.disabled = false;
-      setThemeStatus(error.message || "Failed to clear background.");
+      setThemeStatus(t("theme.clear_failed"));
     }
   });
-  const uploadInput = menu.querySelector(".theme-upload-button input");
+  controlRoot.addEventListener("keydown", (event) => {
+    const deleteBackgroundButton = event.target.closest("[data-bg-delete]");
+    if (!deleteBackgroundButton || !["Enter", " "].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    deleteBackgroundButton.click();
+  });
+  const uploadInput = controlRoot.querySelector(".theme-upload-button input");
   if (uploadInput) {
     uploadInput.addEventListener("change", async () => {
       const file = uploadInput.files && uploadInput.files[0];
@@ -284,11 +302,11 @@
         return;
       }
       if (file.size > 8 * 1024 * 1024) {
-        setThemeStatus("Image must be 8 MiB or smaller.");
+        setThemeStatus(t("theme.image_too_large"));
         uploadInput.value = "";
         return;
       }
-      setThemeStatus("Uploading background...");
+      setThemeStatus(t("theme.uploading"));
       try {
         const response = await fetch("/api/theme/background", {
           method: "POST",
@@ -303,27 +321,170 @@
         await preloadBackground(nextBackground);
         applyThemeConfig(body);
         applyBackgroundMode("image", true);
-        setThemeStatus("Background uploaded.");
-      } catch (error) {
-        setThemeStatus(error.message || "Failed to upload background.");
+        setThemeStatus(t("theme.uploaded"));
+      } catch {
+        setThemeStatus(t("theme.upload_failed"));
       } finally {
         uploadInput.value = "";
       }
     });
   }
-  for (const button of menu.querySelectorAll("[data-surface-mode]")) {
-    const applyFromButton = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      applySurfaceMode(button.dataset.surfaceMode, true);
-    };
-    button.addEventListener("pointerdown", applyFromButton);
-    button.addEventListener("click", applyFromButton);
+  window.StarAgentTheme = {applyTheme, applyBackgroundMode, applySurfaceMode, ensureThemeConfig};
+})();
+
+(() => {
+  const sidebar = document.querySelector(".node-workspace-sidebar");
+  const toggle = document.querySelector(".node-workspace-toggle");
+  const closeButton = document.querySelector(".node-workspace-close");
+  const overlay = document.querySelector(".node-workspace-overlay");
+  const resizeHandle = document.querySelector(".node-workspace-resize-handle");
+  if (!sidebar || !toggle || !closeButton || !overlay) {
+    return;
   }
-  document.addEventListener("click", closeMenu);
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      closeMenu();
+
+  const mobileQuery = window.matchMedia("(max-width: 820px)");
+  const sidebarWidthKey = "staragent.nodeSidebarWidth";
+  const defaultSidebarWidth = 248;
+  const minSidebarWidth = 220;
+  const maxSidebarWidth = 320;
+  const clampSidebarWidth = (value) => Math.max(minSidebarWidth, Math.min(maxSidebarWidth, Math.round(value)));
+  let sidebarWidth = clampSidebarWidth(sidebar.getBoundingClientRect().width || defaultSidebarWidth);
+  let hasCustomSidebarWidth = false;
+  const applySidebarWidth = (value, {persist = false} = {}) => {
+    sidebarWidth = clampSidebarWidth(value);
+    document.documentElement.style.setProperty("--node-workspace-width", `${sidebarWidth}px`);
+    if (resizeHandle) {
+      resizeHandle.setAttribute("aria-valuenow", String(sidebarWidth));
+    }
+    if (persist) {
+      hasCustomSidebarWidth = true;
+      try {
+        localStorage.setItem(sidebarWidthKey, String(sidebarWidth));
+      } catch {
+        // Keep resizing functional when storage is unavailable.
+      }
+    }
+  };
+  try {
+    const savedWidth = Number(localStorage.getItem(sidebarWidthKey));
+    if (Number.isFinite(savedWidth) && savedWidth > 0) {
+      hasCustomSidebarWidth = true;
+      applySidebarWidth(savedWidth);
+    }
+  } catch {
+    // Use the CSS default when storage is unavailable.
+  }
+  if (resizeHandle) {
+    resizeHandle.setAttribute("aria-valuenow", String(sidebarWidth));
+  }
+
+  const resetSidebarWidth = () => {
+    hasCustomSidebarWidth = false;
+    document.documentElement.style.removeProperty("--node-workspace-width");
+    try {
+      localStorage.removeItem(sidebarWidthKey);
+    } catch {
+      // The responsive CSS width still resets without storage access.
+    }
+    requestAnimationFrame(() => {
+      sidebarWidth = clampSidebarWidth(sidebar.getBoundingClientRect().width || defaultSidebarWidth);
+      if (resizeHandle) {
+        resizeHandle.setAttribute("aria-valuenow", String(sidebarWidth));
+      }
+    });
+  };
+
+  if ("ResizeObserver" in window) {
+    const sidebarResizeObserver = new ResizeObserver(() => {
+      if (hasCustomSidebarWidth || document.body.classList.contains("is-node-workspace-resizing")) {
+        return;
+      }
+      sidebarWidth = clampSidebarWidth(sidebar.getBoundingClientRect().width || defaultSidebarWidth);
+      if (resizeHandle) {
+        resizeHandle.setAttribute("aria-valuenow", String(sidebarWidth));
+      }
+    });
+    sidebarResizeObserver.observe(sidebar);
+  }
+
+  if (resizeHandle) {
+    let resizeStartX = 0;
+    let resizeStartWidth = sidebarWidth;
+    let activePointerId = null;
+    const finishResize = () => {
+      if (activePointerId === null) {
+        return;
+      }
+      activePointerId = null;
+      document.body.classList.remove("is-node-workspace-resizing");
+      applySidebarWidth(sidebarWidth, {persist: true});
+    };
+    resizeHandle.addEventListener("pointerdown", (event) => {
+      if (mobileQuery.matches || event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      activePointerId = event.pointerId;
+      resizeStartX = event.clientX;
+      resizeStartWidth = sidebar.getBoundingClientRect().width;
+      resizeHandle.setPointerCapture(event.pointerId);
+      document.body.classList.add("is-node-workspace-resizing");
+    });
+    resizeHandle.addEventListener("pointermove", (event) => {
+      if (event.pointerId !== activePointerId) {
+        return;
+      }
+      applySidebarWidth(resizeStartWidth + event.clientX - resizeStartX);
+    });
+    resizeHandle.addEventListener("pointerup", finishResize);
+    resizeHandle.addEventListener("pointercancel", finishResize);
+    resizeHandle.addEventListener("lostpointercapture", finishResize);
+    resizeHandle.addEventListener("dblclick", resetSidebarWidth);
+    resizeHandle.addEventListener("keydown", (event) => {
+      let nextWidth = sidebarWidth;
+      if (event.key === "ArrowLeft") {
+        nextWidth -= 12;
+      } else if (event.key === "ArrowRight") {
+        nextWidth += 12;
+      } else if (event.key === "Home") {
+        nextWidth = minSidebarWidth;
+      } else if (event.key === "End") {
+        nextWidth = maxSidebarWidth;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      applySidebarWidth(nextWidth, {persist: true});
+    });
+  }
+
+  const setOpen = (open, {restoreFocus = false} = {}) => {
+    const nextOpen = mobileQuery.matches && open;
+    document.body.classList.toggle("is-node-workspace-open", nextOpen);
+    toggle.setAttribute("aria-expanded", String(nextOpen));
+    sidebar.setAttribute("aria-hidden", String(mobileQuery.matches && !nextOpen));
+    if (nextOpen) {
+      closeButton.focus({preventScroll: true});
+    } else if (restoreFocus) {
+      toggle.focus({preventScroll: true});
+    }
+  };
+
+  toggle.addEventListener("click", () => {
+    setOpen(!document.body.classList.contains("is-node-workspace-open"));
+  });
+  closeButton.addEventListener("click", () => setOpen(false, {restoreFocus: true}));
+  overlay.addEventListener("click", () => setOpen(false, {restoreFocus: true}));
+  sidebar.addEventListener("click", (event) => {
+    if (event.target.closest("a") && mobileQuery.matches) {
+      setOpen(false);
     }
   });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && document.body.classList.contains("is-node-workspace-open")) {
+      setOpen(false, {restoreFocus: true});
+    }
+  });
+  mobileQuery.addEventListener("change", () => setOpen(false));
+  setOpen(false);
 })();

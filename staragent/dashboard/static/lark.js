@@ -1,3 +1,6 @@
+const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
+const larkState = (value) => t(`lark.state.${value || "stopped"}`);
+
 const larkStatus = document.querySelector(".lark-action-status");
 const larkSaveStatus = document.querySelector(".lark-save-status");
 const larkTestResult = document.querySelector(".lark-test-result");
@@ -25,11 +28,11 @@ const setPill = (el, ok, text, optional = false) => {
   el.textContent = text;
 };
 
-const secretPlaceholder = (present, emptyText) => present ? "Saved; leave blank to keep" : emptyText;
+const secretPlaceholder = (present, emptyText) => present ? t("lark.saved_placeholder") : emptyText;
 
 const renderWorkerOutput = (text) => {
   if (!output) return;
-  const next = text || "No Lark worker output.";
+  const next = text || t("lark.no_output");
   const atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 16;
   if (output.textContent !== next) {
     output.textContent = next;
@@ -51,10 +54,10 @@ const syncForm = (body) => {
   form.elements.verification_token.value = "";
   form.elements.encrypt_key.value = "";
   form.elements.node_token.value = "";
-  form.elements.app_secret.placeholder = secretPlaceholder(!!secrets.app_secret, "Required");
-  form.elements.verification_token.placeholder = secretPlaceholder(!!secrets.verification_token, "Optional");
-  form.elements.encrypt_key.placeholder = secretPlaceholder(!!secrets.encrypt_key, "Optional");
-  form.elements.node_token.placeholder = secretPlaceholder(!!secrets.node_token, "Optional for remote nodes");
+  form.elements.app_secret.placeholder = secretPlaceholder(!!secrets.app_secret, t("common.required"));
+  form.elements.verification_token.placeholder = secretPlaceholder(!!secrets.verification_token, t("common.optional"));
+  form.elements.encrypt_key.placeholder = secretPlaceholder(!!secrets.encrypt_key, t("common.optional"));
+  form.elements.node_token.placeholder = secretPlaceholder(!!secrets.node_token, t("lark.optional_remote"));
 };
 
 const renderConfig = (config, worker = {}) => {
@@ -68,20 +71,20 @@ const renderConfig = (config, worker = {}) => {
     label.textContent = item.label || item.name;
     const value = document.createElement("span");
     const source = item.source ? ` · ${item.source}` : "";
-    value.textContent = `${item.value || (item.required ? "required" : "optional")}${source}`;
+    value.textContent = `${item.value || (item.required ? t("lark.required") : t("lark.optional"))}${source}`;
     info.append(label, value);
     const pill = document.createElement("span");
-    setPill(pill, item.present, item.present ? "set" : (item.required ? "missing" : "optional"), !item.required);
+    setPill(pill, item.present, item.present ? t("lark.set") : (item.required ? t("lark.missing") : t("lark.optional")), !item.required);
     row.append(info, pill);
     configList.appendChild(row);
   }
   const missing = config.missing_required || [];
-  configSummary.textContent = missing.length ? "missing values" : "ready";
-  configValue.textContent = missing.length ? "missing" : "ready";
-  configCount.textContent = `${missing.length} blocking`;
+  configSummary.textContent = missing.length ? t("lark.missing_values") : t("lark.ready");
+  configValue.textContent = missing.length ? t("lark.missing") : t("lark.ready");
+  configCount.textContent = t("lark.blocking", {count: missing.length});
   missingMessage.textContent = missing.length
-    ? `Missing: ${missing.join(", ")}`
-    : (worker.running ? "Lark worker is running." : "Ready to start the Lark worker.");
+    ? t("lark.missing_list", {names: missing.join(", ")})
+    : (worker.running ? t("lark.worker_running") : t("lark.ready_to_start"));
   if (config.path) {
     configPath.textContent = config.path;
   }
@@ -91,17 +94,17 @@ const renderLark = (body, options = {}) => {
   const worker = body.worker || {};
   const sdk = body.sdk || {};
   const config = body.config || {};
-  workerValue.textContent = worker.status || "unknown";
-  statusLabel.textContent = worker.status || "unknown";
-  setPill(workerPill, !!worker.running, worker.status || "stopped");
+  workerValue.textContent = larkState(worker.status);
+  statusLabel.textContent = larkState(worker.status);
+  setPill(workerPill, !!worker.running, larkState(worker.status));
   if (workerSessionLink && worker.session_url) {
     workerSessionLink.href = worker.session_url;
   }
   runtimePath.textContent = sdk.venv_executable || "-";
-  setPill(runtimePill, !!sdk.venv_ready, sdk.venv_ready ? "ready" : "missing");
-  setPill(sdkPill, !!sdk.installed, sdk.installed ? "installed" : "missing");
-  sdkValue.textContent = sdk.venv_ready ? "ready" : "missing";
-  runtimeShort.textContent = sdk.installed ? "SDK installed" : "SDK missing";
+  setPill(runtimePill, !!sdk.venv_ready, sdk.venv_ready ? t("lark.ready") : t("lark.missing"));
+  setPill(sdkPill, !!sdk.installed, sdk.installed ? t("common.installed") : t("lark.missing"));
+  sdkValue.textContent = sdk.venv_ready ? t("lark.ready") : t("lark.missing");
+  runtimeShort.textContent = sdk.installed ? t("lark.sdk_installed") : t("lark.sdk_missing");
   renderWorkerOutput(worker.recent_output);
   renderConfig(config, worker);
   if (options.syncForm) {
@@ -111,7 +114,7 @@ const renderLark = (body, options = {}) => {
 
 const fetchLark = async (options = {}) => {
   const response = await fetch("/api/lark/status");
-  if (!response.ok) throw new Error("Status request failed.");
+  if (!response.ok) throw new Error(t("lark.status_failed"));
   const body = await response.json();
   renderLark(body, options);
   return body;
@@ -122,11 +125,11 @@ const larkAction = async (path, pending) => {
   const response = await fetch(path, {method: "POST"});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    larkStatus.textContent = body.detail || "Action failed.";
+    larkStatus.textContent = body.detail || t("lark.action_failed");
     await fetchLark().catch(() => {});
     return;
   }
-  larkStatus.textContent = body.status || "Done.";
+  larkStatus.textContent = body.status ? larkState(body.status) : t("lark.done");
   renderLark(body.lark || await fetchLark());
 };
 
@@ -139,7 +142,7 @@ const renderConnectionTest = (body) => {
   const header = document.createElement("div");
   header.className = "lark-test-header";
   const title = document.createElement("strong");
-  title.textContent = body.ok ? "Connection test passed" : "Connection test failed";
+  title.textContent = body.ok ? t("lark.test_passed") : t("lark.test_failed");
   const meta = document.createElement("span");
   meta.textContent = body.base_url ? body.base_url : (body.checked_at || "");
   header.append(title, meta);
@@ -152,13 +155,13 @@ const renderConnectionTest = (body) => {
     row.className = `lark-test-step is-${item.status || (item.ok ? "passed" : "failed")}`;
     const text = document.createElement("div");
     const name = document.createElement("strong");
-    name.textContent = item.name || "Check";
+    name.textContent = item.name || t("lark.check");
     const detail = document.createElement("span");
     detail.textContent = item.detail || "";
     text.append(name, detail);
     const pill = document.createElement("span");
     pill.className = `pill lark-test-pill is-${item.status || (item.ok ? "passed" : "failed")}`;
-    pill.textContent = item.status || (item.ok ? "passed" : "failed");
+    pill.textContent = larkState(item.status || (item.ok ? "passed" : "failed"));
     row.append(text, pill);
     steps.appendChild(row);
   }
@@ -175,20 +178,20 @@ const renderConnectionTest = (body) => {
 };
 
 const testConnection = async () => {
-  larkStatus.textContent = "Testing connection...";
+  larkStatus.textContent = t("lark.testing");
   const response = await fetch("/api/lark/test", {method: "POST"});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    larkStatus.textContent = body.detail || "Connection test failed.";
+    larkStatus.textContent = body.detail || t("lark.test_failed_done");
     return;
   }
   renderConnectionTest(body);
-  larkStatus.textContent = body.ok ? "Connection test passed." : "Connection test failed.";
+  larkStatus.textContent = body.ok ? t("lark.test_passed_done") : t("lark.test_failed_done");
 };
 
 form?.addEventListener("submit", async (event) => {
   event.preventDefault();
-  larkSaveStatus.textContent = "Saving...";
+  larkSaveStatus.textContent = t("lark.saving");
   const payload = {
     app_id: form.elements.app_id.value,
     app_secret: form.elements.app_secret.value,
@@ -207,33 +210,33 @@ form?.addEventListener("submit", async (event) => {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    larkSaveStatus.textContent = body.detail || "Save failed.";
+    larkSaveStatus.textContent = body.detail || t("lark.save_failed");
     return;
   }
   renderLark(body.lark || await fetchLark(), {syncForm: true});
   const running = !!(body.lark && body.lark.worker && body.lark.worker.running);
-  larkSaveStatus.textContent = running ? "Saved. Restart worker to apply." : "Saved.";
+  larkSaveStatus.textContent = running ? t("lark.saved_restart") : t("lark.saved");
 });
 
 document.querySelector(".lark-clear-config")?.addEventListener("click", async () => {
-  if (!window.confirm("Clear saved Lark config from this dashboard?")) {
+  if (!window.confirm(t("lark.clear_confirm"))) {
     return;
   }
-  larkSaveStatus.textContent = "Clearing...";
+  larkSaveStatus.textContent = t("lark.clearing");
   const response = await fetch("/api/lark/config", {method: "DELETE"});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    larkSaveStatus.textContent = body.detail || "Clear failed.";
+    larkSaveStatus.textContent = body.detail || t("lark.clear_failed");
     return;
   }
   renderLark(body.lark || await fetchLark(), {syncForm: true});
-  larkSaveStatus.textContent = "Cleared.";
+  larkSaveStatus.textContent = t("lark.cleared");
 });
 
 document.querySelector(".lark-refresh")?.addEventListener("click", () => {
-  larkStatus.textContent = "Refreshing...";
+  larkStatus.textContent = t("lark.refreshing");
   fetchLark({syncForm: true}).then(() => {
-    larkStatus.textContent = "Refreshed.";
+    larkStatus.textContent = t("lark.refreshed");
   }).catch((error) => {
     larkStatus.textContent = error.message;
   });
@@ -243,8 +246,8 @@ document.querySelector(".lark-test")?.addEventListener("click", () => {
     larkStatus.textContent = error.message;
   });
 });
-document.querySelector(".lark-start")?.addEventListener("click", () => larkAction("/api/lark/start", "Starting..."));
-document.querySelector(".lark-stop")?.addEventListener("click", () => larkAction("/api/lark/stop", "Stopping..."));
+document.querySelector(".lark-start")?.addEventListener("click", () => larkAction("/api/lark/start", t("lark.starting")));
+document.querySelector(".lark-stop")?.addEventListener("click", () => larkAction("/api/lark/stop", t("lark.stopping")));
 
 output.scrollTop = output.scrollHeight;
 setInterval(() => {
@@ -261,6 +264,7 @@ document.addEventListener("visibilitychange", () => {
 for (const button of document.querySelectorAll(".copy-button")) {
   button.addEventListener("click", async () => {
     const text = button.dataset.copy || "";
+    const originalLabel = button.textContent;
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -271,7 +275,7 @@ for (const button of document.querySelectorAll(".copy-button")) {
       document.execCommand("copy");
       area.remove();
     }
-    button.textContent = "Copied";
-    setTimeout(() => { button.textContent = "Copy"; }, 1200);
+    button.textContent = t("nodes.copied");
+    setTimeout(() => { button.textContent = originalLabel; }, 1200);
   });
 }
