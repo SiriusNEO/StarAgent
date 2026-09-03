@@ -266,7 +266,7 @@ def test_terminal_input_is_locked_until_the_explicit_toggle_is_used() -> None:
     assert 'class="web-terminal is-input-locked"' in template
     assert 'class="terminal-title-actions"' in template
     assert 'class="terminal-input-lock is-locked"' in template
-    assert 'aria-label="Unlock terminal input"' in template
+    assert "t('detail.unlock_terminal')" in template
     assert 'aria-pressed="false"' in template
     assert "disableStdin: true" in script
     assert "let terminalInputUnlocked = false" in script
@@ -314,20 +314,44 @@ def test_session_detail_has_im_style_session_switcher() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "session.html").read_text(
         encoding="utf-8"
     )
+    sessions_template = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html"
+    ).read_text(encoding="utf-8")
+    sidebar_template = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "_session_sidebar.html"
+    ).read_text(encoding="utf-8")
+    base_template = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "base.html"
+    ).read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "session.js").read_text(
         encoding="utf-8"
     )
+    base_script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "base.js").read_text(
+        encoding="utf-8"
+    )
 
-    assert "session-detail-layout" in template
-    assert "session-switcher-item" in template
-    assert "session-switcher-state pill status-{{ item.status }}" in template
-    assert ">{{ item.status }}</span>" in template
-    assert "session-switcher-avatar" not in template
-    assert 'aria-current="page"' in template
-    assert "session-switcher-toggle" in script
-    assert "Find a session" not in template
-    assert "session-switcher-search" not in template
-    assert "session-switcher-create" not in template
+    assert "{% block node_sidebar_extra %}" in template
+    assert '{% include "_session_sidebar.html" %}' in template
+    assert '{% include "_session_sidebar.html" %}' in sessions_template
+    assert "{% for item in sidebar_sessions %}" in sidebar_template
+    assert "sidebar_nodes" not in sidebar_template
+    assert "session-detail-layout" not in template
+    assert "session-switcher-item" in sidebar_template
+    assert "session-switcher-state status-{{ item.status }}" in sidebar_template
+    assert "{{ item.status }}" in sidebar_template
+    assert "session-switcher-avatar" not in sidebar_template
+    assert 'aria-current="page"' in sidebar_template
+    assert "session-switcher-toggle" not in script
+    assert 'class="node-workspace-sidebar"' in base_template
+    assert 'class="node-workspace-toggle"' in base_template
+    assert 'class="node-workspace-resize-handle"' in base_template
+    assert 'role="separator"' in base_template
+    assert 'const sidebarWidthKey = "staragent.nodeSidebarWidth"' in base_script
+    assert 'resizeHandle.addEventListener("pointerdown"' in base_script
+    assert 'resizeHandle.addEventListener("keydown"' in base_script
+    assert "Find a session" not in sidebar_template
+    assert "session-switcher-search" not in sidebar_template
+    assert "session-switcher-create" not in sidebar_template
     assert "← Sessions" not in template
     assert 'type="speculationrules"' in template
     assert '"selector_matches": ".session-switcher-item:not(.is-current)"' in template
@@ -356,6 +380,25 @@ def test_page_root_contains_horizontal_overflow_without_breaking_inner_scrollers
     assert "@supports not (overflow: clip)" in styles
     assert ".session-detail-main > *" in styles
     assert ".table-wrap" in styles and "overflow-x: auto" in styles
+
+
+def test_node_workspace_and_page_surfaces_scale_with_available_width() -> None:
+    styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "base.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--node-workspace-width: clamp(232px, 18vw, 280px)" in styles
+    assert "--page-inline-gutter: clamp(10px, 2.1vw, 32px)" in styles
+    assert "--surface-padding: clamp(11px, 1.25vw, 18px)" in styles
+    assert "container-name: staragent-page" in styles
+    assert "@container staragent-page (max-width: 920px)" in styles
+    assert "@container staragent-page (max-width: 720px)" in styles
+    assert "@container staragent-page (max-width: 520px)" in styles
+    assert 'style.removeProperty("--node-workspace-width")' in script
+    assert "new ResizeObserver" in script
 
 
 def test_chat_removes_only_the_middle_message_list_frame() -> None:
@@ -393,22 +436,32 @@ def test_tailscale_dashboard_adds_direct_nodes() -> None:
         encoding="utf-8"
     )
 
-    assert 'button.textContent = "Add Tailscale"' in script
+    assert 'button.textContent = t("nodes.add_tailscale")' in script
     assert '{mode: "lan", name: peer.name || peer.preferred_node' in script
     assert '{mode: "remote", name: peer.name || peer.preferred_node' not in script
-    assert "Direct · LAN / Tailscale" in template
+    assert 't("nodes.route_direct")' in template
 
 
 def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "agents.html").read_text(
         encoding="utf-8"
     )
+    sidebar = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "_agent_sidebar.html"
+    ).read_text(encoding="utf-8")
     script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agents.js").read_text(
         encoding="utf-8"
     )
 
-    assert "Agent CLIs" in template
-    assert "Login is checked separately without sending a model request" in template
+    assert 't("agents.harness")' in template
+    assert 't("agents.harness_status")' in template
+    assert '{% include "_agent_sidebar.html" %}' in template
+    assert "path=tool.icon" in sidebar
+    assert "data-agent-state" in sidebar
+    assert "/agents/{{ tool.name | urlencode }}" in sidebar
+    assert "{{ tool.vendor }}" in template
+    assert 't("agents.description." ~ tool.name)' in template
+    assert 't("agents.ready_note")' in template
     assert 'class="agent-cli-auth"' in template
     assert 'class="agent-cli-usage" hidden' in template
     assert 'class="agent-cli-update-result" hidden' in template
@@ -421,15 +474,30 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "/agent-tools" in script
     assert "/update`" in script
     assert "payload.updates_supported" in script
-    assert "allowlisted update command" in script
+    assert 't("agents.update_description")' in template
+    assert 'class="agent-update-dialog"' in template
+    assert 'method="dialog"' in template
+    assert "confirmAgentUpdate" in script
+    assert "updateDialog.showModal()" in script
+    assert '.agent-update-dialog-command code").textContent' in script
     assert "window.StarAgentAfterPaint(() => loadAgentTools(false))" in script
+    assert "renderSidebarItem" in script
+    assert '.agent-switcher-item[data-agent]' in script
     assert "/agent-history" in script
-    assert "Scanning starts only when requested" in template
+    assert 't("agents.scan_safety")' in template
     assert "source history files" not in script
-    assert 'class="agent-cli-card" data-agent="{{ tool.name }}"' in template
+    assert 'class="agent-cli-card agent-cli-card-{{ tool.name }}"' in template
     assert 'class="agent-cli-node-row" data-node="{{ node.name }}"' in template
+    assert "{% set tool = selected_agent %}" in template
     assert "agent-tools-node" not in template
     assert "Promise.all(nodeNames.map" in script
+
+    icon_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agent-icons"
+    for name in ("codex.svg", "claude.svg", "opencode.svg"):
+        icon = (icon_dir / name).read_text(encoding="utf-8")
+        assert "<svg" in icon
+        assert "<script" not in icon.lower()
+        assert "xlink:href" not in icon.lower()
 
     styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
         encoding="utf-8"
@@ -437,8 +505,8 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     grid_rule = styles.split(".agent-cli-grid {", 1)[1].split("}", 1)[0]
     node_row_rule = styles.split(".agent-cli-node-row {", 1)[1].split("}", 1)[0]
     assert "grid-template-columns: minmax(0, 1fr)" in grid_rule
-    assert "repeat(2" not in grid_rule
-    assert "grid-template-columns: minmax(120px, 160px) minmax(0, 1fr)" in node_row_rule
+    assert "repeat(" not in grid_rule
+    assert "grid-template-columns: minmax(0, 1fr)" in node_row_rule
 
 
 def test_session_creation_stays_on_sessions_page() -> None:
@@ -449,7 +517,7 @@ def test_session_creation_stays_on_sessions_page() -> None:
         encoding="utf-8"
     )
 
-    assert "Create Session" in sessions
+    assert 't("sessions.create")' in sessions
     assert 'id="create-session"' in sessions
     assert "Create Worker" not in sessions
     assert "agent-launch-form" not in agents
@@ -457,14 +525,14 @@ def test_session_creation_stays_on_sessions_page() -> None:
     assert 'data-agent="{{ preset.agent }}"' in sessions
     assert 'data-preset="{{ preset.name }}"' in sessions
     assert 'class="worker-history"' in sessions
-    assert "Start a new conversation" in sessions
+    assert 't("sessions.start_new")' in sessions
 
     script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "index.js").read_text(
         encoding="utf-8"
     )
     assert "const agentLabels = {codex:" in script
     assert "/agent-tools/${encodeURIComponent(agent)}/update" in script
-    assert "Update ${label} on ${node} before starting the Session?" in script
+    assert 't("sessions.update_confirm", {agent: label, node})' in script
     assert "/agent-history?${query}" in script
     assert "payload.resume = {agent: resume.agent, id: resume.id}" in script
     assert 'initialParams.get("resume")' in script
@@ -472,21 +540,24 @@ def test_session_creation_stays_on_sessions_page() -> None:
     agent_script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agents.js").read_text(
         encoding="utf-8"
     )
-    assert "Use in Create" in agent_script
-    assert "`/sessions?${query}#create-session`" in agent_script
+    assert 't("agents.use_in_create")' in agent_script
+    assert (
+        "`/nodes/${encodeURIComponent(nodeSelect.value)}/sessions?${query}#create-session`"
+        in agent_script
+    )
     assert 'fetch("/api/workers"' not in agent_script
 
 
-def test_sessions_page_groups_sessions_by_node() -> None:
+def test_sessions_page_is_scoped_to_current_node() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
         encoding="utf-8"
     )
 
-    assert 'class="sessions-node-groups"' in template
-    assert 'class="sessions-node-group" data-node="{{ node.name }}"' in template
-    assert "{% for node in node_views %}" in template
-    assert "{% for view in node.sessions|sort(attribute='name') %}" in template
-    assert "node-status-{{ node.status }}" in template
+    assert 'name="node" value="{{ current_node.name }}"' in template
+    assert "{% for view in views %}" in template
+    assert "/nodes/{{ view.node_id | urlencode }}/sessions/{{ view.name | urlencode }}" in template
+    assert "{% for node in node_views %}" not in template
+    assert 'class="sessions-node-groups"' not in template
     assert "<th>Node</th>" not in template
 
 
@@ -494,14 +565,14 @@ def test_page_javascript_is_served_as_versioned_static_assets() -> None:
     template_dir = PROJECT_ROOT / "staragent" / "dashboard" / "templates"
     static_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static"
 
-    for page in ("base", "index", "nodes", "agents", "logs", "lark", "session"):
+    for page in ("base", "index", "nodes", "agents", "logs", "lark", "session", "settings"):
         template = (template_dir / f"{page}.html").read_text(encoding="utf-8")
         script = static_dir / f"{page}.js"
         assert script.is_file()
         assert f"static_version('{page}.js')" in template
 
 
-def test_sessions_page_defaults_worker_tools_to_local_node() -> None:
+def test_sessions_page_worker_tools_follow_current_node() -> None:
     template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
         encoding="utf-8"
     )
@@ -509,9 +580,30 @@ def test_sessions_page_defaults_worker_tools_to_local_node() -> None:
         encoding="utf-8"
     )
 
-    assert 'node.name == "local"' in template
+    assert template.count('name="node" value="{{ current_node.name }}"') == 2
+    assert 'select name="node"' not in template
     assert 'cwdInput.value = ""' in script
     assert 'workerExplorer.load("")' in script
+
+
+def test_adopt_existing_tmux_uses_selectable_safe_session_cards() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "index.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'class="band adopt-band deferred-render"' in template
+    assert 'class="adopt-native-select" name="name" hidden' in template
+    assert 'class="adopt-submit" disabled' in template
+    assert 't("sessions.adopt_safety")' in template
+    assert "createAdoptableCard" in script
+    assert 'card.setAttribute("aria-pressed", "false")' in script
+    assert 'name.textContent = item.name' in script
+    assert 'cwd.textContent = item.cwd || t("sessions.cwd_unavailable")' in script
+    assert 'card.classList.toggle("is-selected", isSelected)' in script
+    assert "row.innerHTML" not in script
 
 
 def test_remote_transcript_state_falls_back_to_terminal_output(monkeypatch) -> None:

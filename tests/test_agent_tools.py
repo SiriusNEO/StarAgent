@@ -276,12 +276,17 @@ def test_agent_update_subprocess_is_noninteractive_and_does_not_use_a_shell(monk
 def test_agent_catalog_and_session_presets_cover_the_same_clis() -> None:
     from staragent.presets import command_presets_payload
 
-    catalog = {item["name"] for item in agent_tools.agent_catalog_payload()}
+    catalog_payload = agent_tools.agent_catalog_payload()
+    catalog = {item["name"] for item in catalog_payload}
     preset_agents = {
         item["agent"] for item in command_presets_payload() if item["agent"] != "shell"
     }
 
     assert catalog == {"codex", "claude", "opencode"}
+    assert all(item["vendor"] for item in catalog_payload)
+    assert all(item["description"] for item in catalog_payload)
+    assert all(str(item["icon"]).startswith("agent-icons/") for item in catalog_payload)
+    assert all(str(item["accent"]).startswith("#") for item in catalog_payload)
     assert preset_agents == catalog
     assert all("ops_compatible" in item for item in command_presets_payload())
 

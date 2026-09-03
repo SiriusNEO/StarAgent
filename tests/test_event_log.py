@@ -138,7 +138,7 @@ def test_dashboard_logs_page_and_api(monkeypatch, tmp_path) -> None:
     event_log.append_hub_event("info", "hub.ready", "Hub ready")
     client = TestClient(create_dashboard_app())
 
-    page = client.get("/logs")
+    page = client.get("/nodes/local/logs")
     response = client.get("/api/logs?source=hub")
 
     assert page.status_code == 200

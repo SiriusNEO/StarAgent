@@ -1,0 +1,34 @@
+<section class="session-switcher" aria-label="{{ t('sessions.on_node', node=current_node.name) }}">
+  <div class="session-switcher-head">
+    <div>
+      <strong>{{ t("node.sessions") }}</strong>
+      <span>{{ t("sessions.on_this_node") }}</span>
+    </div>
+    <span class="session-switcher-count" aria-label="{{ t('sessions.count', count=sidebar_session_count) }}">{{ sidebar_session_count }}</span>
+  </div>
+  <div class="session-switcher-body">
+    <nav class="session-switcher-list" aria-label="{{ t('sessions.available_on', node=current_node.name) }}">
+      <div class="session-switcher-items">
+        {% for item in sidebar_sessions %}
+          <a
+            class="session-switcher-item{{ ' is-current' if item.name == active_session_name else '' }}"
+            href="/nodes/{{ current_node.name | urlencode }}/sessions/{{ item.name | urlencode }}"
+            {% if item.name == active_session_name %}aria-current="page"{% endif %}
+          >
+            <span class="session-switcher-item-copy">
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.agent if item.session_type == 'agent' else item.session_type }} · {{ relative_time(item.last_updated, current_language(request)) }}</span>
+            </span>
+            <span class="session-switcher-state status-{{ item.status }}">
+              <span aria-hidden="true"></span>
+              {{ t("status." ~ item.status) }}
+            </span>
+          </a>
+        {% endfor %}
+      </div>
+      {% if not sidebar_session_count %}
+        <p class="session-switcher-empty">{{ t("sessions.empty_on_node") }}</p>
+      {% endif %}
+    </nav>
+  </div>
+</section>

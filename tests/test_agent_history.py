@@ -312,26 +312,46 @@ def test_dashboard_resolves_resume_before_forwarding_to_an_older_remote_node(
     ]
 
 
-def test_agents_page_renders_shared_catalog_and_presets(monkeypatch, tmp_path) -> None:
+def test_agents_page_renders_node_scoped_catalog_and_presets(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(dashboard_app, "auth_enabled", lambda: False)
+    node_view = hub.NodeView(
+        entry=hub.NodeEntry(name="local", url="local", mode="local"),
+        status="connected",
+    )
     monkeypatch.setattr(
         dashboard_app,
-        "collect_node_views",
-        lambda prefer_cached=False: [
-            hub.NodeView(
-                entry=hub.NodeEntry(name="local", url="local", mode="local"),
-                status="connected",
-            )
-        ],
+        "dashboard_node_view",
+        lambda node_id: node_view,
     )
 
-    response = TestClient(dashboard_app.create_app()).get("/agents")
+    client = TestClient(dashboard_app.create_app())
+    response = client.get("/nodes/local/agents")
 
     assert response.status_code == 200
     assert "Codex YOLO" in response.text
     assert "Gemini CLI" not in response.text
     assert "OpenCode" in response.text
-    assert "Create Session →" in response.text
+    assert "Create Session" in response.text
     assert "Start from a preset" not in response.text
-    assert 'href="/agents"' in response.text
+    assert 'href="/nodes/local/agents"' in response.text
+    assert 'aria-label="Agent harnesses on local"' in response.text
+    assert 'href="/nodes/local/agents/codex"' in response.text
+    assert 'href="/nodes/local/agents/claude"' in response.text
+    assert 'href="/nodes/local/agents/opencode"' in response.text
+    assert 'class="agent-switcher-item agent-switcher-item-codex is-current"' in response.text
+    assert response.text.count('class="agent-cli-card agent-cli-card-') == 1
+    assert 'href="/nodes/local/sessions"' in response.text
+    assert 'name="node" value="local"' in response.text
+
+    claude = client.get("/nodes/local/agents/claude")
+    missing = client.get("/nodes/local/agents/not-a-harness")
+
+    assert claude.status_code == 200
+    assert "<h1>Claude Code</h1>" in claude.text
+    assert "Claude Skip Permissions" in claude.text
+    assert "Codex YOLO" not in claude.text
+    assert 'class="agent-switcher-item agent-switcher-item-claude is-current"' in claude.text
+    assert 'class="agent-cli-card agent-cli-card-claude"' in claude.text
+    assert 'name="agent" value="claude"' in claude.text
+    assert missing.status_code == 404

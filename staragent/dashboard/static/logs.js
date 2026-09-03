@@ -1,4 +1,5 @@
 (() => {
+  const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
   const sourceSelect = document.querySelector(".logs-source");
   const levelSelect = document.querySelector(".logs-level");
   const searchInput = document.querySelector(".logs-search");
@@ -20,9 +21,9 @@
   const formatTime = (value) => {
     const parsed = new Date(value || "");
     if (Number.isNaN(parsed.getTime())) {
-      return value || "Unknown time";
+      return value || t("logs.unknown_time");
     }
-    return parsed.toLocaleString([], {
+    return parsed.toLocaleString(window.StarAgentI18n?.language || [], {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -40,7 +41,7 @@
     const disclosure = document.createElement("details");
     disclosure.className = "log-details";
     const summary = document.createElement("summary");
-    summary.textContent = "Details";
+    summary.textContent = t("logs.details");
     const content = document.createElement("pre");
     content.textContent = JSON.stringify(details, null, 2);
     disclosure.append(summary, content);
@@ -52,7 +53,7 @@
     if (!events.length) {
       const empty = document.createElement("div");
       empty.className = "logs-empty";
-      empty.textContent = "No matching log events.";
+      empty.textContent = t("logs.no_match");
       stream.append(empty);
       return;
     }
@@ -93,7 +94,8 @@
 
   const updateLocation = () => {
     const url = new URL(window.location.href);
-    if (sourceSelect.value === "hub") {
+    const defaultSource = sourceSelect.options[0]?.value || "";
+    if (sourceSelect.value === defaultSource) {
       url.searchParams.delete("source");
     } else {
       url.searchParams.set("source", sourceSelect.value);
@@ -108,7 +110,7 @@
     const currentController = new AbortController();
     controller = currentController;
     refreshButton.disabled = true;
-    status.textContent = "Loading…";
+    status.textContent = t("logs.loading");
     stream.setAttribute("aria-busy", "true");
     const params = new URLSearchParams({source: sourceSelect.value, limit: "200"});
     if (levelSelect.value) {
@@ -121,14 +123,18 @@
       const response = await fetch(`/api/logs?${params}`, {signal: currentController.signal});
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(body.detail || "Failed to load logs");
+        throw new Error(body.detail || t("logs.load_failed"));
       }
       const events = Array.isArray(body.events) ? body.events : [];
       renderEvents(events);
-      status.textContent = `${events.length} event${events.length === 1 ? "" : "s"} · updated ${formatTime(body.generated_at)}`;
+      status.textContent = t("logs.updated", {
+        count: events.length,
+        events: t(events.length === 1 ? "logs.event_one" : "logs.event_many"),
+        time: formatTime(body.generated_at),
+      });
     } catch (error) {
       if (error.name !== "AbortError") {
-        status.textContent = error.message || "Logs unavailable.";
+        status.textContent = error.message || t("logs.unavailable");
         renderEvents([]);
       }
     } finally {

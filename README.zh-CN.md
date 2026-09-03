@@ -40,16 +40,17 @@ StarAgent 使用中心化架构：`StarAgent Hub` 运行 Web Dashboard，同时�
 以下截图使用的是脱敏 demo 数据。二次元风格背景完全可选：可以从主题菜单上传任意图片，
 再搭配主题色与玻璃面板效果。
 
-在一个地方查看跨机器的所有 session：
+先选择一个已连接的 Node，再在独立工作区中管理这台机器上的 session：
 
 ![带有二次元星空背景的 StarAgent Sessions 页面](assets/demo-sessions-anime.webp)
 
 每个 session 都包含一个轻量 Chat 控制台，用来和 agent 交互，同时也提供 Terminal 和 File Explorer。
-Session 详情页左侧提供类似 IM 的会话切换栏，不需要先返回列表；窄屏设备上会折叠成可搜索的抽屉。
+Session 详情页左侧提供类似 IM 的会话切换栏，可以直接切换同一 Node 上的 session，
+不需要先返回列表；窄屏设备上会折叠成抽屉。
 
 ![StarAgent Session 中的 Chat 与锁定状态 PTY Terminal](assets/demo-session-anime.webp)
 
-跨机器查看 Agent CLI 的可用性、登录状态、升级方式和启动 preset：
+查看所选 Node 上 Agent CLI 的可用性、登录状态、升级方式和启动 preset：
 
 ![展示 Codex、Claude Code 与 OpenCode 的 StarAgent Agents 页面](assets/demo-agents-anime.webp)
 

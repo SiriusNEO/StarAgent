@@ -25,12 +25,14 @@ small runtime records; tmux remains the source of truth for live Sessions.
 
 ## Dashboard Surfaces
 
-- **Sessions** groups live Sessions by Node, exposes the agent lifecycle status, and owns Create
+- **Nodes** is the Dashboard landing page. It configures the machines reachable from the Hub,
+  reports each connection state, and opens that Node's workspace.
+- **Sessions**, after selecting a Node, exposes only that Node's lifecycle status and owns Create
   Session, conversation resume, tmux adoption, Chat, Terminal, and workspace browsing.
-- **Agents** inventories coding CLIs across machines, reports login and usage support, exposes
-  managed update actions, lists launch presets, and discovers resumable conversations.
-- **Nodes** configures the machines reachable from the Hub and reports their connection state.
-- **Logs** queries the centralized Hub and per-Node service event archive.
+- **Agents**, after selecting a Node, inventories its coding CLIs, reports login and usage support,
+  exposes managed update actions, lists launch presets, and discovers resumable conversations.
+- **Logs**, after selecting a Node, queries that Node's centralized service-event archive. The local
+  Node also provides the Hub service log as a separate source.
 - **Lark** configures the optional notification and command integration described in [LARK.md](LARK.md).
 
 ## Logs and Supervision

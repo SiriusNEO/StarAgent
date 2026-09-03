@@ -38,12 +38,14 @@ StarAgent has two kinds of sessions:
 
 Agent sessions can be created from the Dashboard or adopted from existing tmux sessions. System sessions are visible for observability but are read-only from Chat.
 
-The Agents page is the inventory and maintenance control plane for coding CLIs. A single preset
-registry feeds both its read-only catalog and **Sessions → Create Session**. General session creation
-remains on the Sessions page. Both surfaces can explicitly request an installed CLI update before a
-Session starts; no update runs during inventory probing or page load. The same bounded conversation
-history API feeds Agents discovery and the Create Session resume picker. The Agents page hands a selected
-conversation to Create Session by URL; only Create Session owns the launch flow.
+The Dashboard starts with the Nodes connection inventory. Selecting a Node scopes the Agents,
+Sessions, and Logs pages to that machine; the browser never mixes multiple Nodes in one operational
+view. The selected Node's Agents page is the inventory and maintenance control plane for coding CLIs.
+A single preset registry feeds both its read-only catalog and **Sessions → Create Session**. General
+session creation remains on the Sessions page. Both surfaces can explicitly request an installed CLI
+update before a Session starts; no update runs during inventory probing or page load. The same bounded
+conversation history API feeds Agents discovery and the Create Session resume picker. The Agents page
+hands a selected conversation to Create Session by URL; only Create Session owns the launch flow.
 
 ## Data Flow
 

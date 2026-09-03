@@ -1,137 +1,214 @@
 {% extends "base.html" %}
-{% block title %}Agents · StarAgent{% endblock %}
+{% block title %}{{ selected_agent.label }} · {{ current_node.name }} · StarAgent{% endblock %}
+{% block node_sidebar_extra %}
+  {% include "_agent_sidebar.html" %}
+{% endblock %}
 {% block content %}
-  <section class="page-head agents-page-head">
-    <div class="page-title">
-      <h1>Agents</h1>
-      <p>Inspect each coding CLI across machines, review its presets, and find resumable conversations.</p>
+  {% set tool = selected_agent %}
+  <section class="page-head agent-harness-page-head" style="--agent-brand: {{ tool.accent }}">
+    <div class="page-title agent-harness-title">
+      <span class="agent-market-eyebrow"><i aria-hidden="true"></i> {{ tool.vendor }} · {{ t("agents.harness") }}</span>
+      <div class="agent-harness-title-line">
+        <h1>{{ tool.label }}</h1>
+        <code>{{ tool.command }}</code>
+      </div>
+      <p>{{ t("agents.description." ~ tool.name) }}</p>
     </div>
-    <div class="agents-overview" aria-label="Agent overview">
-      <div><strong>{{ agent_catalog|length }}</strong><span>CLIs</span></div>
-      <div><strong>{{ node_views|length }}</strong><span>Machines</span></div>
-      <div><strong>{{ agent_presets|length }}</strong><span>Presets</span></div>
+    <div class="agent-harness-hero-actions">
+      <a class="agent-harness-docs-link" href="{{ tool.docs_url }}" target="_blank" rel="noreferrer">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+        {{ t("agents.official_docs") }}
+      </a>
+      <a class="agent-harness-create-link" href="/nodes/{{ current_node.name | urlencode }}/sessions#create-session">
+        {{ t("sessions.create") }}
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+      </a>
+    </div>
+    <div class="agent-harness-context" aria-label="{{ t('agents.context') }}">
+      <span>
+        <i class="node-status-dot node-status-dot-{{ current_node.status }}" aria-hidden="true"></i>
+        {{ current_node.name }}
+      </span>
+      <span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 8 4 4-4 4M13 16h4"/></svg>
+        {{ t("agents.command") }} · {{ tool.command }}
+      </span>
+      <span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg>
+        {{ t("agents.live_check") }}
+      </span>
     </div>
   </section>
 
   <div class="agent-catalog-data" hidden>
-    {% for tool in agent_catalog %}
+    {% for catalog_tool in agent_catalog %}
       <span
-        data-name="{{ tool.name }}"
-        data-label="{{ tool.label }}"
-        data-command="{{ tool.command }}"
+        data-name="{{ catalog_tool.name }}"
+        data-label="{{ catalog_tool.label }}"
+        data-command="{{ catalog_tool.command }}"
       ></span>
     {% endfor %}
   </div>
 
-  <section class="band agent-tools-band">
+  <section class="agent-tools-band agent-harness-workspace" style="--agent-brand: {{ tool.accent }}">
     <div class="section-title agent-tools-title">
       <div>
-        <h2>Agent CLIs</h2>
-        <span>Each CLI, with availability across StarAgent service environments</span>
+        <span class="agent-market-kicker">{{ t("agents.runtime") }}</span>
+        <h2>{{ t("agents.harness_status") }}</h2>
+        <span>{{ t("agents.status_description", node=current_node.name) }}</span>
       </div>
-      <button type="button" class="agent-tools-refresh">Check again</button>
+      <button type="button" class="agent-tools-refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 4v5h5M4 13a8.1 8.1 0 0 0 14.9 4M20 20v-5h-5"/></svg>
+        <span>{{ t("agents.check_again") }}</span>
+      </button>
     </div>
-    <p class="form-hint">Ready means the executable exists and its version command succeeds; Login is checked separately without sending a model request. Codex and Claude Code expose direct login status, while OpenCode reports configured providers.</p>
+    <div class="agent-tools-status" aria-live="polite">{{ t("agents.checking_on", agent=tool.label) }}</div>
     <div class="agent-cli-grid">
-      {% for tool in agent_catalog %}
-        <article class="agent-cli-card" data-agent="{{ tool.name }}">
-          <header class="agent-cli-card-head">
-            <div class="agent-cli-identity">
-              <strong>{{ tool.label }}</strong>
-              <code>{{ tool.command }}</code>
-            </div>
-            <a href="{{ tool.docs_url }}" target="_blank" rel="noreferrer">Official docs ↗</a>
-          </header>
-          <div class="agent-cli-summary">Waiting to check {{ node_views|length }} machine{{ '' if node_views|length == 1 else 's' }}…</div>
-          <div class="agent-cli-node-list">
-            {% for node in node_views %}
-              <section class="agent-cli-node-row" data-node="{{ node.name }}">
-                <div class="agent-cli-node-head">
-                  <strong>{{ node.name }}</strong>
-                  <span class="pill node-status-{{ node.status }}">{{ node.status }}</span>
-                </div>
-                <div class="agent-cli-result" aria-live="polite">
-                  <div class="agent-cli-result-head">
-                    <span class="agent-cli-version">Waiting to check…</span>
-                    <span class="pill node-status-optional agent-cli-status">unknown</span>
+      <article class="agent-cli-card agent-cli-card-{{ tool.name }}" data-agent="{{ tool.name }}" data-status="unknown" style="--agent-brand: {{ tool.accent }}">
+        <div class="agent-cli-summary">{{ t("agents.waiting_node", node=current_node.name) }}</div>
+        <div class="agent-cli-node-list">
+          {% for node in node_views %}
+            <section class="agent-cli-node-row" data-node="{{ node.name }}">
+              <div class="agent-cli-result" aria-live="polite">
+                <div class="agent-cli-result-head">
+                  <div>
+                    <span>{{ t("agents.installed_version") }}</span>
+                    <strong class="agent-cli-version">{{ t("agents.waiting_check") }}</strong>
                   </div>
-                  <div class="agent-cli-install"></div>
+                  <span class="pill node-status-optional agent-cli-status">{{ t("common.checking") }}</span>
+                </div>
+                <div class="agent-cli-install"></div>
+                <div class="agent-cli-detail-grid">
                   <div class="agent-cli-auth"></div>
                   <div class="agent-cli-usage" hidden></div>
-                  <div class="agent-cli-actions"></div>
-                  <div class="agent-cli-update-result" hidden></div>
+                </div>
+                <div class="agent-cli-actions"></div>
+                <div class="agent-cli-update-result" hidden></div>
+                <div class="agent-cli-diagnostics">
                   <div class="agent-cli-meta"></div>
                   <div class="agent-cli-error" hidden></div>
                 </div>
-              </section>
+              </div>
+            </section>
+          {% else %}
+            <div class="agent-empty">{{ t("agents.no_node") }}</div>
+          {% endfor %}
+        </div>
+        <footer class="agent-cli-presets">
+          <div class="agent-cli-presets-head">
+            <div>
+              <span>{{ t("agents.launch_presets") }}</span>
+              <small>{{ t("agents.launch_hint", agent=tool.label) }}</small>
+            </div>
+            <a href="/nodes/{{ current_node.name | urlencode }}/sessions#create-session">
+              {{ t("sessions.create") }}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </a>
+          </div>
+          <div class="agent-cli-preset-list">
+            {% for preset in agent_presets if preset.agent == tool.name %}
+              <div class="agent-cli-preset" data-preset="{{ preset.name }}">
+                <span class="agent-cli-preset-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24"><path d="m7 8 4 4-4 4M13 16h4"/></svg>
+                </span>
+                <div>
+                  <strong>{{ preset.label }}</strong>
+                  <code>{{ preset.command }}</code>
+                </div>
+                <button type="button" class="copy-button inline-copy" data-copy="{{ preset.command }}">{{ t("common.copy") }}</button>
+              </div>
             {% else %}
-              <div class="agent-empty">No machines configured.</div>
+              <span class="agent-cli-no-presets">{{ t("agents.no_presets") }}</span>
             {% endfor %}
           </div>
-          <footer class="agent-cli-presets">
-            <div class="agent-cli-presets-head">
-              <span>Session presets</span>
-              <a href="/sessions#create-session">Create Session →</a>
-            </div>
-            <div class="agent-cli-preset-list">
-              {% for preset in agent_presets if preset.agent == tool.name %}
-                <div class="agent-cli-preset" data-preset="{{ preset.name }}">
-                  <div>
-                    <strong>{{ preset.label }}</strong>
-                    <code>{{ preset.command }}</code>
-                  </div>
-                  <button type="button" class="copy-button inline-copy" data-copy="{{ preset.command }}">Copy</button>
-                </div>
-              {% else %}
-                <span class="agent-cli-no-presets">No presets configured.</span>
-              {% endfor %}
-            </div>
-          </footer>
-        </article>
-      {% endfor %}
+        </footer>
+      </article>
     </div>
-    <div class="agent-tools-status" aria-live="polite"></div>
+    <dialog class="agent-update-dialog" data-agent="{{ tool.name }}" aria-labelledby="agent-update-title" aria-describedby="agent-update-description">
+      <form method="dialog">
+        <header class="agent-update-dialog-head">
+          <div class="agent-update-dialog-icon" aria-hidden="true">
+            <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="52" height="52">
+          </div>
+          <div>
+            <span>{{ t("agents.maintenance") }}</span>
+            <h2 id="agent-update-title">{{ t("agents.update", agent=tool.label) }}</h2>
+          </div>
+          <button type="submit" class="agent-update-dialog-close" value="cancel" aria-label="{{ t('agents.cancel_update') }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+          </button>
+        </header>
+        <div class="agent-update-dialog-body">
+          <p id="agent-update-description">{{ t("agents.update_description") }}</p>
+          <dl class="agent-update-dialog-facts">
+            <div>
+              <dt>{{ t("agents.target_node") }}</dt>
+              <dd class="agent-update-dialog-node">—</dd>
+            </div>
+            <div>
+              <dt>{{ t("agents.current_version") }}</dt>
+              <dd class="agent-update-dialog-version">—</dd>
+            </div>
+          </dl>
+          <div class="agent-update-dialog-command">
+            <span>{{ t("agents.allowlisted_command") }}</span>
+            <code>—</code>
+          </div>
+          <div class="agent-update-dialog-safety">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            <span>{{ t("agents.update_safety") }}</span>
+          </div>
+        </div>
+        <footer class="agent-update-dialog-actions">
+          <button type="submit" class="agent-update-dialog-cancel" value="cancel">{{ t("agents.not_now") }}</button>
+          <button type="submit" class="agent-update-dialog-confirm" value="confirm">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 4v5h5M4 13a8.1 8.1 0 0 0 14.9 4M20 20v-5h-5"/></svg>
+            {{ t("agents.update_agent") }}
+          </button>
+        </footer>
+      </form>
+    </dialog>
+    <p class="form-hint agent-market-note">{{ t("agents.ready_note") }}</p>
   </section>
 
-  <section class="band agent-history-band deferred-render">
-    <div class="section-title agent-history-title">
-      <div>
-        <h2>Conversation History</h2>
-        <span>Read-only discovery of local Codex and Claude Code histories</span>
+  {% if tool.history_supported %}
+    <section class="band agent-history-band deferred-render" style="--agent-brand: {{ tool.accent }}">
+      <div class="section-title agent-history-title">
+        <div>
+          <span class="agent-market-kicker">{{ t("agents.continue_work") }}</span>
+          <h2>{{ t("agents.history_title", agent=tool.label) }}</h2>
+          <span>{{ t("agents.read_only_on", node=current_node.name) }}</span>
+        </div>
       </div>
-    </div>
-    <form class="agent-history-controls">
-      <label>
-        <span>CLI</span>
-        <select name="agent">
-          <option value="">Codex + Claude Code</option>
-          {% for tool in agent_catalog if tool.history_supported %}
-            <option value="{{ tool.name }}">{{ tool.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>Machine</span>
-        <select name="node">
-          {% for node in node_views %}
-            <option value="{{ node.name }}" {{ "selected" if node.name == "local" else "" }}>{{ node.name }} · {{ node.mode }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>Limit</span>
-        <select name="limit">
-          <option value="25">25</option>
-          <option value="50" selected>50</option>
-          <option value="100">100</option>
-        </select>
-      </label>
-      <button type="submit">Scan history</button>
-    </form>
-    <p class="form-hint">Scanning starts only when requested, reads bounded metadata plus a short prompt preview, and never changes the CLI history files. OpenCode history scanning is not enabled yet.</p>
-    <div class="agent-history-status" aria-live="polite">Choose a machine, then scan when needed.</div>
-    <div class="agent-history-list"></div>
-  </section>
+      <form class="agent-history-controls is-single-harness">
+        <input type="hidden" name="node" value="{{ current_node.name }}">
+        <input type="hidden" name="agent" value="{{ tool.name }}">
+        <label>
+          <span>{{ t("agents.maximum_results") }}</span>
+          <select name="limit">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <button type="submit">{{ t("agents.scan_history", agent=tool.label) }}</button>
+      </form>
+      <p class="form-hint">{{ t("agents.scan_safety") }}</p>
+      <div class="agent-history-status" aria-live="polite">{{ t("agents.scan_when_needed", agent=tool.label, node=current_node.name) }}</div>
+      <div class="agent-history-list"></div>
+    </section>
+  {% else %}
+    <section class="band agent-history-unavailable-band" style="--agent-brand: {{ tool.accent }}">
+      <div class="agent-history-unavailable-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M7 17.5 3.5 20v-5A8.5 8.5 0 1 1 7 17.5Z"/><path d="M9 11h6M12 8v6"/></svg>
+      </div>
+      <div>
+        <span class="agent-market-kicker">{{ t("agents.conversation_history") }}</span>
+        <h2>{{ t("agents.history_unavailable", agent=tool.label) }}</h2>
+        <p>{{ t("agents.history_unavailable_hint") }}</p>
+      </div>
+    </section>
+  {% endif %}
 
   <script src="{{ url_for('static', path='agents.js') }}?v={{ static_version('agents.js') }}"></script>
 {% endblock %}

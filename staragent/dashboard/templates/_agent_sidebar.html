@@ -1,0 +1,42 @@
+<section class="agent-switcher" aria-label="{{ t('agents.harnesses_on', node=current_node.name) }}">
+  <div class="agent-switcher-head">
+    <div>
+      <strong>{{ t("agents.harnesses") }}</strong>
+      <span>{{ t("agents.on_this_node") }}</span>
+    </div>
+    <span class="agent-switcher-count" aria-label="{{ t('agents.harness_count', count=agent_catalog|length) }}">{{ agent_catalog|length }}</span>
+  </div>
+  <div class="agent-switcher-body">
+    <nav class="agent-switcher-list" aria-label="{{ t('agents.available_on', node=current_node.name) }}">
+      <div class="agent-switcher-items">
+        {% for tool in agent_catalog %}
+          <a
+            class="agent-switcher-item agent-switcher-item-{{ tool.name }}{{ ' is-current' if tool.name == active_agent_name else '' }}"
+            href="/nodes/{{ current_node.name | urlencode }}/agents/{{ tool.name | urlencode }}"
+            data-agent="{{ tool.name }}"
+            data-status="unknown"
+            style="--agent-brand: {{ tool.accent }}"
+            {% if tool.name == active_agent_name %}aria-current="page"{% endif %}
+          >
+            <span class="agent-switcher-icon" aria-hidden="true">
+              <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="40" height="40">
+            </span>
+            <span class="agent-switcher-copy">
+              <span class="agent-switcher-primary">
+                <strong>{{ tool.label }}</strong>
+                <span class="agent-switcher-state" data-agent-state>
+                  <i aria-hidden="true"></i>
+                  <span>{{ t("common.checking") }}</span>
+                </span>
+              </span>
+              <span class="agent-switcher-meta">
+                <span>{{ tool.vendor }}</span>
+                <code>{{ tool.command }}</code>
+              </span>
+            </span>
+          </a>
+        {% endfor %}
+      </div>
+    </nav>
+  </div>
+</section>

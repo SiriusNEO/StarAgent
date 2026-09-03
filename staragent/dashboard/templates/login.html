@@ -1,24 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ current_language(request) }}">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Login · StarAgent</title>
+    <title>{{ t("login.title") }} · StarAgent</title>
     <link rel="icon" href="{{ url_for('static', path='favicon.svg') }}?v={{ static_version('favicon.svg') }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ static_version('styles.css') }}">
   </head>
   <body class="login-page">
     <main class="login-shell">
       <form class="login-card" method="post" action="/login">
-        <h1>StarAgent</h1>
-        <p>Enter the dashboard token.</p>
-        {% if error %}<div class="login-error">{{ error }}</div>{% endif %}
+        <div class="login-brand">
+          <img src="{{ url_for('static', path='staragent-logo.svg') }}?v={{ static_version('staragent-logo.svg') }}" width="42" height="42" alt="">
+          <h1>StarAgent</h1>
+        </div>
+        <p>{{ t("login.description") }}</p>
+        {% if error %}<div class="login-error">{{ t("login.invalid") }}</div>{% endif %}
         <input type="hidden" name="next" value="{{ next }}">
         <label>
-          <span>Login Token</span>
+          <span>{{ t("login.token") }}</span>
           <input name="token" type="password" autocomplete="current-password" autofocus>
         </label>
-        <button type="submit">Login</button>
+        <button type="submit">{{ t("login.submit") }}</button>
       </form>
     </main>
   </body>

@@ -1,3 +1,5 @@
+const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
+
 const sessionAssets = document.querySelector(".session-assets");
 const loadScriptAsset = (url) => new Promise((resolve, reject) => {
   const existing = document.querySelector(`script[data-staragent-src="${CSS.escape(url)}"]`);
@@ -64,18 +66,7 @@ const ensureHighlightAssets = () => {
 
 const sessionSwitcher = document.querySelector(".session-switcher");
 if (sessionSwitcher) {
-  const toggle = sessionSwitcher.querySelector(".session-switcher-toggle");
   const list = sessionSwitcher.querySelector(".session-switcher-list");
-
-  const setOpen = (open) => {
-    sessionSwitcher.classList.toggle("is-open", open);
-    toggle.setAttribute("aria-expanded", String(open));
-    toggle.textContent = open ? "Hide" : "Browse";
-  };
-
-  toggle.addEventListener("click", () => {
-    setOpen(!sessionSwitcher.classList.contains("is-open"));
-  });
 
   window.StarAgentAfterPaint(() => {
     const current = list.querySelector(".session-switcher-item.is-current");
@@ -91,9 +82,10 @@ if (sessionSwitcher) {
 for (const button of document.querySelectorAll(".copy-button")) {
   button.addEventListener("click", async () => {
     const text = button.dataset.copy || "";
+    const originalLabel = button.textContent;
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = "Copied";
+      button.textContent = t("nodes.copied");
     } catch {
       const area = document.createElement("textarea");
       area.value = text;
@@ -101,9 +93,9 @@ for (const button of document.querySelectorAll(".copy-button")) {
       area.select();
       document.execCommand("copy");
       area.remove();
-      button.textContent = "Copied";
+      button.textContent = t("nodes.copied");
     }
-    setTimeout(() => { button.textContent = "Copy"; }, 1200);
+    setTimeout(() => { button.textContent = originalLabel; }, 1200);
   });
 }
 
@@ -112,20 +104,20 @@ if (stopButton) {
   stopButton.addEventListener("click", async () => {
     const name = stopButton.dataset.session;
     const node = stopButton.dataset.node;
-    if (!confirm(`Stop tmux session "${name}"?`)) {
+    if (!confirm(t("sessions.stop_confirm", {name}))) {
       return;
     }
     stopButton.disabled = true;
-    stopButton.textContent = "Stopping";
+    stopButton.textContent = t("sessions.stopping");
     const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(name)}`, {method: "DELETE"});
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      alert(body.detail || "Stop failed.");
+      alert(body.detail || t("sessions.stop_failed"));
       stopButton.disabled = false;
-      stopButton.textContent = "Stop";
+      stopButton.textContent = t("common.stop");
       return;
     }
-    window.location.href = "/";
+    window.location.href = `/nodes/${encodeURIComponent(node)}/sessions`;
   });
 }
 
@@ -152,8 +144,8 @@ if (sessionExplorer) {
       sessionExplorer.dataset.path = path;
     },
     includeFiles: true,
-    loadingText: "Loading workspace...",
-    emptyText: "No matching files.",
+    loadingText: t("detail.loading_workspace"),
+    emptyText: t("detail.no_files"),
     selectedPath: () => highlightedPath,
     onFileSelect: (path) => {
       highlightedPath = path;
@@ -177,7 +169,7 @@ if (sessionExplorer) {
       previewPdf.hidden = true;
       previewPdf.removeAttribute("src");
     }
-    previewMeta.textContent = "Loading";
+    previewMeta.textContent = t("detail.loading");
     previewBody.textContent = "";
     previewBody.className = "file-preview-code";
     if (previewLanguage(path) === "pdf") {
@@ -189,8 +181,8 @@ if (sessionExplorer) {
     const response = await fetch(`/api/files/preview?node=${encodeURIComponent(explorerNode)}&root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(path)}`);
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      previewMeta.textContent = "Error";
-      previewBody.textContent = body.detail || "Could not preview file.";
+      previewMeta.textContent = t("detail.error");
+      previewBody.textContent = body.detail || t("detail.preview_failed");
       return;
     }
     const body = await response.json();
@@ -306,7 +298,7 @@ if (sessionExplorer) {
       previewMarkdown.innerHTML = "";
     }
     if (!previewPdf) {
-      previewBody.textContent = "PDF preview is not available.";
+      previewBody.textContent = t("detail.pdf_unavailable");
       previewSource.hidden = false;
       return;
     }
@@ -318,9 +310,9 @@ if (sessionExplorer) {
       previewPdf.hidden = true;
       previewPdf.removeAttribute("src");
       previewBody.className = "file-preview-code";
-      previewBody.textContent = body.detail || "PDF preview is not available.";
+      previewBody.textContent = body.detail || t("detail.pdf_unavailable");
       previewSource.hidden = false;
-      previewMeta.textContent = "PDF preview error";
+      previewMeta.textContent = t("detail.pdf_error");
       return;
     }
     const info = await response.json();
@@ -490,7 +482,7 @@ if (sessionExplorer) {
       flushFence();
     }
     flushFlow();
-    return html.join("\n") || '<p class="empty">Empty Markdown file.</p>';
+    return html.join("\n") || `<p class="empty">${escapeHtml(t("detail.markdown_empty"))}</p>`;
   }
 
   function isMarkdownTableDivider(line) {
@@ -842,13 +834,13 @@ if (sessionExplorer) {
   }
 
   function changeStatusLabel(status) {
-    if (status.includes("U")) return "Conflict";
-    if (status.includes("R")) return "Renamed";
-    if (status.includes("C")) return "Copied";
-    if (status.includes("D")) return "Deleted";
-    if (status.includes("A") || status.includes("?")) return "Added";
-    if (status.includes("M")) return "Modified";
-    return "Changed";
+    if (status.includes("U")) return t("detail.file_conflict");
+    if (status.includes("R")) return t("detail.file_renamed");
+    if (status.includes("C")) return t("detail.file_copied");
+    if (status.includes("D")) return t("detail.file_deleted");
+    if (status.includes("A") || status.includes("?")) return t("detail.file_added");
+    if (status.includes("M")) return t("detail.file_modified");
+    return t("detail.file_changed");
   }
 
   function changeStatusShortLabel(status) {
@@ -883,8 +875,8 @@ if (sessionExplorer) {
       const parsed = parseChangedFile(button.dataset.file);
       if (parsed.deleted) {
         if (previewMeta && previewBody) {
-          previewMeta.textContent = "Deleted";
-          previewBody.textContent = `${parsed.path} was deleted in the working tree.`;
+          previewMeta.textContent = t("detail.file_deleted");
+          previewBody.textContent = t("detail.deleted_path", {path: parsed.path});
           previewBody.className = "file-preview-code";
         }
         return;
@@ -1062,23 +1054,34 @@ if (chat) {
     if (!usage) {
       return;
     }
-    const source = usage.source ? `${usage.source} native usage` : "CLI native usage";
+    const source = usage.source
+      ? t("detail.native_usage", {source: usage.source})
+      : t("detail.cli_native_usage");
     const rate = [
-      Number(usage.primary_rate_used_percent || 0) ? `${Number(usage.primary_rate_used_percent).toFixed(0)}% primary` : "",
-      Number(usage.secondary_rate_used_percent || 0) ? `${Number(usage.secondary_rate_used_percent).toFixed(0)}% weekly` : "",
+      Number(usage.primary_rate_used_percent || 0)
+        ? t("detail.primary_rate", {percent: Number(usage.primary_rate_used_percent).toFixed(0)})
+        : "",
+      Number(usage.secondary_rate_used_percent || 0)
+        ? t("detail.weekly_rate", {percent: Number(usage.secondary_rate_used_percent).toFixed(0)})
+        : "",
     ].filter(Boolean).join(" · ");
     setTokenText("[data-token-total]", formatTokenCount(usage.total_tokens));
     setTokenText("[data-token-source]", source);
     setTokenText("[data-token-model]", usage.model || "--");
     setTokenText("[data-token-effort]", usage.reasoning_effort || "default");
     setTokenText("[data-token-plan]", usage.plan_type || "--");
-    setTokenText("[data-token-context]", usage.context_window ? `${formatTokenCount(usage.context_window)} window` : "--");
+    setTokenText("[data-token-context]", usage.context_window
+      ? t("detail.context_window", {count: formatTokenCount(usage.context_window)})
+      : "--");
     setTokenText("[data-token-rate]", rate || "--");
     setTokenText("[data-token-last]", formatTokenCount(usage.last_total_tokens));
     setTokenText("[data-token-cached]", formatTokenCount(usage.cached_input_tokens));
     setTokenText("[data-token-output]", formatTokenCount(usage.output_tokens));
     setTokenText("[data-token-reasoning]", formatTokenCount(usage.reasoning_output_tokens));
-    chatMeta.textContent = `Tokens ${formatTokenCount(usage.total_tokens)} total · last ${formatTokenCount(usage.last_total_tokens)}`;
+    chatMeta.textContent = t("detail.tokens_summary", {
+      total: formatTokenCount(usage.total_tokens),
+      last: formatTokenCount(usage.last_total_tokens),
+    });
   };
 
   const mergeMessages = (...lists) => {
@@ -1211,17 +1214,17 @@ if (chat) {
       offset = newline + 1;
     }
     const compact = firstLine.trim().slice(0, 72);
-    return `${messageLabel(message.role)} · ${compact || "(empty)"}`;
+    return `${messageLabel(message.role)} · ${compact || t("detail.empty_message")}`;
   };
 
   const messageLabel = (role) => {
     if (role === "user") {
-      return "You";
+      return t("detail.you");
     }
     if (role === "session") {
-      return "Session";
+      return t("detail.session");
     }
-    return "Agent";
+    return t("detail.agent");
   };
 
   const isLongMessage = (text) => {
@@ -1259,7 +1262,7 @@ if (chat) {
     if (linesTruncated) {
       compact = `${compact.trimEnd()}\n...`;
     }
-    return compact || "(empty)";
+    return compact || t("detail.empty_message");
   };
 
   const messageKey = (message) => {
@@ -1281,7 +1284,7 @@ if (chat) {
   );
 
   const appendMessageBody = (bodyWrap, message, key, opened) => {
-    const text = (message.text || "").trim() || "(empty)";
+    const text = (message.text || "").trim() || t("detail.empty_message");
     if (!isLongMessage(text)) {
       const body = document.createElement("pre");
       body.textContent = text;
@@ -1295,7 +1298,7 @@ if (chat) {
     full.className = "chat-full-message";
     full.dataset.detailKey = `${key}:full`;
     const summary = document.createElement("summary");
-    summary.textContent = "Show full message";
+    summary.textContent = t("detail.show_full");
     const appendFullBody = () => {
       if (full.dataset.bodyLoaded) {
         return;
@@ -1462,7 +1465,7 @@ if (chat) {
     return message;
   };
 
-  const showWorking = ({forceBottom = false, label = "Working", startedAt = 0} = {}) => {
+  const showWorking = ({forceBottom = false, label = "", startedAt = 0} = {}) => {
     const scrollLocked = isUserScrollLocked() && !forceBottom;
     const shouldStickToBottom = !scrollLocked && (forceBottom || isChatNearBottom());
     if (!workingMessage) {
@@ -1471,12 +1474,13 @@ if (chat) {
       workingMessage.className = "chat-message chat-agent chat-working";
       const bodyWrap = document.createElement("div");
       bodyWrap.className = "chat-bubble";
-      const label = document.createElement("strong");
-      label.textContent = "Agent";
+      const labelNode = document.createElement("strong");
+      labelNode.textContent = t("detail.agent");
       const body = document.createElement("div");
       body.className = "working-pill";
       body.innerHTML = '<span class="chat-spinner"></span><span class="working-text">Working</span>';
-      bodyWrap.append(label, body);
+      body.querySelector(".working-text").textContent = t("detail.working");
+      bodyWrap.append(labelNode, body);
       workingMessage.appendChild(bodyWrap);
     } else if (startedAt && (!workingStartedAt || startedAt < workingStartedAt)) {
       workingStartedAt = startedAt;
@@ -1484,7 +1488,9 @@ if (chat) {
     const elapsed = Math.max(1, Math.round((Date.now() - workingStartedAt) / 1000));
     const text = workingMessage.querySelector(".working-text");
     if (text) {
-      text.textContent = label === "Working" ? `Working · ${elapsed}s` : label;
+      text.textContent = !label || label === "Working"
+        ? t("detail.working_elapsed", {seconds: elapsed})
+        : label;
     }
     if (!workingMessage.isConnected) {
       renderChatHistory({forceBottom: shouldStickToBottom});
@@ -1563,7 +1569,7 @@ if (chat) {
     if (body.working) {
       pendingFinalKey = "";
       showWorking({
-        label: body.working_label || "Working",
+        label: body.working_label || "",
         startedAt: Number(body.working_since_ms || 0),
       });
       const pending = loadPendingChat();
@@ -1571,7 +1577,7 @@ if (chat) {
         lastChatSnapshot || String(body.reply || ""),
         Number(pending?.startedAt || body.working_since_ms || Date.now()),
       );
-      chatStatus.textContent = "Agent working";
+      chatStatus.textContent = t("detail.agent_working");
       return;
     }
     if (body.final) {
@@ -1588,19 +1594,19 @@ if (chat) {
 
   const syncChatFromTranscript = async ({silent = true} = {}) => {
     if (!silent) {
-      chatStatus.textContent = "Syncing";
+      chatStatus.textContent = t("detail.syncing");
     }
     try {
       const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/chat-sync`);
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || "Sync failed");
+        throw new Error(body.detail || t("detail.sync_failed"));
       }
       const body = await response.json();
       applyTranscriptState(body);
       renderChatHistory();
       if (!body.working && !silent) {
-        chatStatus.textContent = "Updated";
+        chatStatus.textContent = t("detail.updated");
       }
       return body;
     } catch (error) {
@@ -1627,7 +1633,7 @@ if (chat) {
   const monitorAgentReply = (baseline, startedAt = Date.now()) => {
     savePendingChat(baseline, startedAt);
     showWorking({forceBottom: true, startedAt});
-    chatStatus.textContent = "Agent working";
+    chatStatus.textContent = t("detail.agent_working");
     scheduleTranscriptSync(1800);
   };
 
@@ -1637,7 +1643,7 @@ if (chat) {
       if (pending) {
         monitorAgentReply(pending.baseline, Number(pending.startedAt));
       } else {
-        chatStatus.textContent = "Loaded";
+        chatStatus.textContent = t("detail.loaded");
         scheduleTranscriptSync();
       }
     });
@@ -1652,7 +1658,7 @@ if (chat) {
     }
     appendChat("user", text);
     chatInput.value = "";
-    chatStatus.textContent = "Sending";
+    chatStatus.textContent = t("detail.sending");
     const response = await fetch(`/api/nodes/${encodeURIComponent(chatNode)}/sessions/${encodeURIComponent(chatSession)}/send`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -1660,10 +1666,10 @@ if (chat) {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      chatStatus.textContent = body.detail || "Send failed";
+      chatStatus.textContent = body.detail || t("detail.send_failed");
       return;
     }
-    chatStatus.textContent = "Sent";
+    chatStatus.textContent = t("detail.sent");
     const startedAt = Date.now();
     savePendingChat(lastChatSnapshot, startedAt);
     monitorAgentReply(lastChatSnapshot, startedAt);
@@ -1678,11 +1684,13 @@ if (terminalBand) {
   const prefersCollapsed = window.matchMedia("(max-width: 820px)").matches;
   if (!prefersCollapsed) {
     terminalBand.classList.add("is-open");
-    terminalToggle.textContent = "Hide Terminal";
+    terminalToggle.textContent = t("detail.hide_terminal");
   }
   terminalToggle.addEventListener("click", () => {
     terminalBand.classList.toggle("is-open");
-    terminalToggle.textContent = terminalBand.classList.contains("is-open") ? "Hide Terminal" : "Show Terminal";
+    terminalToggle.textContent = terminalBand.classList.contains("is-open")
+      ? t("detail.hide_terminal")
+      : t("detail.show_terminal");
     window.dispatchEvent(new Event("resize"));
   });
 }
@@ -1783,7 +1791,7 @@ if (terminal) {
   const terminalResetPattern = /\x1b\[\?(?:47|1047|1048|1049)[hl]|\x1b\[(?:22|23);0;0t|\x1b\[3J|\x1b\[(?:H|1;1H)\x1b\[2J|\x1b\[2J|\x1bc/g;
   const preferHttpTerminal = window.matchMedia("(max-width: 820px)").matches;
   const updateTerminalTransport = () => {
-    transportValue.textContent = transport === "http" ? "HTTP polling" : "WebSocket";
+    transportValue.textContent = transport === "http" ? t("detail.http_polling") : "WebSocket";
   };
   updateTerminalTransport();
 
@@ -1808,10 +1816,10 @@ if (terminal) {
           body: JSON.stringify({data: payload.data || ""})
         }).then((response) => {
           if (!response.ok) {
-            status.textContent = "Terminal input failed";
+            status.textContent = t("detail.terminal_input_failed");
           }
         }).catch(() => {
-          status.textContent = "Terminal input failed";
+          status.textContent = t("detail.terminal_input_failed");
         });
         return true;
       }
@@ -1831,12 +1839,12 @@ if (terminal) {
     inputLockButton.setAttribute("aria-pressed", String(terminalInputUnlocked));
     inputLockButton.setAttribute(
       "aria-label",
-      terminalInputUnlocked ? "Lock terminal input" : "Unlock terminal input",
+      terminalInputUnlocked ? t("detail.lock_terminal") : t("detail.unlock_terminal"),
     );
     inputLockButton.title = terminalInputUnlocked
-      ? "Terminal input is unlocked"
-      : "Terminal input is locked";
-    inputLockLabel.textContent = terminalInputUnlocked ? "Unlocked" : "Locked";
+      ? t("detail.terminal_unlocked_title")
+      : t("detail.terminal_locked_title");
+    inputLockLabel.textContent = terminalInputUnlocked ? t("detail.unlocked") : t("detail.locked");
     if (terminalTextarea) {
       terminalTextarea.readOnly = !terminalInputUnlocked;
       terminalTextarea.setAttribute("aria-readonly", String(!terminalInputUnlocked));
@@ -1853,7 +1861,7 @@ if (terminal) {
       return;
     }
     if (!sendTerminalMessage({type: "input", data})) {
-      status.textContent = "Terminal input not connected";
+      status.textContent = t("detail.terminal_not_connected");
     }
   });
 
@@ -2023,7 +2031,8 @@ if (terminal) {
       return terminalHistoryPromise;
     }
     const previousStatus = status.textContent;
-    status.textContent = "Loading terminal history";
+    const loadingHistoryLabel = t("detail.loading_terminal_history");
+    status.textContent = loadingHistoryLabel;
     terminalHistoryPromise = fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/output?lines=2500`)
       .then(async (response) => {
         if (!response.ok) {
@@ -2040,8 +2049,8 @@ if (terminal) {
       })
       .catch(() => {})
       .finally(() => {
-        if (status.textContent === "Loading terminal history") {
-          status.textContent = previousStatus || "Connecting";
+        if (status.textContent === loadingHistoryLabel) {
+          status.textContent = previousStatus || t("detail.connecting");
         }
         terminalHistoryPromise = null;
       });
@@ -2068,7 +2077,11 @@ if (terminal) {
     const code = event && event.code ? event.code : "closed";
     const delay = Math.min(10000, 1000 * Math.max(1, 2 ** reconnectAttempts));
     reconnectAttempts += 1;
-    status.textContent = `Disconnected (${code})${reason} · reconnecting in ${Math.round(delay / 1000)}s`;
+    status.textContent = t("detail.disconnected_retry", {
+      code,
+      reason,
+      seconds: Math.round(delay / 1000),
+    });
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connectTerminal();
@@ -2082,13 +2095,13 @@ if (terminal) {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
-    status.textContent = reconnectAttempts ? "Reconnecting" : "Connecting";
+    status.textContent = reconnectAttempts ? t("detail.reconnecting") : t("detail.connecting");
     socket = new WebSocket(terminalUrl);
     socket.binaryType = "arraybuffer";
 
     socket.addEventListener("open", () => {
       reconnectAttempts = 0;
-      status.textContent = "Connected";
+      status.textContent = t("detail.connected");
       fit();
       beginSuppressingInitialTerminalPaint();
       clearKeepalive();
@@ -2101,7 +2114,7 @@ if (terminal) {
     });
     socket.addEventListener("close", scheduleReconnect);
     socket.addEventListener("error", () => {
-      status.textContent = "Terminal connection error";
+      status.textContent = t("detail.terminal_connection_error");
     });
   };
 
@@ -2116,26 +2129,26 @@ if (terminal) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    status.textContent = "Switching to HTTP terminal";
+    status.textContent = t("detail.switching_http");
     try {
       const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/sessions/${encodeURIComponent(session)}/terminal-http`, {
         method: "POST"
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        status.textContent = body.detail || "HTTP terminal failed";
+        status.textContent = body.detail || t("detail.http_failed");
         transport = "websocket";
         updateTerminalTransport();
         return;
       }
       const body = await response.json();
       httpTerminalId = body.terminal_id;
-      status.textContent = "Connected · HTTP fallback";
+      status.textContent = t("detail.http_connected");
       fit();
       beginSuppressingInitialTerminalPaint();
       pollHttpTerminal();
     } catch {
-      status.textContent = "HTTP terminal connection error";
+      status.textContent = t("detail.http_connection_error");
       transport = "websocket";
       updateTerminalTransport();
     }
@@ -2159,7 +2172,7 @@ if (terminal) {
       try {
         const response = await fetch(`/api/terminal-http/${encodeURIComponent(httpTerminalId)}/output?timeout=1.5`);
         if (!response.ok) {
-          status.textContent = "HTTP terminal disconnected";
+          status.textContent = t("detail.http_disconnected");
           break;
         }
         const body = await response.json();
@@ -2167,11 +2180,11 @@ if (terminal) {
           writeBase64Chunk(chunk);
         }
         if (body.closed) {
-          status.textContent = "HTTP terminal closed";
+          status.textContent = t("detail.http_closed");
           break;
         }
       } catch {
-        status.textContent = "HTTP terminal reconnecting";
+        status.textContent = t("detail.http_reconnecting");
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     }
@@ -2212,7 +2225,7 @@ if (terminal) {
     updateTerminalTransport();
     httpPolling = false;
     reconnectAttempts = 0;
-    status.textContent = "Collapsed · terminal paused";
+    status.textContent = t("detail.terminal_paused");
   };
 
   document.addEventListener("visibilitychange", () => {
@@ -2257,7 +2270,7 @@ if (terminal) {
     initializeTerminal().catch((error) => {
       const status = terminal.querySelector(".terminal-connection-state");
       if (status) {
-        status.textContent = error?.message || "Terminal assets failed to load";
+        status.textContent = error?.message || t("detail.assets_failed");
       }
     });
   }, 500);

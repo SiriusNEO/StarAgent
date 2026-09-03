@@ -42,36 +42,52 @@ class AgentToolSpec:
     npm_package: str
     install_command: str
     docs_url: str
+    vendor: str
+    description: str
+    icon: str
+    accent: str
     history_supported: bool = False
     version_args: tuple[str, ...] = ("--version",)
 
 
 AGENT_TOOL_SPECS = (
     AgentToolSpec(
-        "codex",
-        "Codex",
-        "codex",
-        "@openai/codex",
-        "npm install -g @openai/codex@latest",
-        "https://github.com/openai/codex",
+        name="codex",
+        label="Codex",
+        command="codex",
+        npm_package="@openai/codex",
+        install_command="npm install -g @openai/codex@latest",
+        docs_url="https://github.com/openai/codex",
+        vendor="OpenAI",
+        description="A coding agent that works with you directly from the terminal.",
+        icon="agent-icons/codex.svg",
+        accent="#111111",
         history_supported=True,
     ),
     AgentToolSpec(
-        "claude",
-        "Claude Code",
-        "claude",
-        "@anthropic-ai/claude-code",
-        "npm install -g @anthropic-ai/claude-code@latest",
-        "https://docs.anthropic.com/en/docs/claude-code/getting-started",
+        name="claude",
+        label="Claude Code",
+        command="claude",
+        npm_package="@anthropic-ai/claude-code",
+        install_command="npm install -g @anthropic-ai/claude-code@latest",
+        docs_url="https://docs.anthropic.com/en/docs/claude-code/getting-started",
+        vendor="Anthropic",
+        description="An agentic coding tool that understands your codebase and workflow.",
+        icon="agent-icons/claude.svg",
+        accent="#D97757",
         history_supported=True,
     ),
     AgentToolSpec(
-        "opencode",
-        "OpenCode",
-        "opencode",
-        "opencode-ai",
-        "npm install -g opencode-ai@latest",
-        "https://opencode.ai/docs",
+        name="opencode",
+        label="OpenCode",
+        command="opencode",
+        npm_package="opencode-ai",
+        install_command="npm install -g opencode-ai@latest",
+        docs_url="https://opencode.ai/docs",
+        vendor="Anomaly",
+        description="An open-source coding agent with a provider-flexible terminal experience.",
+        icon="agent-icons/opencode.svg",
+        accent="#5F5BF4",
     ),
 )
 
@@ -487,6 +503,10 @@ def agent_catalog_payload() -> list[dict[str, object]]:
             "command": spec.command,
             "install_command": spec.install_command,
             "docs_url": spec.docs_url,
+            "vendor": spec.vendor,
+            "description": spec.description,
+            "icon": spec.icon,
+            "accent": spec.accent,
             "history_supported": spec.history_supported,
         }
         for spec in AGENT_TOOL_SPECS

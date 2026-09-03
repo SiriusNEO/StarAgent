@@ -321,25 +321,22 @@ def collect_node_views(prefer_cached: bool = False) -> list[NodeView]:
 
 def collect_session_navigation_nodes() -> list[NodeView]:
     """Build the session switcher without remote I/O or expensive local pane parsing."""
-    nodes = []
-    for entry in load_nodes():
-        if entry.is_local:
-            sessions = tuple(
-                HubSession(node_id=entry.name, view=view)
-                for view in collect_session_navigation_views()
-            )
-            nodes.append(NodeView(entry=entry, status="connected", sessions=sessions))
-            continue
-        cached = cached_remote_node_view(entry)
-        nodes.append(
-            cached
-            or NodeView(
-                entry=entry,
-                status="disconnected",
-                error="Waiting for the first Node heartbeat.",
-            )
-        )
+    nodes = [collect_node_navigation_view(entry) for entry in load_nodes()]
     return sorted(nodes, key=lambda item: (not item.entry.is_local, item.name))
+
+
+def collect_node_navigation_view(entry: NodeEntry) -> NodeView:
+    """Collect one Node for navigation without contacting any remote Node."""
+    if entry.is_local:
+        sessions = tuple(
+            HubSession(node_id=entry.name, view=view) for view in collect_session_navigation_views()
+        )
+        return NodeView(entry=entry, status="connected", sessions=sessions)
+    return cached_remote_node_view(entry) or NodeView(
+        entry=entry,
+        status="disconnected",
+        error="Waiting for the first Node heartbeat.",
+    )
 
 
 def refresh_remote_node_heartbeats() -> None:
@@ -463,6 +460,7 @@ def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
     error = str(exc)
     if is_remote_auth_failure(exc):
         forget_node_heartbeat(node)
+        remember_node_failure(node, error)
         return NodeView(entry=node, status="disconnected", error=error)
 
     if remote_node_health_ok(node):
@@ -514,7 +512,15 @@ def remember_node_failure(node: NodeEntry, error: str) -> NodeHeartbeat | None:
     with NODE_HEARTBEATS_LOCK:
         heartbeat = NODE_HEARTBEATS.get(node.name)
         if heartbeat is None or heartbeat.endpoint != node_endpoint(node):
-            return None
+            heartbeat = NodeHeartbeat(
+                endpoint=node_endpoint(node),
+                sessions=(),
+                last_success=0.0,
+                failures=1,
+                last_error=error,
+            )
+            NODE_HEARTBEATS[node.name] = heartbeat
+            return heartbeat
         heartbeat.failures += 1
         heartbeat.last_error = error
         return heartbeat
