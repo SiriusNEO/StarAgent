@@ -28,6 +28,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
+    JSONResponse,
     PlainTextResponse,
     RedirectResponse,
     Response,
@@ -41,6 +42,13 @@ from staragent.agent_history import resume_worker_command
 from staragent.agent_tools import AgentToolUpdateBusyError, agent_catalog_payload
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
+from staragent.dashboard.i18n import (
+    LANGUAGE_COOKIE,
+    SUPPORTED_LANGUAGES,
+    language_messages,
+    request_language,
+    template_translate,
+)
 from staragent.dependencies import dependencies_status, ensure_dependencies
 from staragent.event_log import (
     append_hub_event,
@@ -61,6 +69,7 @@ from staragent.hub import (
     NodeEntry,
     add_node,
     collect_hub_sessions,
+    collect_node_navigation_view,
     collect_node_session,
     collect_node_view,
     collect_node_views,
@@ -118,6 +127,9 @@ def static_version(path: str) -> int:
 
 
 templates.env.globals["static_version"] = static_version
+templates.env.globals["t"] = template_translate
+templates.env.globals["current_language"] = request_language
+templates.env.globals["language_messages"] = language_messages
 
 
 @dataclass
@@ -249,6 +261,7 @@ def create_app() -> FastAPI:
 
     register_auth_routes(app)
     register_theme_routes(app)
+    register_settings_routes(app)
     register_pages_routes(app)
     register_terminal_routes(app)
     register_sessions_routes(app)
@@ -386,52 +399,114 @@ def register_theme_routes(app: FastAPI) -> None:
         return {"ok": True, **theme_config_payload()}
 
 
+def register_settings_routes(app: FastAPI) -> None:
+    @app.post("/api/settings/language")
+    def set_dashboard_language(payload: LanguagePreference) -> JSONResponse:
+        if payload.language not in SUPPORTED_LANGUAGES:
+            raise HTTPException(status_code=400, detail="unsupported dashboard language")
+        response = JSONResponse({"ok": True, "language": payload.language})
+        response.set_cookie(
+            LANGUAGE_COOKIE,
+            payload.language,
+            httponly=False,
+            samesite="lax",
+            secure=False,
+            max_age=60 * 60 * 24 * 365,
+        )
+        return response
+
+
 def register_pages_routes(app: FastAPI) -> None:
     @app.get("/")
     def index() -> RedirectResponse:
-        return RedirectResponse("/sessions", status_code=303)
+        return RedirectResponse("/nodes", status_code=303)
 
-    @app.get("/sessions", response_class=HTMLResponse)
-    def sessions_page(request: Request) -> HTMLResponse:
-        node_views = sorted(
-            collect_node_views(prefer_cached=True),
-            key=lambda node: (not node.entry.is_local, node.name),
-        )
-        views = sorted(
-            [session for node in node_views for session in node.sessions],
-            key=lambda item: (item.node_id, item.name),
-        )
-        return templates.TemplateResponse(
-            request,
-            "index.html",
-            {
-                "views": views,
-                "node_views": node_views,
-                "stats": dashboard_stats(node_views, views),
-                "relative_time": relative_time,
-                "command_presets": command_presets_payload(),
-                "initial_explorer_path": str(Path.cwd()),
-            },
-        )
+    @app.get("/sessions")
+    def legacy_sessions_page() -> RedirectResponse:
+        return RedirectResponse("/nodes", status_code=303)
 
     @app.get("/nodes", response_class=HTMLResponse)
     def nodes_page(request: Request) -> HTMLResponse:
-        node_views = collect_node_views(prefer_cached=True)
-        views = sorted(
-            [session for node in node_views for session in node.sessions],
-            key=lambda item: (item.node_id, item.name),
+        node_views = sorted(
+            collect_session_navigation_nodes(),
+            key=lambda node: (not node.entry.is_local, node.name),
         )
         return templates.TemplateResponse(
             request,
             "nodes.html",
             {
                 "node_views": node_views,
-                "stats": dashboard_stats(node_views, views),
+                "stats": node_connection_stats(node_views),
+                "current_section": "nodes",
             },
         )
 
-    @app.get("/agents", response_class=HTMLResponse)
-    def agents_page(request: Request) -> HTMLResponse:
+    @app.get("/agents")
+    def legacy_agents_page() -> RedirectResponse:
+        return RedirectResponse("/nodes", status_code=303)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "current_section": "settings",
+                "language": request_language(request),
+            },
+        )
+
+    @app.get("/logs")
+    def legacy_logs_page() -> RedirectResponse:
+        return RedirectResponse("/nodes", status_code=303)
+
+    @app.get("/nodes/{node_id}", response_class=HTMLResponse)
+    def node_page(request: Request, node_id: str) -> HTMLResponse:
+        node_view = dashboard_node_view(node_id)
+        return templates.TemplateResponse(
+            request,
+            "node.html",
+            {
+                "current_node": node_view,
+                "current_section": "overview",
+                "stats": session_stats(node_view.sessions),
+            },
+        )
+
+    @app.get("/nodes/{node_id}/sessions", response_class=HTMLResponse)
+    def node_sessions_page(request: Request, node_id: str) -> HTMLResponse:
+        node_view = dashboard_node_view(node_id)
+        views = sorted(node_view.sessions, key=lambda item: item.name)
+        return templates.TemplateResponse(
+            request,
+            "index.html",
+            {
+                "views": views,
+                "sidebar_sessions": views,
+                "sidebar_session_count": len(views),
+                "active_session_name": "",
+                "current_node": node_view,
+                "current_section": "sessions",
+                "stats": session_stats(views),
+                "relative_time": relative_time,
+                "command_presets": command_presets_payload(),
+                "initial_explorer_path": str(Path.cwd()) if node_view.entry.is_local else "",
+            },
+        )
+
+    def node_agents_response(
+        request: Request,
+        node_id: str,
+        agent_name: str = "codex",
+    ) -> HTMLResponse:
+        node_view = dashboard_node_view(node_id)
+        agent_catalog = agent_catalog_payload()
+        selected_agent = next(
+            (tool for tool in agent_catalog if tool.get("name") == agent_name),
+            None,
+        )
+        if selected_agent is None:
+            raise HTTPException(status_code=404, detail=f"agent harness not found: {agent_name}")
         agent_presets = [
             preset for preset in command_presets_payload() if preset.get("agent") != "shell"
         ]
@@ -439,26 +514,43 @@ def register_pages_routes(app: FastAPI) -> None:
             request,
             "agents.html",
             {
-                "node_views": collect_node_views(prefer_cached=True),
-                "agent_catalog": agent_catalog_payload(),
+                "node_views": [node_view],
+                "current_node": node_view,
+                "current_section": "agents",
+                "agent_catalog": agent_catalog,
+                "selected_agent": selected_agent,
+                "active_agent_name": agent_name,
                 "agent_presets": agent_presets,
             },
         )
+
+    @app.get("/nodes/{node_id}/agents", response_class=HTMLResponse)
+    def node_agents_page(request: Request, node_id: str) -> HTMLResponse:
+        return node_agents_response(request, node_id)
+
+    @app.get("/nodes/{node_id}/agents/{agent_name}", response_class=HTMLResponse)
+    def node_agent_page(request: Request, node_id: str, agent_name: str) -> HTMLResponse:
+        return node_agents_response(request, node_id, agent_name)
 
     @app.get("/lark", response_class=HTMLResponse)
     def lark_page(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(
             request,
             "lark.html",
-            {"lark": lark_status_payload()},
+            {"lark": lark_status_payload(), "current_section": "lark"},
         )
 
-    @app.get("/logs", response_class=HTMLResponse)
-    def logs_page(request: Request) -> HTMLResponse:
+    @app.get("/nodes/{node_id}/logs", response_class=HTMLResponse)
+    def node_logs_page(request: Request, node_id: str) -> HTMLResponse:
+        node_view = dashboard_node_view(node_id)
         return templates.TemplateResponse(
             request,
             "logs.html",
-            {"log_sources": log_source_payloads()},
+            {
+                "log_sources": node_log_source_payloads(node_id),
+                "current_node": node_view,
+                "current_section": "logs",
+            },
         )
 
     @app.get("/sessions/{name}", response_class=HTMLResponse)
@@ -1565,6 +1657,10 @@ class ResumeConversationRequest(BaseModel):
     id: str
 
 
+class LanguagePreference(BaseModel):
+    language: str
+
+
 class CreateWorkerRequest(BaseModel):
     node: str = "local"
     name: str
@@ -1616,6 +1712,17 @@ def node_session_view(node_id: str, name: str, *, prefer_cached: bool = False):
     return collect_node_session(node, name, prefer_cached=prefer_cached)
 
 
+def dashboard_node_entry(node_id: str) -> NodeEntry:
+    try:
+        return node_by_name(node_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
+
+
+def dashboard_node_view(node_id: str):
+    return collect_node_navigation_view(dashboard_node_entry(node_id))
+
+
 def request_is_speculative_navigation(request: Request) -> bool:
     purpose = " ".join(
         str(request.headers.get(name) or "")
@@ -1628,7 +1735,8 @@ def session_response(request: Request, view) -> HTMLResponse:
     if not request_is_speculative_navigation(request):
         mark_hub_session_seen(view)
     attach_command = tmux_attach_command(view)
-    sidebar_nodes = collect_session_navigation_nodes()
+    current_node = collect_node_navigation_view(dashboard_node_entry(view.node_id))
+    sidebar_sessions = sorted(current_node.sessions, key=lambda item: item.name)
     return templates.TemplateResponse(
         request,
         "session.html",
@@ -1638,17 +1746,25 @@ def session_response(request: Request, view) -> HTMLResponse:
             "attach_command": attach_command,
             "tmux_commands": tmux_quick_commands(view),
             "initial_token_usage": None,
-            "sidebar_nodes": sidebar_nodes,
-            "sidebar_session_count": sum(len(node.sessions) for node in sidebar_nodes),
+            "sidebar_sessions": sidebar_sessions,
+            "sidebar_session_count": len(sidebar_sessions),
+            "active_session_name": view.name,
+            "current_node": current_node,
+            "current_section": "sessions",
         },
     )
 
 
-def dashboard_stats(node_views, views):
+def node_connection_stats(node_views):
     return {
         "nodes": len(node_views),
         "connected_nodes": sum(1 for node in node_views if node.status in {"connected", "stale"}),
         "disconnected_nodes": sum(1 for node in node_views if node.status == "disconnected"),
+    }
+
+
+def session_stats(views):
+    return {
         "total": len(views),
         "working": sum(1 for view in views if view.status == "working"),
         "review": sum(1 for view in views if view.status == "review"),
@@ -1696,6 +1812,17 @@ def log_source_payloads() -> list[dict[str, str]]:
             }
         )
     return sources
+
+
+def node_log_source_payloads(node_id: str) -> list[dict[str, str]]:
+    sources = log_source_payloads()
+    node_source = next((source for source in sources if source["id"] == f"node:{node_id}"), None)
+    if node_source is None:
+        raise HTTPException(status_code=404, detail=f"log source not found for node: {node_id}")
+    if node_id != "local":
+        return [node_source]
+    hub_source = next(source for source in sources if source["id"] == "hub")
+    return [node_source, hub_source]
 
 
 def lark_status_payload() -> dict[str, object]:
@@ -2608,18 +2735,19 @@ def remote_request_exception(
     return HTTPException(status_code=502, detail=str(exc))
 
 
-def relative_time(value: datetime | None) -> str:
+def relative_time(value: datetime | None, language: str = "en") -> str:
     if value is None:
-        return "no report"
+        return "暂无报告" if language == "zh-CN" else "no report"
     now = datetime.now(UTC).astimezone()
     delta = now - value.astimezone(now.tzinfo)
     seconds = max(0, int(delta.total_seconds()))
     if seconds < 60:
-        return f"{seconds}s ago"
+        return f"{seconds} 秒前" if language == "zh-CN" else f"{seconds}s ago"
     minutes = seconds // 60
     if minutes < 60:
-        return f"{minutes}m ago"
+        return f"{minutes} 分钟前" if language == "zh-CN" else f"{minutes}m ago"
     hours = minutes // 60
     if hours < 24:
-        return f"{hours}h ago"
-    return f"{hours // 24}d ago"
+        return f"{hours} 小时前" if language == "zh-CN" else f"{hours}h ago"
+    days = hours // 24
+    return f"{days} 天前" if language == "zh-CN" else f"{days}d ago"

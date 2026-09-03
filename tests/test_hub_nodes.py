@@ -59,6 +59,24 @@ def test_session_navigation_never_fetches_uncached_remote_nodes(monkeypatch) -> 
     assert nodes[1].sessions == ()
 
 
+def test_single_node_navigation_never_fetches_an_uncached_remote_node(monkeypatch) -> None:
+    node = remote_node()
+    monkeypatch.setattr(hub, "cached_remote_node_view", lambda node: None)
+    monkeypatch.setattr(
+        hub,
+        "request_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Node navigation must use the heartbeat cache")
+        ),
+    )
+
+    view = hub.collect_node_navigation_view(node)
+
+    assert view.name == "worker"
+    assert view.status == "disconnected"
+    assert view.sessions == ()
+
+
 def test_normalize_node_url_defaults_to_8081() -> None:
     assert normalize_node_url("worker") == "http://worker:8081"
     assert normalize_node_url("100.64.1.10") == "http://100.64.1.10:8081"
@@ -337,6 +355,7 @@ def test_remote_node_auth_failure_is_not_hidden_by_heartbeat_cache(monkeypatch) 
     assert disconnected.status == "disconnected"
     assert disconnected.session_count == 0
     assert "401" in disconnected.error
+    assert "401" in hub.collect_node_navigation_view(node).error
 
 
 def test_verify_node_command_checks_health_and_sessions(monkeypatch) -> None:

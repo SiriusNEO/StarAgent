@@ -40,17 +40,17 @@ For the technical architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 The screenshots below use sanitized demo data. The anime-inspired background is optional —
 upload any image from the theme menu, then pair it with a color theme and glass surfaces.
 
-Manage sessions across machines at a glance:
+Select a connected Node, then manage that machine's sessions in a focused workspace:
 
-![StarAgent Sessions dashboard with an anime-inspired observatory background](assets/demo-sessions-anime.webp)
+![StarAgent Sessions workspace with an anime-inspired observatory background](assets/demo-sessions-anime.webp)
 
 Each session includes a lightweight chat console for interacting with agents, plus a Terminal and File Explorer.
-Session detail pages keep an IM-style switcher on the left for moving between sessions without
-returning to the session table; on narrow screens it collapses into a searchable drawer.
+Session detail pages keep an IM-style switcher on the left for moving between that Node's sessions without
+returning to the session table; on narrow screens it collapses into a drawer.
 
 ![StarAgent session chat and locked PTY terminal](assets/demo-session-anime.webp)
 
-Inspect Agent CLI availability, login state, update paths, and launch presets across machines:
+Inspect Agent CLI availability, login state, update paths, and launch presets on the selected Node:
 
 ![StarAgent Agents dashboard with Codex, Claude Code, and OpenCode](assets/demo-agents-anime.webp)
 

@@ -1,50 +1,51 @@
 {% extends "base.html" %}
-{% block title %}Logs · StarAgent{% endblock %}
+{% block title %}{{ t("node.logs") }} · {{ current_node.name }} · StarAgent{% endblock %}
 {% block content %}
   <section class="page-head logs-page-head">
     <div class="page-title">
-      <h1>Logs</h1>
-      <p>Hub-centralized service events, separated by Node.</p>
+      <h1>{{ t("node.logs") }}</h1>
+      <p>{{ t("logs.description", node=current_node.name) }}</p>
     </div>
     <div class="logs-retention-note">
-      <strong>Central archive</strong>
-      <span>Rotating JSONL under <code>.staragent/logs/</code></span>
+      <strong>{{ current_node.name }}</strong>
+      <span class="pill node-status-{{ current_node.status }}">{{ t("status." ~ current_node.status) }}</span>
+      <span>{{ t("logs.retention") }} <code>.staragent/logs/</code></span>
     </div>
   </section>
 
   <section class="band logs-band">
     <div class="logs-toolbar">
       <label>
-        <span>Source</span>
-        <select class="logs-source" aria-label="Log source">
+        <span>{{ t("common.source") }}</span>
+        <select class="logs-source" aria-label="{{ t('logs.source') }}">
           {% for source in log_sources %}
             <option value="{{ source.id }}">{{ source.label }}</option>
           {% endfor %}
         </select>
       </label>
       <label>
-        <span>Level</span>
-        <select class="logs-level" aria-label="Log level">
-          <option value="">All levels</option>
-          <option value="info">Info</option>
-          <option value="warning">Warning</option>
-          <option value="error">Error</option>
-          <option value="critical">Critical</option>
-          <option value="debug">Debug</option>
+        <span>{{ t("logs.level") }}</span>
+        <select class="logs-level" aria-label="{{ t('logs.level_label') }}">
+          <option value="">{{ t("logs.all_levels") }}</option>
+          <option value="info">{{ t("logs.info") }}</option>
+          <option value="warning">{{ t("logs.warning") }}</option>
+          <option value="error">{{ t("logs.error") }}</option>
+          <option value="critical">{{ t("logs.critical") }}</option>
+          <option value="debug">{{ t("logs.debug") }}</option>
         </select>
       </label>
       <label class="logs-search-label">
-        <span>Search</span>
-        <input class="logs-search" type="search" placeholder="Event, message, or detail" autocomplete="off">
+        <span>{{ t("common.search") }}</span>
+        <input class="logs-search" type="search" placeholder="{{ t('logs.search_placeholder') }}" autocomplete="off">
       </label>
-      <button type="button" class="logs-refresh">Refresh</button>
+      <button type="button" class="logs-refresh">{{ t("common.refresh") }}</button>
     </div>
     <div class="logs-meta">
-      <span class="logs-status" aria-live="polite">Waiting to load…</span>
-      <span>Newest first · refreshes every 10 seconds</span>
+      <span class="logs-status" aria-live="polite">{{ t("logs.waiting") }}</span>
+      <span>{{ t("logs.refresh_hint") }}</span>
     </div>
     <div class="logs-stream" aria-live="polite" aria-busy="true">
-      <div class="logs-empty">Loading logs…</div>
+      <div class="logs-empty">{{ t("logs.loading") }}</div>
     </div>
   </section>
 

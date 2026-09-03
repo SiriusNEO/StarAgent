@@ -1,3 +1,5 @@
+const t = (key, values = {}) => window.StarAgentI18n?.t(key, values) || key;
+
 const dependencyPanel = document.querySelector(".dependency-panel");
 if (dependencyPanel) {
   const status = dependencyPanel.querySelector(".dependency-status");
@@ -9,10 +11,10 @@ if (dependencyPanel) {
     const title = document.createElement("strong");
     title.textContent = item.label;
     const detail = document.createElement("span");
-    detail.textContent = item.installed ? (item.version || "installed") : item.install_command;
+    detail.textContent = item.installed ? (item.version || t("common.installed")) : item.install_command;
     const note = document.createElement("span");
     note.className = "dependency-note";
-    note.textContent = `${item.required ? "Required" : "Optional"} · ${item.note || ""}`.trim();
+    note.textContent = `${item.required ? t("common.required") : t("common.optional")} · ${item.note || ""}`.trim();
     info.append(title, detail);
     if (note.textContent) {
       info.appendChild(note);
@@ -20,7 +22,7 @@ if (dependencyPanel) {
     const pill = document.createElement("span");
     const state = item.installed ? "connected" : (item.required ? "disconnected" : "optional");
     pill.className = `pill node-status-${state}`;
-    pill.textContent = item.installed ? "installed" : (item.required ? "missing" : "optional");
+    pill.textContent = item.installed ? t("common.installed") : (item.required ? t("common.missing") : t("common.optional"));
     row.append(info, pill);
     return row;
   };
@@ -39,23 +41,23 @@ if (dependencyPanel) {
     const missingOptional = items.filter((item) => !item.required && !item.installed);
     if (!missingRequired.length) {
       status.textContent = missingOptional.length
-        ? "Required dependencies are installed. Tailscale is optional for LAN-only setups."
-        : "All dependencies are installed.";
+        ? t("nodes.deps_ready_optional")
+        : t("nodes.deps_ready");
       return;
     }
-    status.textContent = `Installing ${missingRequired.map((item) => item.label).join(", ")}...`;
+    status.textContent = t("nodes.deps_installing", {names: missingRequired.map((item) => item.label).join(", ")});
     const ensure = await fetch("/api/dependencies/ensure", {method: "POST"});
     const ensured = await ensure.json();
     const next = ensured.dependencies || [];
     renderDependencies(next);
     const failed = next.filter((item) => item.required && !item.installed);
     status.textContent = failed.length
-      ? `Install failed for ${failed.map((item) => item.label).join(", ")}. Run the shown command manually.`
-      : "Dependencies installed.";
+      ? t("nodes.deps_failed", {names: failed.map((item) => item.label).join(", ")})
+      : t("nodes.deps_installed");
   };
   window.StarAgentAfterPaint(() => {
     checkDependencies().catch((error) => {
-      status.textContent = error.message || "Dependency check failed.";
+      status.textContent = error.message || t("nodes.deps_check_failed");
     });
   });
 }
@@ -72,10 +74,10 @@ if (nodeForm) {
       url: endpointFromHostPort(String(form.get("host") || ""), String(form.get("port") || "8081"))
     };
     if (!payload.name || !payload.url) {
-      status.textContent = "Name and node are required.";
+      status.textContent = t("nodes.form_required");
       return;
     }
-    status.textContent = "Adding...";
+    status.textContent = t("nodes.adding");
     try {
       await addNode(payload, status);
     } catch (error) {
@@ -92,10 +94,10 @@ async function addNode(payload, statusEl) {
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || "Add node failed.");
+    throw new Error(body.detail || t("nodes.add_failed"));
   }
   if (statusEl) {
-    statusEl.textContent = "Added.";
+    statusEl.textContent = t("nodes.added");
   }
   window.location.reload();
 }
@@ -127,7 +129,7 @@ if (tailscaleDashboard) {
   const loadTailscale = async () => {
     tailscaleLoaded = true;
     tailscaleDashboard.hidden = false;
-    tailnet.textContent = "Checking Hub Tailscale...";
+    tailnet.textContent = t("nodes.tailnet_checking");
     hubIp.textContent = "-";
     peerCount.textContent = "-";
     peersEl.innerHTML = "";
@@ -135,16 +137,22 @@ if (tailscaleDashboard) {
     const body = await response.json();
     if (!body.available) {
       tailnet.textContent = body.error || `State: ${body.backend_state || "unavailable"}`;
-      peersEl.innerHTML = '<div class="explorer-empty">Hub Tailscale is not running.</div>';
+      const empty = document.createElement("div");
+      empty.className = "explorer-empty";
+      empty.textContent = t("nodes.tailnet_not_running");
+      peersEl.replaceChildren(empty);
       return;
     }
     const self = body.self || {};
     const peers = body.peers || [];
-    tailnet.textContent = body.tailnet || body.magic_dns_suffix || "Running";
+    tailnet.textContent = body.tailnet || body.magic_dns_suffix || t("common.ready");
     hubIp.textContent = (self.addresses || [])[0] || self.preferred_node || "-";
-    peerCount.textContent = `${peers.filter((peer) => peer.online).length} / ${peers.length} online`;
+    peerCount.textContent = t("nodes.online_count", {connected: peers.filter((peer) => peer.online).length, total: peers.length});
     if (!peers.length) {
-      peersEl.innerHTML = '<div class="explorer-empty">No tailnet peers found.</div>';
+      const empty = document.createElement("div");
+      empty.className = "explorer-empty";
+      empty.textContent = t("nodes.no_peers");
+      peersEl.replaceChildren(empty);
       return;
     }
     for (const peer of peers) {
@@ -167,7 +175,7 @@ if (tailscaleDashboard) {
     info.append(name, meta);
     const state = document.createElement("span");
     state.className = `pill node-status-${peer.online ? "connected" : "disconnected"}`;
-    state.textContent = peer.online ? "online" : "offline";
+    state.textContent = peer.online ? t("common.online") : t("common.offline");
     const addFields = document.createElement("div");
     addFields.className = "tailscale-add-fields";
     const hostCode = document.createElement("code");
@@ -180,11 +188,11 @@ if (tailscaleDashboard) {
     portInput.max = "65535";
     portInput.value = "8081";
     portInput.inputMode = "numeric";
-    portInput.ariaLabel = "Node port";
+    portInput.ariaLabel = t("nodes.node_port");
     addFields.append(hostCode, portInput);
     const button = document.createElement("button");
     button.type = "button";
-    button.textContent = "Add Tailscale";
+    button.textContent = t("nodes.add_tailscale");
     button.disabled = !peer.preferred_node;
     button.addEventListener("click", async () => {
       const endpointValue = endpointFromHostPort(peer.preferred_node, portInput.value);
@@ -193,7 +201,7 @@ if (tailscaleDashboard) {
         return;
       }
       button.disabled = true;
-      button.textContent = "Adding";
+      button.textContent = t("nodes.adding");
       try {
         await addNode(
           {mode: "lan", name: peer.name || peer.preferred_node, url: endpointValue.trim()},
@@ -201,7 +209,7 @@ if (tailscaleDashboard) {
         );
       } catch (error) {
         button.disabled = false;
-        button.textContent = "Add Tailscale";
+        button.textContent = t("nodes.add_tailscale");
         document.querySelector(".node-status").textContent = error.message;
       }
     });
@@ -216,7 +224,7 @@ if (tailscaleDashboard) {
     }
     loadTailscale().catch((error) => {
       tailscaleDashboard.hidden = false;
-      tailnet.textContent = error.message || "Tailscale check failed.";
+      tailnet.textContent = error.message || t("nodes.tailscale_failed");
     });
   });
 }
@@ -224,14 +232,14 @@ if (tailscaleDashboard) {
 for (const button of document.querySelectorAll(".node-remove")) {
   button.addEventListener("click", async () => {
     const name = button.dataset.node;
-    if (!confirm(`Remove node "${name}"?`)) {
+    if (!confirm(t("nodes.remove_confirm", {name}))) {
       return;
     }
     button.disabled = true;
     const response = await fetch(`/api/nodes/${encodeURIComponent(name)}`, {method: "DELETE"});
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      alert(body.detail || "Remove node failed.");
+      alert(body.detail || t("nodes.remove_failed"));
       button.disabled = false;
       return;
     }
@@ -242,9 +250,10 @@ for (const button of document.querySelectorAll(".node-remove")) {
 for (const button of document.querySelectorAll(".copy-button")) {
   button.addEventListener("click", async () => {
     const text = button.dataset.copy || "";
+    const originalLabel = button.textContent;
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = "Copied";
+      button.textContent = t("nodes.copied");
     } catch {
       const area = document.createElement("textarea");
       area.value = text;
@@ -252,8 +261,8 @@ for (const button of document.querySelectorAll(".copy-button")) {
       area.select();
       document.execCommand("copy");
       area.remove();
-      button.textContent = "Copied";
+      button.textContent = t("nodes.copied");
     }
-    setTimeout(() => { button.textContent = "Copy"; }, 1200);
+    setTimeout(() => { button.textContent = originalLabel; }, 1200);
   });
 }
