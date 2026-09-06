@@ -11,7 +11,7 @@ StarAgent is a tmux-first dashboard for long-lived coding CLI sessions. Live tmu
 
 - **Hub**: the web dashboard and coordinator. It also acts as the local node.
 - **Node**: a machine that owns tmux sessions and exposes them through the StarAgent node API.
-- **Agent session**: a tmux session running Codex, Claude Code, Gemini, OpenCode, or shell.
+- **Agent session**: a tmux session running Codex, Claude Code, OpenCode, or shell.
 - **System session**: infrastructure tmux session such as `staragent-hub`, `staragent-node`, or `staragent-tailscaled`.
 - **Terminal**: live tmux PTY view and ground-truth display.
 - **Chat**: mobile-friendly structured view derived from the tmux transcript.
@@ -36,7 +36,16 @@ Install:
 pip install -e '.[dev]'
 ```
 
-Start the Hub:
+Start the single-Node Launcher:
+
+```bash
+staragent
+```
+
+This opens the local Agents/Harness workspace when a desktop browser is available. Under SSH it
+prints the URL; pass `--no-open` to always suppress browser handoff.
+
+Start the multi-Node Hub:
 
 ```bash
 staragent hub --host 0.0.0.0 --port 8080

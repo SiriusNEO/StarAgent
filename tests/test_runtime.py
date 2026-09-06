@@ -57,6 +57,14 @@ def test_staragent_managed_worker_is_included_after_agent_exits() -> None:
 
 def test_staragent_system_tmux_session_is_included() -> None:
     assert should_include_tmux_session("staragent-hub", current_command="python")
+    assert infer_session_type("staragent-launcher", "", "python") == "system"
+    assert (
+        tmux_task(
+            {"name": "staragent-launcher", "windows": 1, "attached": 0},
+            {"current_command": "python", "current_path": "/repo"},
+        )
+        == "StarAgent local launcher"
+    )
 
 
 def test_adopted_cli_tmux_session_is_included() -> None:

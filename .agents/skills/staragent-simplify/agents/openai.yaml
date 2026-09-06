@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simplify StarAgent"
+  short_description: "Find and safely remove StarAgent complexity"
+  default_prompt: "Use $staragent-simplify to find and implement evidence-backed simplifications without changing behavior."

@@ -401,6 +401,15 @@ def test_node_workspace_and_page_surfaces_scale_with_available_width() -> None:
     assert "new ResizeObserver" in script
 
 
+def test_settings_mode_event_delegation_stays_inside_its_control_group() -> None:
+    script = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "base.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'closest(".background-mode-group [data-bg-mode]")' in script
+    assert 'closest(".surface-mode-group [data-surface-mode]")' in script
+
+
 def test_chat_removes_only_the_middle_message_list_frame() -> None:
     styles = (PROJECT_ROOT / "staragent" / "dashboard" / "static" / "styles.css").read_text(
         encoding="utf-8"
@@ -408,12 +417,10 @@ def test_chat_removes_only_the_middle_message_list_frame() -> None:
     container_rule = styles.split(".mobile-chat {", 1)[1].split("}", 1)[0]
     log_rule = styles.split(".chat-log {", 1)[1].split("}", 1)[0]
     bubble_rule = styles.split(".chat-message pre {", 1)[1].split("}", 1)[0]
-    glass_surfaces = styles.split('html[data-surface-mode="glass"] :where(', 1)[1].split(") {", 1)[
-        0
-    ]
-    clear_glass_surfaces = styles.split('html[data-surface-mode="clear-glass"] :where(', 1)[
-        1
-    ].split(") {", 1)[0]
+    translucent_surfaces = styles.split(
+        'html:is([data-surface-mode="glass"], [data-surface-mode="clear-glass"]) :where(',
+        1,
+    )[1].split(") {", 1)[0]
 
     assert "background: transparent" in container_rule
     assert "border: 0" in container_rule
@@ -422,8 +429,7 @@ def test_chat_removes_only_the_middle_message_list_frame() -> None:
     assert "border: 0" in log_rule
     assert "border-radius: 0" in log_rule
     assert "border-radius: 8px" in bubble_rule
-    assert ".mobile-chat" not in glass_surfaces
-    assert ".mobile-chat" not in clear_glass_surfaces
+    assert ".mobile-chat" not in translucent_surfaces
     assert ".chat-user pre" in styles
     assert ".chat-agent pre" in styles
 
@@ -467,6 +473,10 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert 'class="agent-cli-update-result" hidden' in template
     assert "renderAgentAuth" in script
     assert "tool.auth?.status" in script
+    assert 't("agents.access")' in script
+    assert "credentialDescription" in script
+    assert 't("agents.provider_name"' in script
+    assert 't("agents.usage.provider_unavailable_message")' in script
     assert "copy.dataset.copy = auth.action" in script
     assert "renderAgentUsage" in script
     assert "remaining_percent" in script
@@ -474,6 +484,11 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "/agent-tools" in script
     assert "/update`" in script
     assert "payload.updates_supported" in script
+    assert "/install/${encodeURIComponent(option.id)}`" in script
+    assert "payload.installs_supported" in script
+    assert "renderAgentInstallOptions" in script
+    assert 'class="agent-update-dialog agent-install-dialog"' in template
+    assert 't("agents.install_safety")' in template
     assert 't("agents.update_description")' in template
     assert 'class="agent-update-dialog"' in template
     assert 'method="dialog"' in template
@@ -482,7 +497,7 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert '.agent-update-dialog-command code").textContent' in script
     assert "window.StarAgentAfterPaint(() => loadAgentTools(false))" in script
     assert "renderSidebarItem" in script
-    assert '.agent-switcher-item[data-agent]' in script
+    assert ".agent-switcher-item[data-agent]" in script
     assert "/agent-history" in script
     assert 't("agents.scan_safety")' in template
     assert "source history files" not in script
@@ -600,7 +615,7 @@ def test_adopt_existing_tmux_uses_selectable_safe_session_cards() -> None:
     assert 't("sessions.adopt_safety")' in template
     assert "createAdoptableCard" in script
     assert 'card.setAttribute("aria-pressed", "false")' in script
-    assert 'name.textContent = item.name' in script
+    assert "name.textContent = item.name" in script
     assert 'cwd.textContent = item.cwd || t("sessions.cwd_unavailable")' in script
     assert 'card.classList.toggle("is-selected", isSelected)' in script
     assert "row.innerHTML" not in script

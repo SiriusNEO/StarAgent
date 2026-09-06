@@ -1,0 +1,123 @@
+{% macro staragent_update(id_prefix, title, description, check_url, apply_url, restart_url, runtime=none, update_supported=true, node_available=true, product_label="StarAgent", section_class="settings-section") %}
+  {% set info = runtime or {} %}
+  {% set initial_state = "checking" if update_supported else ("legacy" if node_available else "unavailable") %}
+  <section
+    class="{{ section_class }} settings-update-section"
+    data-staragent-update
+    data-update-check-url="{{ check_url }}"
+    data-update-apply-url="{{ apply_url }}"
+    data-update-restart-url="{{ restart_url }}"
+    data-update-supported="{{ 'true' if update_supported else 'false' }}"
+    data-update-available="{{ 'true' if node_available else 'false' }}"
+    data-update-current-version="{{ info.version or '' }}"
+    data-update-current-commit="{{ info.short_commit or '' }}"
+    data-update-branch="{{ info.branch or '' }}"
+    data-update-channel="{{ info.channel or '' }}"
+    aria-labelledby="{{ id_prefix }}-title"
+  >
+    <div class="settings-section-copy">
+      <span class="settings-section-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M20 11a8 8 0 0 0-14.8-4.2"></path>
+          <path d="M4 4v5h5M4 13a8 8 0 0 0 14.8 4.2"></path>
+          <path d="M20 20v-5h-5"></path>
+        </svg>
+      </span>
+      <div>
+        <h2 id="{{ id_prefix }}-title">{{ title }}</h2>
+        <p>{{ description }}</p>
+      </div>
+    </div>
+
+    <div class="settings-update-layout" data-update-state="{{ initial_state }}" aria-busy="{{ 'true' if update_supported else 'false' }}">
+      <div class="settings-update-summary">
+        <div class="settings-update-product">
+          <span class="settings-update-logo" aria-hidden="true">
+            <img src="{{ url_for('static', path='staragent-logo.svg') }}?v={{ static_version('staragent-logo.svg') }}" width="42" height="42" alt="">
+          </span>
+          <div>
+            <span>{{ t("settings.update.official_channel") }}</span>
+            <strong>{{ product_label }}</strong>
+          </div>
+          <span class="settings-update-state" data-update-state-label>
+            {{ t("settings.update.checking") if update_supported else (t("settings.update.legacy") if node_available else t("settings.update.unavailable")) }}
+          </span>
+        </div>
+        <p class="settings-update-message" data-update-message>
+          {{ t("settings.update.checking_detail") if update_supported else (t("settings.update.reason.node_update_unsupported") if node_available else t("settings.update.reason.node_unavailable")) }}
+        </p>
+        <div class="settings-update-actions">
+          <button type="button" class="settings-update-check" data-update-check{% if not update_supported %} hidden{% endif %}>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-4.2M4 4v5h5M4 13a8 8 0 0 0 14.8 4.2M20 20v-5h-5"></path></svg>
+            <span>{{ t("settings.update.check_again") }}</span>
+          </button>
+          <button type="button" class="settings-update-install" data-update-install hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"></path></svg>
+            <span>{{ t("settings.update.install") }}</span>
+          </button>
+        </div>
+      </div>
+
+      <dl class="settings-update-facts">
+        <div>
+          <dt>{{ t("settings.update.channel") }}</dt>
+          <dd data-update-channel>—</dd>
+        </div>
+        <div>
+          <dt>{{ t("settings.update.installed") }}</dt>
+          <dd><code data-update-current>{% if info.version %}v{{ info.version }}{% if info.short_commit %} · {{ info.short_commit }}{% endif %}{% else %}—{% endif %}</code></dd>
+        </div>
+        <div>
+          <dt>{{ t("settings.update.latest") }}</dt>
+          <dd><code data-update-latest>—</code></dd>
+        </div>
+        <div>
+          <dt>{{ t("settings.update.working_tree") }}</dt>
+          <dd data-update-tree>—</dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="settings-update-safety">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+      <span>{{ t("settings.update.safety") }}</span>
+      <a href="https://github.com/SiriusNEO/StarAgent" target="_blank" rel="noreferrer">SiriusNEO/StarAgent ↗</a>
+    </div>
+
+    <dialog class="agent-update-dialog settings-update-dialog" aria-labelledby="{{ id_prefix }}-dialog-title" aria-describedby="{{ id_prefix }}-dialog-description">
+      <form method="dialog">
+        <header class="agent-update-dialog-head settings-update-dialog-head">
+          <span class="settings-update-dialog-logo" aria-hidden="true">
+            <img src="{{ url_for('static', path='staragent-logo.svg') }}?v={{ static_version('staragent-logo.svg') }}" width="46" height="46" alt="">
+          </span>
+          <div>
+            <span>{{ t("settings.update.official_channel") }}</span>
+            <h2 id="{{ id_prefix }}-dialog-title">{{ t("settings.update.confirm_title") }}</h2>
+          </div>
+          <button type="submit" class="agent-update-dialog-close settings-update-dialog-close" value="cancel" aria-label="{{ t('settings.update.cancel') }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>
+          </button>
+        </header>
+        <div class="agent-update-dialog-body settings-update-dialog-body">
+          <p id="{{ id_prefix }}-dialog-description">{{ t("settings.update.confirm_description") }}</p>
+          <div class="settings-update-commit-flow" aria-label="{{ t('settings.update.commit_change') }}">
+            <code data-update-dialog-current>—</code>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M14 7l5 5-5 5"></path></svg>
+            <code data-update-dialog-latest>—</code>
+          </div>
+          <div class="agent-update-dialog-safety settings-update-dialog-note">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+            <span>{{ t("settings.update.confirm_safety") }}</span>
+          </div>
+        </div>
+        <footer class="agent-update-dialog-actions settings-update-dialog-actions">
+          <button type="submit" class="agent-update-dialog-cancel settings-update-dialog-cancel" value="cancel">{{ t("settings.update.cancel") }}</button>
+          <button type="submit" class="agent-update-dialog-confirm settings-update-dialog-confirm" value="confirm">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"></path></svg>
+            {{ t("settings.update.install_restart") }}
+          </button>
+        </footer>
+      </form>
+    </dialog>
+  </section>
+{% endmacro %}

@@ -20,3 +20,11 @@ class CreateWorker(BaseModel):
 class CreateDirectory(BaseModel):
     path: str
     name: str
+
+
+class HarnessConfigRequest(BaseModel):
+    content: str
+
+
+class HarnessEnvironmentRequest(BaseModel):
+    variables: dict[str, str]

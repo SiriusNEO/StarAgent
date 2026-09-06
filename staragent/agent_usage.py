@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import subprocess
-import time
-from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from staragent import __version__
+from staragent.codex_app_server import codex_app_server_request as _codex_app_server_request
+from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
 
 AGENT_USAGE_STATUSES = {"available", "manual", "unavailable", "error", "unknown", "unsupported"}
+AGENT_USAGE_MESSAGE_CODES = {"provider_rate_limits_unavailable"}
 CODEX_USAGE_TIMEOUT_SECONDS = 4.0
 CLAUDE_AUTH_TIMEOUT_SECONDS = 3.0
 MAX_USAGE_BUCKETS = 8
@@ -55,7 +54,8 @@ def probe_codex_usage(executable: str) -> dict[str, object]:
             "codex",
             status="unavailable",
             source="codex-app-server",
-            message="Codex did not report account rate limits. Check its login state.",
+            message="Codex did not report account rate limits for the active provider.",
+            message_code="provider_rate_limits_unavailable",
         )
     reset_credits = result.get("rateLimitResetCredits")
     available_resets = (
@@ -83,7 +83,7 @@ def probe_claude_usage(executable: str) -> dict[str, object]:
             text=True,
             capture_output=True,
             timeout=CLAUDE_AUTH_TIMEOUT_SECONDS,
-            env=usage_environment(),
+            env=usage_environment("claude"),
         )
         if result.returncode == 0:
             payload = json.loads(result.stdout)
@@ -117,96 +117,12 @@ def codex_app_server_request(
     *,
     timeout: float,
 ) -> dict[str, Any]:
-    process = subprocess.Popen(
-        [executable, "app-server", "--stdio"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        bufsize=1,
-        env=usage_environment(),
+    return _codex_app_server_request(
+        executable,
+        method,
+        timeout=timeout,
+        env=usage_environment("codex"),
     )
-    deadline = time.monotonic() + timeout
-    try:
-        send_app_server_message(
-            process,
-            {
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {
-                        "name": "staragent",
-                        "title": "StarAgent",
-                        "version": __version__,
-                    },
-                    "capabilities": {"experimentalApi": True},
-                },
-            },
-        )
-        initialized = read_app_server_response(process, 1, deadline)
-        raise_for_app_server_error(initialized)
-        send_app_server_message(process, {"method": "initialized"})
-        send_app_server_message(process, {"id": 2, "method": method, "params": None})
-        response = read_app_server_response(process, 2, deadline)
-        raise_for_app_server_error(response)
-        result = response.get("result")
-        if not isinstance(result, dict):
-            raise ValueError("Codex returned an invalid usage response.")
-        return result
-    finally:
-        if process.stdin is not None:
-            with suppress(OSError):
-                process.stdin.close()
-        if process.poll() is None:
-            with suppress(OSError):
-                process.terminate()
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                with suppress(OSError):
-                    process.kill()
-                with suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=1)
-
-
-def send_app_server_message(process: subprocess.Popen[str], payload: dict[str, object]) -> None:
-    if process.stdin is None:
-        raise RuntimeError("Codex app-server stdin is unavailable.")
-    process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
-    process.stdin.flush()
-
-
-def read_app_server_response(
-    process: subprocess.Popen[str],
-    request_id: int,
-    deadline: float,
-) -> dict[str, Any]:
-    if process.stdout is None:
-        raise RuntimeError("Codex app-server stdout is unavailable.")
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(f"Codex app-server request {request_id} timed out.")
-        ready, _, _ = select.select([process.stdout], [], [], remaining)
-        if not ready:
-            raise TimeoutError(f"Codex app-server request {request_id} timed out.")
-        line = process.stdout.readline()
-        if not line:
-            raise RuntimeError(f"Codex app-server exited before request {request_id} completed.")
-        payload = json.loads(line)
-        if isinstance(payload, dict) and payload.get("id") == request_id:
-            return payload
-
-
-def raise_for_app_server_error(response: dict[str, Any]) -> None:
-    error = response.get("error")
-    if not error:
-        return
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("code") or "unknown error"
-    else:
-        message = error
-    raise RuntimeError(f"Codex usage check failed: {clean_usage_text(message)}")
 
 
 def codex_usage_buckets(result: dict[str, Any]) -> list[dict[str, object]]:
@@ -301,6 +217,9 @@ def normalize_agent_usage(agent: str, value: object) -> dict[str, object]:
             if bucket:
                 buckets.append(bucket)
     authenticated = value.get("authenticated")
+    message_code = str(value.get("message_code") or "").strip().lower()
+    if message_code not in AGENT_USAGE_MESSAGE_CODES:
+        message_code = ""
     return {
         "status": status,
         "source": clean_usage_text(value.get("source"), max_chars=80),
@@ -311,6 +230,7 @@ def normalize_agent_usage(agent: str, value: object) -> dict[str, object]:
         "auth_method": clean_usage_text(value.get("auth_method"), max_chars=80),
         "action": "/status" if value.get("action") == "/status" else "",
         "message": clean_usage_text(value.get("message"), max_chars=500),
+        "message_code": message_code,
     }
 
 
@@ -382,6 +302,7 @@ def agent_usage_status(
     auth_method: str = "",
     action: str = "",
     message: str = "",
+    message_code: str = "",
 ) -> dict[str, object]:
     return normalize_agent_usage(
         agent,
@@ -395,6 +316,7 @@ def agent_usage_status(
             "auth_method": auth_method,
             "action": action,
             "message": message,
+            "message_code": message_code,
         },
     )
 
@@ -485,9 +407,10 @@ def utc_timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def usage_environment() -> dict[str, str]:
+def usage_environment(agent: str = "") -> dict[str, str]:
+    environment = harness_process_environment(agent) if agent else os.environ.copy()
     return {
-        **os.environ,
+        **environment,
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "NO_COLOR": "1",

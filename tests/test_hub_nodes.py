@@ -171,6 +171,64 @@ def test_remote_node_request_keeps_default_proxy_handling(monkeypatch) -> None:
     ]
 
 
+def test_remote_staragent_update_proxy_uses_fixed_routes_and_normalizes_payload(
+    monkeypatch,
+) -> None:
+    node = remote_node()
+    calls = []
+    status = {
+        "ok": True,
+        "status": "update_available",
+        "branch": "dev",
+        "channel": "preview",
+        "current_commit": "a" * 40,
+        "current_short_commit": "aaaaaaa",
+        "latest_commit": "b" * 40,
+        "latest_short_commit": "bbbbbbb",
+        "behind": 1,
+        "can_update": True,
+        "credential": "must not cross the Hub boundary",
+    }
+
+    def request(node, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        calls.append((method, path, body, timeout))
+        if path.endswith("/apply"):
+            return {
+                "ok": True,
+                "updated": True,
+                "before": status,
+                "after": {**status, "status": "up_to_date", "can_update": False},
+                "restart_scheduled": True,
+            }
+        return status
+
+    monkeypatch.setattr(hub, "request_json", request)
+
+    checked = hub.node_staragent_update_status_payload(node, refresh=True)
+    installed = hub.node_staragent_update_apply_payload(node)
+
+    assert checked["node"] == "worker"
+    assert checked["latest_short_commit"] == "bbbbbbb"
+    assert "credential" not in checked
+    assert installed["node"] == "worker"
+    assert installed["updated"] is True
+    assert installed["restart_scheduled"] is True
+    assert calls == [
+        (
+            "POST",
+            "/api/staragent-update/check",
+            None,
+            hub.NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS,
+        ),
+        (
+            "POST",
+            "/api/staragent-update/apply",
+            None,
+            hub.NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS,
+        ),
+    ]
+
+
 def test_remote_node_uses_cached_heartbeat_during_transient_failure(monkeypatch) -> None:
     hub.clear_node_heartbeat_cache()
     node = remote_node()
@@ -193,6 +251,47 @@ def test_remote_node_uses_cached_heartbeat_during_transient_failure(monkeypatch)
     assert stale.sessions[0].name == "dev"
     assert "last heartbeat" in stale.error
     assert "timed out" in stale.error
+
+
+def test_remote_node_heartbeat_carries_normalized_staragent_version(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    payload = {
+        **session_payload(),
+        "node": {
+            "schema": 1,
+            "version": "0.1.0",
+            "branch": "dev",
+            "channel": "preview",
+            "commit": "a" * 40,
+            "short_commit": "aaaaaaa",
+            "ignored": "not exposed",
+        },
+        "capabilities": {"staragent_update": 1},
+    }
+    monkeypatch.setattr(hub, "request_json", lambda *args, **kwargs: payload)
+
+    connected = hub.collect_node_view(node)
+    cached = hub.collect_node_navigation_view(node)
+
+    assert connected.staragent_version == "0.1.0"
+    assert connected.staragent_update_supported is True
+    assert connected.runtime["commit"] == "a" * 40
+    assert "ignored" not in connected.runtime
+    assert cached.runtime == connected.runtime
+
+
+def test_old_remote_node_is_compatible_but_reports_legacy_runtime(monkeypatch) -> None:
+    hub.clear_node_heartbeat_cache()
+    node = remote_node()
+    monkeypatch.setattr(hub, "request_json", lambda *args, **kwargs: session_payload())
+
+    connected = hub.collect_node_view(node)
+
+    assert connected.status == "connected"
+    assert connected.runtime["reported"] is False
+    assert connected.staragent_version == ""
+    assert connected.staragent_update_supported is False
 
 
 def test_preferred_remote_cache_skips_network_request(monkeypatch) -> None:
@@ -421,6 +520,51 @@ def test_dashboard_command_is_hidden_from_public_help() -> None:
     assert result.exit_code == 0
     assert "hub" in result.output
     assert "│ dashboard" not in result.output
+
+
+def test_bare_staragent_command_starts_the_launcher(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        staragent_main,
+        "start_dashboard",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    result = runner.invoke(
+        staragent_main.app,
+        ["--host", "127.0.0.1", "--port", "8180", "--no-open"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        {
+            "mode": "launcher",
+            "bind": "127.0.0.1",
+            "port": 8180,
+            "session": "staragent-launcher",
+            "open_browser": False,
+        }
+    ]
+
+
+def test_launcher_browser_handoff_respects_ssh_and_desktop(monkeypatch) -> None:
+    for name in ("SSH_CONNECTION", "SSH_TTY", "DISPLAY", "WAYLAND_DISPLAY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(staragent_main.os, "name", "posix")
+    monkeypatch.setattr(staragent_main.sys, "platform", "linux")
+
+    assert staragent_main.browser_handoff_supported() is False
+
+    monkeypatch.setenv("DISPLAY", ":0")
+    assert staragent_main.browser_handoff_supported() is True
+
+    monkeypatch.setenv("SSH_CONNECTION", "client 1 server 22")
+    assert staragent_main.browser_handoff_supported() is False
+
+
+def test_local_dashboard_url_uses_a_browser_reachable_loopback() -> None:
+    assert staragent_main.local_dashboard_url("0.0.0.0", 8080) == "http://127.0.0.1:8080"
+    assert staragent_main.local_dashboard_url("::1", 8080) == "http://[::1]:8080"
 
 
 def test_node_command_starts_node_in_tmux(monkeypatch) -> None:

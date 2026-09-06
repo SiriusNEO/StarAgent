@@ -9,8 +9,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from staragent.agent_auth import logout_codex
 from staragent.agent_history import (
     HISTORY_AGENTS,
     agent_history_payload,
@@ -18,9 +19,15 @@ from staragent.agent_history import (
     unavailable_agent_history_payload,
 )
 from staragent.agent_tools import (
+    AGENT_TOOL_INSTALL_TIMEOUT_SECONDS,
     AGENT_TOOL_UPDATE_TIMEOUT_SECONDS,
     AgentToolUpdateBusyError,
+    agent_install_option,
+    agent_tool_spec,
     agent_tools_payload,
+    clear_agent_tools_cache,
+    install_agent_tool,
+    normalize_agent_install_result,
     normalize_agent_tools_payload,
     normalize_agent_update_result,
     payload_with_node,
@@ -33,9 +40,25 @@ from staragent.event_log import (
     ingest_node_events,
     node_ingest_cursor,
 )
+from staragent.harness_config import (
+    harness_configuration_payload,
+    normalize_harness_configuration,
+    save_harness_config,
+    save_harness_environment,
+    unavailable_harness_configuration,
+)
 from staragent.models import SessionConfig, SessionStatus, SessionView
 from staragent.paths import state_dir
 from staragent.runtime import is_staragent_system_session
+from staragent.self_update import (
+    GIT_TIMEOUT_SECONDS,
+    apply_official_update,
+    current_installation_info,
+    normalize_installation_info,
+    normalize_update_result,
+    normalize_update_status,
+    official_update_status,
+)
 from staragent.session_seen import completion_seen, mark_completion_seen
 from staragent.state import atomic_write_json, locked_file
 from staragent.status import (
@@ -56,8 +79,11 @@ NODE_STATUS_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 2.0
 NODE_AGENT_TOOL_REQUEST_TIMEOUT_SECONDS = 5.0
 NODE_AGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = AGENT_TOOL_UPDATE_TIMEOUT_SECONDS + 15.0
+NODE_AGENT_INSTALL_REQUEST_TIMEOUT_SECONDS = AGENT_TOOL_INSTALL_TIMEOUT_SECONDS + 15.0
 NODE_AGENT_TOOL_HUB_CACHE_SECONDS = 90.0
 NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS = 8.0
+NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS = 10.0
+NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = GIT_TIMEOUT_SECONDS + 15.0
 
 
 @dataclass(frozen=True)
@@ -114,6 +140,7 @@ class NodeView:
     status: str
     sessions: tuple[HubSession, ...] = ()
     error: str = ""
+    runtime: dict[str, object] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -137,12 +164,21 @@ class NodeView:
     def is_removable(self) -> bool:
         return self.name != "local"
 
+    @property
+    def staragent_version(self) -> str:
+        return str(self.runtime.get("version") or "")
+
+    @property
+    def staragent_update_supported(self) -> bool:
+        return bool(self.runtime.get("update_supported"))
+
 
 @dataclass
 class NodeHeartbeat:
     endpoint: str
     sessions: tuple[HubSession, ...]
     last_success: float
+    runtime: dict[str, object] = field(default_factory=dict)
     last_health_success: float = 0.0
     failures: int = 0
     last_error: str = ""
@@ -153,6 +189,12 @@ class NodeAgentToolsCache:
     endpoint: str
     payload: dict[str, object]
     cached_at: float
+
+
+@dataclass(frozen=True)
+class RemoteNodeSnapshot:
+    sessions: tuple[HubSession, ...]
+    runtime: dict[str, object]
 
 
 NODE_HEARTBEATS: dict[str, NodeHeartbeat] = {}
@@ -325,13 +367,25 @@ def collect_session_navigation_nodes() -> list[NodeView]:
     return sorted(nodes, key=lambda item: (not item.entry.is_local, item.name))
 
 
+def local_node_runtime() -> dict[str, object]:
+    return normalize_installation_info(
+        current_installation_info(),
+        update_capability=1,
+    )
+
+
 def collect_node_navigation_view(entry: NodeEntry) -> NodeView:
     """Collect one Node for navigation without contacting any remote Node."""
     if entry.is_local:
         sessions = tuple(
             HubSession(node_id=entry.name, view=view) for view in collect_session_navigation_views()
         )
-        return NodeView(entry=entry, status="connected", sessions=sessions)
+        return NodeView(
+            entry=entry,
+            status="connected",
+            sessions=sessions,
+            runtime=local_node_runtime(),
+        )
     return cached_remote_node_view(entry) or NodeView(
         entry=entry,
         status="disconnected",
@@ -351,21 +405,31 @@ def collect_node_view(node: NodeEntry, prefer_cached: bool = False) -> NodeView:
         sessions.extend(
             HubSession(node_id=node.name, view=view) for view in collect_session_views()
         )
-        return NodeView(entry=node, status="connected", sessions=tuple(sessions))
+        return NodeView(
+            entry=node,
+            status="connected",
+            sessions=tuple(sessions),
+            runtime=local_node_runtime(),
+        )
     if prefer_cached:
         cached = cached_remote_node_view(node)
         if cached:
             return cached
     try:
-        sessions.extend(remote_sessions(node))
+        snapshot = remote_node_snapshot(node)
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         view = remote_node_failure_view(node, exc)
         report_node_connection_state(node, view.status, view.error)
         return view
-    session_tuple = tuple(sessions)
-    remember_node_heartbeat(node, session_tuple)
+    session_tuple = snapshot.sessions
+    remember_node_heartbeat(node, session_tuple, runtime=snapshot.runtime)
     report_node_connection_state(node, "connected")
-    return NodeView(entry=node, status="connected", sessions=session_tuple)
+    return NodeView(
+        entry=node,
+        status="connected",
+        sessions=session_tuple,
+        runtime=snapshot.runtime,
+    )
 
 
 def cached_remote_node_view(node: NodeEntry) -> NodeView | None:
@@ -375,7 +439,12 @@ def cached_remote_node_view(node: NodeEntry) -> NodeView | None:
             return None
         age = max(0.0, time.monotonic() - heartbeat.last_success)
         if heartbeat.last_success <= 0 or age > NODE_HEARTBEAT_GRACE_SECONDS:
-            return NodeView(entry=node, status="disconnected", error=heartbeat.last_error)
+            return NodeView(
+                entry=node,
+                status="disconnected",
+                error=heartbeat.last_error,
+                runtime=heartbeat.runtime,
+            )
         if heartbeat.failures:
             detail = heartbeat.last_error or f"stale: last heartbeat {int(age)}s ago"
             return NodeView(
@@ -383,8 +452,14 @@ def cached_remote_node_view(node: NodeEntry) -> NodeView | None:
                 status="stale",
                 sessions=heartbeat.sessions,
                 error=detail,
+                runtime=heartbeat.runtime,
             )
-        return NodeView(entry=node, status="connected", sessions=heartbeat.sessions)
+        return NodeView(
+            entry=node,
+            status="connected",
+            sessions=heartbeat.sessions,
+            runtime=heartbeat.runtime,
+        )
 
 
 def collect_node_session(
@@ -407,7 +482,7 @@ def collect_node_session(
     )
 
 
-def remote_sessions(node: NodeEntry) -> list[HubSession]:
+def remote_node_snapshot(node: NodeEntry) -> RemoteNodeSnapshot:
     payload = request_json(node, "GET", "/api/sessions", timeout=remote_node_status_timeout())
     capabilities = payload.get("capabilities")
     reported_agent_tools = payload.get("agent_tools")
@@ -427,7 +502,21 @@ def remote_sessions(node: NodeEntry) -> list[HubSession]:
             report_node_log_sync_failure(node, str(exc))
         else:
             report_node_log_sync_recovered(node)
-    return session_payloads_to_views(node, payload)
+    update_capability = (
+        capabilities.get("staragent_update", 0) if isinstance(capabilities, dict) else 0
+    )
+    return RemoteNodeSnapshot(
+        sessions=tuple(session_payloads_to_views(node, payload)),
+        runtime=normalize_installation_info(
+            payload.get("node"),
+            update_capability=update_capability,
+        ),
+    )
+
+
+def remote_sessions(node: NodeEntry) -> list[HubSession]:
+    """Compatibility wrapper for callers that only need the Session list."""
+    return list(remote_node_snapshot(node).sessions)
 
 
 def sync_remote_node_logs(node: NodeEntry, *, max_pages: int = 4) -> int:
@@ -467,24 +556,42 @@ def remote_node_failure_view(node: NodeEntry, exc: Exception) -> NodeView:
         heartbeat = remember_node_health(node, error)
         detail = f"stale: health ok; sessions unavailable: {error}"
         if heartbeat:
-            return NodeView(entry=node, status="stale", sessions=heartbeat.sessions, error=detail)
+            return NodeView(
+                entry=node,
+                status="stale",
+                sessions=heartbeat.sessions,
+                error=detail,
+                runtime=heartbeat.runtime,
+            )
         return NodeView(entry=node, status="stale", error=detail)
 
     heartbeat = remember_node_failure(node, error)
     if heartbeat and node_heartbeat_is_fresh(heartbeat):
         age = max(0, int(time.monotonic() - heartbeat.last_success))
         detail = f"stale: last heartbeat {age}s ago; {error}"
-        return NodeView(entry=node, status="stale", sessions=heartbeat.sessions, error=detail)
+        return NodeView(
+            entry=node,
+            status="stale",
+            sessions=heartbeat.sessions,
+            error=detail,
+            runtime=heartbeat.runtime,
+        )
     return NodeView(entry=node, status="disconnected", error=error)
 
 
-def remember_node_heartbeat(node: NodeEntry, sessions: tuple[HubSession, ...]) -> None:
+def remember_node_heartbeat(
+    node: NodeEntry,
+    sessions: tuple[HubSession, ...],
+    *,
+    runtime: dict[str, object] | None = None,
+) -> None:
     now = time.monotonic()
     with NODE_HEARTBEATS_LOCK:
         NODE_HEARTBEATS[node.name] = NodeHeartbeat(
             endpoint=node_endpoint(node),
             sessions=sessions,
             last_success=now,
+            runtime=dict(runtime or {}),
             last_health_success=now,
         )
 
@@ -605,6 +712,235 @@ def node_agent_tool_update_payload(node: NodeEntry, agent: str) -> dict[str, obj
         with NODE_HEARTBEATS_LOCK:
             NODE_AGENT_TOOLS.pop(node.name, None)
     return result
+
+
+def node_agent_tool_install_payload(
+    node: NodeEntry,
+    agent: str,
+    option_id: str,
+) -> dict[str, object]:
+    spec = agent_tool_spec(agent)
+    if spec is None:
+        raise ValueError(f"Unsupported Agent CLI: {agent}")
+    option = agent_install_option(spec, option_id)
+    if node.is_local:
+        result = install_agent_tool(spec.name, option.id)
+    else:
+        path = (
+            f"/api/agent-tools/{urllib.parse.quote(spec.name, safe='')}/install/"
+            f"{urllib.parse.quote(option.id, safe='')}"
+        )
+        try:
+            payload = request_json(
+                node,
+                "POST",
+                path,
+                timeout=NODE_AGENT_INSTALL_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in {404, 405}:
+                error = "Node update required before browser-managed CLI installation is available."
+            elif exc.code == 409:
+                raise AgentToolUpdateBusyError(
+                    f"{agent} is already being maintained on {node.name}."
+                ) from exc
+            else:
+                error = f"Node rejected the installation request: HTTP {exc.code}."
+            payload = {"ok": False, "agent": spec.name, "error": error}
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "agent": spec.name,
+                "error": f"Node installation request failed: {exc}",
+            }
+        result = normalize_agent_install_result(spec.name, payload)
+        if result.get("ok") and result.get("option") != option.id:
+            result["ok"] = False
+            result["error"] = "Node returned a mismatched installation result."
+    result["node"] = node.name
+    if result.get("ok"):
+        invalidate_node_agent_tools(node.name)
+    return result
+
+
+def node_harness_configuration_payload(
+    node: NodeEntry,
+    agent: str,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = harness_configuration_payload(agent)
+    else:
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/configuration"
+        try:
+            payload = request_json(
+                node,
+                "GET",
+                path,
+                timeout=NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            detail = (
+                "Update StarAgent on this Node to manage Harness configuration."
+                if exc.code in {404, 405}
+                else f"Node rejected the configuration request: HTTP {exc.code}."
+            )
+            payload = unavailable_harness_configuration(agent, detail)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = unavailable_harness_configuration(agent, f"Node is unavailable: {exc}")
+    normalized = normalize_harness_configuration(agent, payload)
+    normalized["node"] = node.name
+    return normalized
+
+
+def node_save_harness_config(
+    node: NodeEntry,
+    agent: str,
+    content: str,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = save_harness_config(agent, content)
+    else:
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/configuration/file"
+        payload = request_json(
+            node,
+            "PUT",
+            path,
+            {"content": content},
+            timeout=NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS,
+        )
+    normalized = normalize_harness_configuration(agent, payload)
+    normalized["node"] = node.name
+    invalidate_node_agent_tools(node.name)
+    return normalized
+
+
+def node_save_harness_environment(
+    node: NodeEntry,
+    agent: str,
+    variables: dict[str, str],
+) -> dict[str, object]:
+    if node.is_local:
+        payload = save_harness_environment(agent, variables)
+    else:
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/configuration/environment"
+        payload = request_json(
+            node,
+            "PUT",
+            path,
+            {"variables": variables},
+            timeout=NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS,
+        )
+    normalized = normalize_harness_configuration(agent, payload)
+    normalized["node"] = node.name
+    invalidate_node_agent_tools(node.name)
+    return normalized
+
+
+def node_codex_logout_payload(node: NodeEntry) -> dict[str, object]:
+    if node.is_local:
+        result = logout_codex()
+    else:
+        result = request_json(
+            node,
+            "POST",
+            "/api/agent-tools/codex/auth/logout",
+            timeout=NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS,
+        )
+    payload = result if isinstance(result, dict) else {}
+    normalized = {
+        "ok": bool(payload.get("ok")),
+        "status": (
+            "not_authenticated" if payload.get("status") == "not_authenticated" else "error"
+        ),
+        "detail": str(payload.get("detail") or "")[:500],
+        "node": node.name,
+    }
+    if normalized["ok"]:
+        invalidate_node_agent_tools(node.name)
+    return normalized
+
+
+def invalidate_node_agent_tools(node_name: str) -> None:
+    clear_agent_tools_cache()
+    with NODE_HEARTBEATS_LOCK:
+        NODE_AGENT_TOOLS.pop(node_name, None)
+
+
+def node_staragent_update_status_payload(
+    node: NodeEntry,
+    *,
+    refresh: bool = False,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = official_update_status(refresh=refresh, service="hub")
+    else:
+        path = "/api/staragent-update/check" if refresh else "/api/staragent-update"
+        try:
+            payload = request_json(
+                node,
+                "POST" if refresh else "GET",
+                path,
+                timeout=(
+                    NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS
+                    if refresh
+                    else NODE_STATUS_REQUEST_TIMEOUT_SECONDS
+                ),
+            )
+        except urllib.error.HTTPError as exc:
+            payload = remote_update_error_payload(exc)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "error": "node_unavailable",
+                "detail": f"Node update request failed: {exc}",
+            }
+    result = normalize_update_status(payload)
+    result["node"] = node.name
+    return result
+
+
+def node_staragent_update_apply_payload(node: NodeEntry) -> dict[str, object]:
+    if node.is_local:
+        payload = apply_official_update(service="hub")
+    else:
+        try:
+            payload = request_json(
+                node,
+                "POST",
+                "/api/staragent-update/apply",
+                timeout=NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            payload = remote_update_error_payload(exc)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "error": "node_unavailable",
+                "detail": f"Node update request failed: {exc}",
+            }
+    result = normalize_update_result(payload)
+    result["node"] = node.name
+    return result
+
+
+def remote_update_error_payload(error: urllib.error.HTTPError) -> dict[str, object]:
+    if error.code in {404, 405}:
+        return {
+            "ok": False,
+            "error": "node_update_unsupported",
+            "detail": "Update StarAgent on this Node once from its terminal to enable managed updates.",
+        }
+    try:
+        payload = json.loads(error.read(64 * 1024).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "ok": False,
+        "error": payload.get("error") or "node_update_failed",
+        "detail": payload.get("detail") or f"Node rejected the update request: HTTP {error.code}.",
+    }
 
 
 def node_agent_history_payload(

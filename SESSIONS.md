@@ -11,18 +11,21 @@ System sessions are long-running infrastructure processes. They are represented 
 
 Current system sessions:
 
+- `staragent-launcher`: runs the default single-Node Launcher.
 - `staragent-hub`: runs the Hub dashboard on the main machine.
 - `staragent-node`: runs the Remote Node API on a worker machine.
+- `staragent-lark`: runs the optional Lark integration.
 - `staragent-tailscaled`: runs userspace Tailscale when the machine has no systemd or TUN device.
 
 System sessions are visible in the dashboard for observability. Chat is disabled because these sessions are not coding agents; use Terminal to inspect logs or interact directly when debugging infrastructure.
 
 ## Ownership
 
-- Local session: tmux session on the Hub machine.
+- Local session: tmux session on the Launcher or Hub machine.
 - Remote session: tmux session on a Remote Node, reached through the node API.
 
-The browser only talks to the Hub. The Hub either acts on local tmux directly or proxies the request to the owning node.
+Launcher acts directly on local tmux. In multi-Node mode, the browser talks only to Hub; Hub either
+acts on its own local tmux server or proxies the request to the owning Node.
 
 ## Status
 

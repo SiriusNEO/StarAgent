@@ -12,7 +12,7 @@
 
 > ⚠️ 这个项目主要由 vibe coding 构建，可能存在潜在问题，使用前请注意。
 
-StarAgent 是一个用于统一管理跨机器 coding agent session 的 **agent multiplexer**。它来自我自己并行使用多个 agent 的实践：
+StarAgent 是一个 local-first 的 **Agent Harness Launcher**，同时也可以作为管理多个 Node 的 Hub。它来自我自己并行使用多个 agent 的实践：
 
 > **我们需要一个轻量的 tmux wrapper，用来管理 Codex / Claude Code，支持跨机器连接，并且能从任意设备访问。**
 
@@ -32,7 +32,7 @@ StarAgent 围绕日常使用 coding agent 时最常见的几个需求构建：
 
 - **通过 Web Dashboard 统一管理**。Web Dashboard 让你可以从任何带浏览器的设备控制 agent，包括手机和电脑，不需要额外安装客户端。
 
-StarAgent 使用中心化架构：`StarAgent Hub` 运行 Web Dashboard，同时也作为本机 Node；其他机器作为 `StarAgent Node` 通过同一个 Tailscale 网络接入。每个 Node 都可以启动 agent session，并统一由一个 Dashboard 管理。
+直接运行 `staragent` 会打开只属于当前机器的 `StarAgent Launcher`。需要跨机器管理时再运行 `staragent hub`：先选择 Node，然后进入与 Launcher 完全共用的 Node 工作区。
 技术架构见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 预览
@@ -56,20 +56,74 @@ Session 详情页左侧提供类似 IM 的会话切换栏，可以直接切换�
 
 **注意：** 这不会影响你手动 SSH 到服务器并 attach 到对应 tmux session 进行开发。Web 界面本质上只是 parser；服务器上的 tmux CLI session 始终是 ground truth。
 
+## Launcher
+
+在源码 checkout 中安装后，不带子命令直接启动：
+
+```bash
+pip install -e .
+staragent
+```
+
+Launcher 默认运行在受监督的 `staragent-launcher` tmux system session 中，并打开
+`http://127.0.0.1:8080` 的本机 Harness 工作区。通过 SSH 启动时只打印 URL，不会尝试打开
+远端机器的浏览器；也可以显式使用 `staragent --no-open`。
+
+Launcher 是默认的单机形态，启动后直接进入本机 Agents/Harness 目录。Sessions、Logs、
+Settings 和 Current Node 详情页与 Hub 中选中一个 Node 后看到的是同一套页面。
+
+## 桌面版
+
+项目现在提供基于 Tauri 的 Windows、Linux 与 macOS 桌面入口，可以启动本机 Launcher，
+也可以连接已有 Hub。Windows 本机模式通过 WSL2 运行，以继续复用现有 tmux/PTY Session
+模型。
+
+### 下载预编译安装包
+
+打开 [GitHub 最新 Release](https://github.com/SiriusNEO/StarAgent/releases/latest)，展开
+**Assets**，按系统下载：
+
+| 系统 | Release 文件 | 安装方式 |
+| --- | --- | --- |
+| Windows x64 | `*-setup.exe` | 运行当前用户安装程序 |
+| Linux x64 | `*.AppImage` | 添加可执行权限后直接运行 |
+| Debian / Ubuntu x64 | `*.deb` | 执行 `sudo apt install ./<下载的文件>.deb` |
+| macOS Intel / Apple Silicon | `*.dmg` | 打开 Universal DMG，将 StarAgent 拖入 Applications |
+
+GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果某个旧 Release 只有这两个源码
+压缩包，说明它早于桌面版打包流程；请改用更新版本、CI Artifact，或使用上面的源码安装方式。
+`v0.1.1` 及更早版本不包含桌面安装包。
+
+也可以通过 [GitHub CLI](https://cli.github.com/) 下载同一份 Release 文件：
+
+```bash
+# Linux AppImage 示例；其他系统可将 pattern 换成 '*.deb' 或 '*.dmg'。
+gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
+```
+
+如果想体验尚未发布的开发版，请打开
+[Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml)，选择一次成功
+运行，在 **Artifacts** 中下载 `staragent-windows-x64`、`staragent-linux-x64` 或
+`staragent-macos-universal`。下载 Actions Artifact 需要登录 GitHub。
+
+目前这些安装包仍是未签名的预览构建，并且只包含桌面入口，不内置 tmux/Python runtime：连接
+已有 Hub 可以直接使用，本机 Launcher 模式仍需按 [DESKTOP.zh-CN.md](DESKTOP.zh-CN.md) 安装
+对应平台依赖。该文档也包含本机构建方式与签名状态。
+
 ## Hub
 
 在运行 Dashboard 的机器上执行：
 
 ```bash
-pip install -e '.[dev]'
+pip install -e .
 staragent hub --host 0.0.0.0 --port 8080
 ```
 
 `staragent hub` 默认会创建 `staragent-hub` 这个 tmux system session。
 打开 `http://<hub-node>:8080`，使用 `staragent hub` 打印出来的 token 登录。
 
-认证与状态目录、Dashboard 页面、集中日志、Agent CLI 检测与升级、额度信息、preset 和历史会话恢复等
-详细说明见 [HUB.md](HUB.md)。
+认证与状态目录、Dashboard 页面、集中日志、Agent CLI 检测、国内镜像安装与升级、额度信息、preset
+和历史会话恢复等详细说明见 [HUB.md](HUB.md)。
 
 ## Remote Node
 
@@ -103,7 +157,7 @@ staragent verify-node <node-host-or-100.x-ip>
 
 ## 致谢
 
-StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Markdown Preview 遵循 [GitHub Flavored Markdown](https://github.github.com/gfm/) 的常见约定。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
+StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Launcher 的本机浏览器、SSH 与 `--no-open` 启动行为参考了 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Markdown Preview 遵循 [GitHub Flavored Markdown](https://github.github.com/gfm/) 的常见约定。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
 
 ## License
 

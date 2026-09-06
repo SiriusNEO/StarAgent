@@ -1,0 +1,28 @@
+[package]
+name = "staragent-desktop"
+version = "0.1.1"
+description = "Native desktop gateway for StarAgent Launcher and Hub"
+authors = ["SiriusNEO"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/SiriusNEO/StarAgent"
+
+[lib]
+name = "staragent_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+open = "5"
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+url = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

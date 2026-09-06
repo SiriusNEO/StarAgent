@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from staragent.adopt import adopted_session, infer_cli_from_pane, load_adoptions, process_children
+from staragent.harness_config import managed_harness_environment
 from staragent.models import SessionStatus
 from staragent.text import strip_ansi
 from staragent.transcript import (
@@ -37,6 +38,7 @@ ATTENTION_PATTERNS = (
 SESSION_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 SYSTEM_SESSION_NAMES = {
     "staragent-hub",
+    "staragent-launcher",
     "staragent-lark",
     "staragent-node",
     "staragent-tailscaled",
@@ -428,6 +430,8 @@ def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: boo
     if tmux_session_exists(name):
         raise ValueError(f"tmux session already exists: {name}")
 
+    agent = agent_from_worker_command(command)
+    environment_args = tmux_session_environment_args(agent)
     result = run_tmux(
         [
             "new-session",
@@ -436,6 +440,7 @@ def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: boo
             name,
             "-c",
             str(cwd_path),
+            *environment_args,
             tmux_worker_shell_command(command) if keep_shell_on_exit else command,
         ],
         check=False,
@@ -449,8 +454,19 @@ def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: boo
         mark_tmux_worker_session(name, command)
 
 
+def tmux_session_environment_args(agent: str) -> list[str]:
+    if agent == "unknown":
+        return []
+    variables = managed_harness_environment(agent)
+    return [item for name, value in variables.items() for item in ("-e", f"{name}={value}")]
+
+
 def tmux_worker_shell_command(command: str) -> str:
-    script = "\n".join(
+    return f"bash -lc {shlex.quote(worker_shell_script(command))}"
+
+
+def worker_shell_script(command: str) -> str:
+    return "\n".join(
         [
             "set +e",
             command,
@@ -459,7 +475,6 @@ def tmux_worker_shell_command(command: str) -> str:
             'exec "${SHELL:-/bin/bash}" -l',
         ]
     )
-    return f"bash -lc {shlex.quote(script)}"
 
 
 def mark_tmux_worker_session(name: str, command: str) -> None:
@@ -645,6 +660,8 @@ def tmux_task(session: dict[str, int | str], pane: dict[str, str | int]) -> str:
     name = str(session["name"])
     if name == "staragent-hub":
         return "StarAgent hub dashboard"
+    if name == "staragent-launcher":
+        return "StarAgent local launcher"
     if name == "staragent-lark":
         return "StarAgent Lark integration"
     if name == "staragent-node":
