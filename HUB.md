@@ -25,7 +25,8 @@ Hub authentication is saved in `<staragent-source>/.staragent/auth_token`. Set
 
 Runtime state defaults to `<staragent-source>/.staragent`. Set `STARAGENT_STATE_DIR` to move it.
 The state directory contains Hub configuration, adoption metadata, centralized logs, and other
-small runtime records; tmux remains the source of truth for live Sessions.
+runtime records; tmux remains the source of truth for live Sessions. Windows Desktop stores state in
+`%LOCALAPPDATA%\StarAgent\state`.
 
 ## Dashboard Surfaces
 
@@ -122,10 +123,16 @@ estimating a percentage.
 ### Managed Updates
 
 When a Harness is missing, StarAgent offers its official native installer, the npmjs registry, and
-China-friendly npm routes through npmmirror and Tencent Cloud. Every route can be copied; supported
-Nodes can also run it after an explicit confirmation. Registry overrides apply only to that install
-command and never rewrite the user's global npm configuration. Native scripts are downloaded only
-from fixed official HTTPS endpoints and executed from a temporary file.
+China-friendly npm routes through npmmirror and Tencent Cloud. Command-based routes can be copied;
+supported Nodes can also run them after an explicit confirmation. Registry overrides apply only to
+that install command and never rewrite the user's global npm configuration. npm routes require npm
+to be present and never trigger a hidden Node.js installation.
+
+On Windows, Codex and Claude Code default to their official native PowerShell installers. OpenCode
+defaults to its official Windows Release binary: StarAgent validates the GitHub release metadata,
+download host, declared size, SHA-256 digest, and zip layout before atomically placing
+`opencode.exe` in the user's `.opencode\bin` directory. No package manager is added by these native
+routes.
 
 For installed Harnesses, **Update now** also requires an explicit confirmation and runs only an
 internal allowlisted argv derived from a freshly detected installation source. Both install and

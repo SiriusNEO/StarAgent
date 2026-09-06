@@ -95,10 +95,11 @@ Do not confuse GitHub's automatically generated **Source code** archives with de
 a release contains only those archives, it predates desktop packaging; use a newer release, a CI
 artifact, or the source installation above. `v0.1.1` and earlier do not contain desktop installers.
 
-Updater-enabled desktop releases check this channel automatically at startup. A signed update prompt
-shows the new version and release notes; installation only starts after you confirm **Update &
-restart**. If your current installation predates the updater, install the first updater-enabled release
-manually once.
+Updater-enabled desktop releases offer **Stable** and **Nightly** channels and check the selected one
+at startup. Stable follows normal Releases; Nightly follows signed builds from relevant `dev` commits.
+A prompt shows the version, source commit, and release notes, and installation only starts after you
+confirm **Update & restart**. If your current installation predates the updater, install the first
+updater-enabled release manually once.
 
 The same files can be downloaded with the [GitHub CLI](https://cli.github.com/):
 
@@ -107,15 +108,16 @@ The same files can be downloaded with the [GitHub CLI](https://cli.github.com/):
 gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
 ```
 
-For an unreleased development build, open the
-[Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml), select a
-successful run, and download `staragent-windows-x64`, `staragent-linux-x64`, or
-`staragent-macos-universal` under **Artifacts**. GitHub requires sign-in to download workflow
-artifacts.
+For an unreleased development build, select Nightly in the app. Individual build artifacts remain in
+the [Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml) as
+`staragent-windows-x64`, `staragent-linux-x64`, and `staragent-macos-universal`; GitHub requires
+sign-in to download workflow artifacts directly.
 
 Release updater payloads carry a Tauri update signature, while operating-system publisher signing is
 still pending and may show an unknown-publisher warning. Windows local mode is self-contained; Agent
-Harness CLIs such as Codex or Claude Code remain optional and can be installed from the Agents page.
+Harness CLIs remain optional and can be installed from the Agents page through their native Windows
+install paths without adding Node.js/npm. npm and China-friendly mirrors remain explicit fallbacks
+for systems that already provide npm.
 Linux and macOS local mode still use the system StarAgent CLI and tmux. See
 [DESKTOP.md](DESKTOP.md) for runtime details, updates, native builds, and signing status.
 

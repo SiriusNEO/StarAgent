@@ -22,6 +22,14 @@
           </span>
         </a>
         <div class="header-actions">
+          <label class="update-channel-control" id="desktop-update-channel-control" data-channel="stable">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v12a4 4 0 0 0 4 4h8"></path><circle cx="6" cy="4" r="2"></circle><circle cx="18" cy="20" r="2"></circle><path d="M10 8h8m0 0-3-3m3 3-3 3"></path></svg>
+            <span class="visually-hidden" data-i18n="updateChannel">Update channel</span>
+            <select id="desktop-update-channel" aria-label="Update channel" disabled>
+              <option value="stable" data-i18n="stableChannel">Stable</option>
+              <option value="nightly" data-i18n="nightlyChannel">Nightly</option>
+            </select>
+          </label>
           <button class="version-chip" id="desktop-update-button" type="button" aria-label="Check for desktop updates" title="Check for desktop updates">
             <span class="update-indicator" aria-hidden="true"></span>
             <span id="desktop-version">v…</span>
@@ -139,7 +147,7 @@
       <div class="update-panel-content">
         <div class="update-panel-heading">
           <div>
-            <span class="update-kicker" data-i18n="updateKicker">Signed desktop update</span>
+            <span class="update-kicker" id="desktop-update-kicker">Signed desktop update</span>
             <h2 id="desktop-update-title" data-i18n="updateAvailable">A new version is ready</h2>
           </div>
           <button class="update-close" id="desktop-update-later" type="button" aria-label="Later" title="Later">

@@ -19,6 +19,10 @@ use url::Url;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
 const DASHBOARD_WINDOW: &str = "dashboard";
+const STABLE_UPDATE_ENDPOINT: &str =
+    "https://github.com/SiriusNEO/StarAgent/releases/latest/download/latest.json";
+const NIGHTLY_UPDATE_ENDPOINT: &str =
+    "https://github.com/SiriusNEO/StarAgent/releases/download/nightly/latest.json";
 
 #[derive(Default)]
 struct RuntimeState {
@@ -28,6 +32,37 @@ struct RuntimeState {
 #[derive(Default)]
 struct DesktopUpdateState {
     pending: Mutex<Option<Update>>,
+}
+
+#[derive(Clone, Copy)]
+enum DesktopUpdateChannel {
+    Stable,
+    Nightly,
+}
+
+impl DesktopUpdateChannel {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "stable" => Ok(Self::Stable),
+            "nightly" => Ok(Self::Nightly),
+            _ => Err("Unsupported desktop update channel.".to_string()),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Nightly => "nightly",
+        }
+    }
+
+    fn endpoint(self) -> Result<Url, String> {
+        let value = match self {
+            Self::Stable => STABLE_UPDATE_ENDPOINT,
+            Self::Nightly => NIGHTLY_UPDATE_ENDPOINT,
+        };
+        Url::parse(value).map_err(|error| format!("Invalid desktop update endpoint: {error}"))
+    }
 }
 
 enum ManagedRuntime {
@@ -50,6 +85,7 @@ impl ManagedRuntime {
 #[serde(rename_all = "camelCase")]
 struct EnvironmentInfo {
     desktop_version: &'static str,
+    build_commit: Option<String>,
     platform: &'static str,
     strategy: &'static str,
     runtime_available: bool,
@@ -72,8 +108,10 @@ struct RuntimeStart {
 #[serde(rename_all = "camelCase")]
 struct DesktopUpdateInfo {
     current_version: String,
+    channel: &'static str,
     available: bool,
     version: Option<String>,
+    commit: Option<String>,
     notes: Option<String>,
     published_at: Option<String>,
 }
@@ -133,15 +171,19 @@ async fn open_dashboard(app: AppHandle, endpoint: String) -> Result<String, Stri
 async fn check_desktop_update(
     app: AppHandle,
     state: State<'_, DesktopUpdateState>,
+    channel: String,
 ) -> Result<DesktopUpdateInfo, String> {
     *state
         .pending
         .lock()
         .map_err(|_| "The desktop update lock is unavailable.".to_string())? = None;
 
+    let channel = DesktopUpdateChannel::parse(&channel)?;
     let exit_handle = app.clone();
     let updater = app
         .updater_builder()
+        .endpoints(vec![channel.endpoint()?])
+        .map_err(|error| format!("Could not select desktop update channel: {error}"))?
         .on_before_exit(move || {
             stop_managed_runtime(&exit_handle);
             exit_handle.cleanup_before_exit();
@@ -157,16 +199,25 @@ async fn check_desktop_update(
     let Some(update) = update else {
         return Ok(DesktopUpdateInfo {
             current_version,
+            channel: channel.name(),
             available: false,
             version: None,
+            commit: None,
             notes: None,
             published_at: None,
         });
     };
     let info = DesktopUpdateInfo {
         current_version,
+        channel: channel.name(),
         available: true,
         version: Some(update.version.clone()),
+        commit: normalized_commit(
+            update
+                .raw_json
+                .get("commit")
+                .and_then(|value| value.as_str()),
+        ),
         notes: compact_update_notes(update.body.as_deref()),
         published_at: update.date.map(|date| date.to_string()),
     };
@@ -218,6 +269,19 @@ fn updater_current_version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+fn normalized_commit(value: Option<&str>) -> Option<String> {
+    let value = value?.trim().to_ascii_lowercase();
+    if matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn build_commit() -> Option<String> {
+    normalized_commit(option_env!("STARAGENT_BUILD_COMMIT"))
+}
+
 fn compact_update_notes(notes: Option<&str>) -> Option<String> {
     const MAX_CHARS: usize = 4_000;
     let notes = notes?.trim();
@@ -236,6 +300,7 @@ fn inspect_environment() -> Result<EnvironmentInfo, String> {
     if cfg!(target_os = "windows") {
         return Ok(EnvironmentInfo {
             desktop_version: env!("CARGO_PKG_VERSION"),
+            build_commit: build_commit(),
             platform: "windows",
             strategy: "bundled",
             runtime_available: true,
@@ -270,6 +335,7 @@ fn inspect_environment() -> Result<EnvironmentInfo, String> {
     };
     Ok(EnvironmentInfo {
         desktop_version: env!("CARGO_PKG_VERSION"),
+        build_commit: build_commit(),
         platform: if cfg!(target_os = "macos") {
             "macos"
         } else {
@@ -751,7 +817,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_update_notes, normalize_endpoint, same_origin, DesktopUpdateEvent};
+    use super::{
+        compact_update_notes, normalize_endpoint, normalized_commit, same_origin,
+        DesktopUpdateChannel, DesktopUpdateEvent, NIGHTLY_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT,
+    };
     use url::Url;
 
     #[test]
@@ -794,6 +863,35 @@ mod tests {
         let compact = compact_update_notes(Some(&long)).unwrap();
         assert_eq!(compact.chars().count(), 4_001);
         assert!(compact.ends_with('…'));
+    }
+
+    #[test]
+    fn desktop_update_channels_are_fixed_and_allowlisted() {
+        assert_eq!(
+            DesktopUpdateChannel::parse("stable")
+                .unwrap()
+                .endpoint()
+                .unwrap()
+                .as_str(),
+            STABLE_UPDATE_ENDPOINT
+        );
+        assert_eq!(
+            DesktopUpdateChannel::parse("NIGHTLY")
+                .unwrap()
+                .endpoint()
+                .unwrap()
+                .as_str(),
+            NIGHTLY_UPDATE_ENDPOINT
+        );
+        assert!(DesktopUpdateChannel::parse("https://updates.invalid").is_err());
+    }
+
+    #[test]
+    fn update_commit_accepts_only_full_git_object_ids() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(normalized_commit(Some(sha)).as_deref(), Some(sha));
+        assert_eq!(normalized_commit(Some("ABCDEF")), None);
+        assert_eq!(normalized_commit(Some("../../nightly.json")), None);
     }
 
     #[test]

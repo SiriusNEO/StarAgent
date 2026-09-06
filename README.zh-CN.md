@@ -94,9 +94,10 @@ GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果�
 压缩包，说明它早于桌面版打包流程；请改用更新版本、CI Artifact，或使用上面的源码安装方式。
 `v0.1.1` 及更早版本不包含桌面安装包。
 
-支持 updater 的桌面版本会在启动时自动检查这个 Release 通道。发现新版后会展示已签名更新提示、
-版本号和 Release Notes，只有确认**更新并重启**后才开始安装。如果当前安装早于 updater 功能，需先
-手动安装一次首个支持自动更新的版本。
+支持 updater 的桌面版本提供 **Stable** 和 **Nightly** 通道，并会在启动时检查当前选择。Stable
+跟随正式 Release，Nightly 跟随相关 `dev` commit 的签名构建。发现新版后会展示版本、源码 commit
+和 Release Notes，只有确认**更新并重启**后才开始安装。如果当前安装早于 updater 功能，需先手动
+安装一次首个支持自动更新的版本。
 
 也可以通过 [GitHub CLI](https://cli.github.com/) 下载同一份 Release 文件：
 
@@ -105,15 +106,16 @@ GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果�
 gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
 ```
 
-如果想体验尚未发布的开发版，请打开
-[Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml)，选择一次成功
-运行，在 **Artifacts** 中下载 `staragent-windows-x64`、`staragent-linux-x64` 或
-`staragent-macos-universal`。下载 Actions Artifact 需要登录 GitHub。
+如果想体验尚未发布的开发版，可以直接在应用中选择 Nightly。每次构建仍会保留在
+[Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml) 的
+`staragent-windows-x64`、`staragent-linux-x64` 与 `staragent-macos-universal` Artifact 中；直接下载
+Actions Artifact 需要登录 GitHub。
 
 Release 的 updater 产物带有 Tauri 更新签名，但操作系统发行者签名仍待补充，因此仍可能出现“未知
 发行者”提示。Windows 本机模式已自包含；Codex、Claude Code 等 Agent Harness CLI 仍是按需组件，
-可直接在 Agents 页面选择官方源或国内镜像安装。Linux/macOS 本机模式仍使用系统中的 StarAgent
-CLI 与 tmux。运行时、自动更新、构建和签名细节见
+可直接在 Agents 页面通过 Windows 原生路线安装，不会额外加入 Node.js/npm。npm 官方源和国内镜像
+仍作为系统已有 npm 时的显式备用项。Linux/macOS 本机模式仍使用系统中的 StarAgent CLI 与 tmux。
+运行时、自动更新、构建和签名细节见
 [DESKTOP.zh-CN.md](DESKTOP.zh-CN.md)。
 
 ## Hub

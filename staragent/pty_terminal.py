@@ -135,11 +135,10 @@ class PtyTerminal:
             raise ValueError("PTY command must be a non-empty argv list.")
         if os.name == "nt":
             from staragent.native_sessions import (
-                augmented_windows_path,
                 spawn_conpty_process,
                 terminal_dimensions,
-                windows_pty_argv,
             )
+            from staragent.windows import augmented_windows_path, windows_process_argv
 
             process_env = dict(env) if env is not None else os.environ.copy()
             process_env.pop("TMUX", None)
@@ -148,7 +147,7 @@ class PtyTerminal:
             process_env["TERM"] = "xterm-256color"
             process_env["COLORTERM"] = "truecolor"
             cols, rows = terminal_dimensions(cols, rows)
-            native_argv = windows_pty_argv(argv, process_env)
+            native_argv = windows_process_argv(argv, process_env)
             process = spawn_conpty_process(
                 native_argv,
                 cwd=cwd,
