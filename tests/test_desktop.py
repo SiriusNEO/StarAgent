@@ -44,3 +44,20 @@ def test_desktop_workflow_covers_three_operating_systems() -> None:
     assert "types: [published]" in workflow
     assert "gh release upload" in workflow
     assert "contents: write" in workflow
+
+
+def test_desktop_update_channel_requires_signed_release_artifacts() -> None:
+    config = load_json(DESKTOP / "src-tauri" / "tauri.conf.json")
+    release_config = load_json(DESKTOP / "src-tauri" / "tauri.updater.conf.json")
+    workflow = (ROOT / ".github" / "workflows" / "desktop.yml").read_text(encoding="utf-8")
+
+    updater = config["plugins"]["updater"]
+    assert updater["pubkey"]
+    assert not updater["pubkey"].startswith(("/", ".", "~"))
+    assert updater["endpoints"] == [
+        "https://github.com/SiriusNEO/StarAgent/releases/latest/download/latest.json"
+    ]
+    assert release_config["bundle"]["createUpdaterArtifacts"] is True
+    assert "TAURI_SIGNING_PRIVATE_KEY" in workflow
+    assert "build_updater_manifest.py" in workflow
+    assert "latest.json" in workflow

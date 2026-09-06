@@ -151,6 +151,7 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
     script_url, interpreter = NATIVE_INSTALLERS[spec.name]
     script_command = f"curl -fsSL {script_url} | {interpreter}"
     package = f"{spec.npm_package}@latest"
+    windows = os.name == "nt"
     return (
         AgentInstallOption(
             id="official-native",
@@ -160,7 +161,7 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
             command=script_command,
             script_url=script_url,
             interpreter=interpreter,
-            recommended=True,
+            recommended=not windows,
             source_url=spec.docs_url,
         ),
         AgentInstallOption(
@@ -176,6 +177,7 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
                 package,
                 "--registry=https://registry.npmjs.org",
             ),
+            recommended=windows,
             source_url=f"https://www.npmjs.com/package/{spec.npm_package}",
         ),
         AgentInstallOption(

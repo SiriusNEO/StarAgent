@@ -79,7 +79,7 @@
   <section class="band deferred-render" id="create-session">
     <div class="section-title">
       <h2>{{ t("sessions.create") }}</h2>
-      <span>{{ current_node.name }} · tmux new-session</span>
+      <span>{{ current_node.name }} · {{ t("sessions.workspace") }}</span>
     </div>
     <form class="worker-form">
       <input type="hidden" name="node" value="{{ current_node.name }}">

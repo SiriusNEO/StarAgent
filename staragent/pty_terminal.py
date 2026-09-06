@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fcntl
 import json
 import os
-import pty
 import re
-import signal
-import struct
 import subprocess
-import termios
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import signal
+    import struct
+    import termios
 
 MAX_TERMINAL_INPUT_BYTES = 64 * 1024
 TERMINAL_SCROLLBACK_RESET_SEQUENCES = (
@@ -82,10 +85,23 @@ class TerminalOutputFilter:
 @dataclass
 class PtyTerminal:
     master_fd: int
-    process: subprocess.Popen[bytes]
+    process: Any
+    native_windows: bool = False
+
+    @classmethod
+    def attach_session(cls, session: str, cols: int = 120, rows: int = 36) -> PtyTerminal:
+        if os.name == "nt":
+            from staragent.native_sessions import native_session_registry
+
+            attachment = native_session_registry().attach(session)
+            attachment.resize(cols, rows)
+            return attachment  # type: ignore[return-value]
+        return cls.attach_tmux(session, cols=cols, rows=rows)
 
     @classmethod
     def attach_tmux(cls, session: str, cols: int = 120, rows: int = 36) -> PtyTerminal:
+        if os.name == "nt":
+            return cls.attach_session(session, cols=cols, rows=rows)
         master_fd, slave_fd = pty.openpty()
         set_winsize(master_fd, cols, rows)
         env = os.environ.copy()
@@ -117,6 +133,29 @@ class PtyTerminal:
     ) -> PtyTerminal:
         if not argv or not all(isinstance(item, str) and item for item in argv):
             raise ValueError("PTY command must be a non-empty argv list.")
+        if os.name == "nt":
+            from staragent.native_sessions import (
+                augmented_windows_path,
+                spawn_conpty_process,
+                terminal_dimensions,
+                windows_pty_argv,
+            )
+
+            process_env = dict(env) if env is not None else os.environ.copy()
+            process_env.pop("TMUX", None)
+            process_env.pop("LD_LIBRARY_PATH", None)
+            process_env["PATH"] = augmented_windows_path(process_env)
+            process_env["TERM"] = "xterm-256color"
+            process_env["COLORTERM"] = "truecolor"
+            cols, rows = terminal_dimensions(cols, rows)
+            native_argv = windows_pty_argv(argv, process_env)
+            process = spawn_conpty_process(
+                native_argv,
+                cwd=cwd,
+                env=process_env,
+                dimensions=(rows, cols),
+            )
+            return cls(master_fd=-1, process=process, native_windows=True)
         master_fd, slave_fd = pty.openpty()
         set_winsize(master_fd, cols, rows)
         process_env = dict(env) if env is not None else os.environ.copy()
@@ -143,18 +182,41 @@ class PtyTerminal:
         return cls(master_fd=master_fd, process=process)
 
     async def read(self) -> bytes:
+        if self.native_windows:
+            try:
+                value = await asyncio.to_thread(self.process.read, 8192)
+            except (EOFError, OSError):
+                return b""
+            return value.encode("utf-8", errors="replace") if isinstance(value, str) else value
         return await asyncio.to_thread(os.read, self.master_fd, 8192)
 
     def write(self, data: str) -> None:
         if data:
+            if self.native_windows:
+                try:
+                    self.process.write(data)
+                except EOFError as exc:
+                    raise OSError("Windows ConPTY command has exited.") from exc
+                return
             os.write(self.master_fd, data.encode("utf-8", errors="ignore"))
 
     def resize(self, cols: int, rows: int) -> None:
+        if self.native_windows:
+            from staragent.native_sessions import terminal_dimensions
+
+            cols, rows = terminal_dimensions(cols, rows)
+            if self.is_alive():
+                self.process.setwinsize(rows, cols)
+            return
         set_winsize(self.master_fd, cols, rows)
         with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(self.process.pid), signal.SIGWINCH)
 
     def close(self) -> None:
+        if self.native_windows:
+            with contextlib.suppress(EOFError, OSError):
+                self.process.close(force=True)
+            return
         with contextlib.suppress(OSError):
             os.close(self.master_fd)
         if self.process.poll() is None:
@@ -165,6 +227,14 @@ class PtyTerminal:
                 self.process.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+
+    def is_alive(self) -> bool:
+        if self.native_windows:
+            try:
+                return bool(self.process.isalive())
+            except (AttributeError, OSError):
+                return False
+        return self.process.poll() is None
 
 
 def set_winsize(fd: int, cols: int, rows: int) -> None:

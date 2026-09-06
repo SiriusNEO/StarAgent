@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 
@@ -37,14 +38,26 @@ COMMAND_PRESETS = [
 
 
 def command_presets_payload(*, ops_only: bool = False) -> list[dict[str, object]]:
-    return [preset.as_dict() for preset in COMMAND_PRESETS if not ops_only or preset.ops_compatible]
+    return [
+        platform_preset_payload(preset)
+        for preset in COMMAND_PRESETS
+        if not ops_only or preset.ops_compatible
+    ]
+
+
+def platform_preset_payload(preset: CommandPreset) -> dict[str, object]:
+    payload = preset.as_dict()
+    if os.name == "nt" and preset.agent == "shell":
+        payload["command"] = "powershell.exe"
+        payload["label"] = "PowerShell"
+    return payload
 
 
 def preset_command(name: str) -> str:
     normalized = name.strip().lower()
     for preset in COMMAND_PRESETS:
         if preset.name == normalized:
-            return preset.command
+            return str(platform_preset_payload(preset)["command"])
     raise KeyError(name)
 
 

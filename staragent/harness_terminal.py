@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import pwd
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -13,8 +12,15 @@ from staragent.harness_config import harness_process_environment
 from staragent.pty_terminal import PtyTerminal
 from staragent.runtime import worker_shell_script
 
+if os.name != "nt":
+    import pwd
+
 
 def login_shell() -> str:
+    if os.name == "nt":
+        from staragent.native_sessions import windows_shell_executable
+
+        return windows_shell_executable()
     candidates = [os.environ.get("SHELL", "")]
     with contextlib.suppress(KeyError):
         candidates.append(pwd.getpwuid(os.getuid()).pw_shell)
@@ -49,6 +55,10 @@ def harness_terminal_argv(name: str) -> list[str]:
     spec = agent_tool_spec(name)
     if spec is None:
         raise ValueError(f"Unsupported Agent CLI: {name}")
+    if os.name == "nt":
+        from staragent.native_sessions import windows_shell_argv
+
+        return windows_shell_argv(spec.command, keep_open=True)
     bash = shutil.which("bash")
     if not bash:
         raise OSError("Bash is required to start an Agent Harness terminal.")

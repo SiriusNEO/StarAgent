@@ -331,7 +331,7 @@ def create_app() -> FastAPI:
     def session(name: str) -> dict[str, object]:
         view = collect_session_view(name)
         if not view:
-            raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
+            raise HTTPException(status_code=404, detail=f"session not found: {name}")
         return session_payload(view)
 
     @app.post("/api/workers")
@@ -415,7 +415,7 @@ def create_app() -> FastAPI:
     @app.get("/api/sessions/{name}/output")
     def session_output(name: str, lines: int = 160) -> dict[str, str]:
         if not tmux_session_exists(name):
-            raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
+            raise HTTPException(status_code=404, detail=f"session not found: {name}")
         return {"output": capture_tmux_pane_ansi(name, lines=max(20, min(lines, 5000)))}
 
     @app.get("/api/sessions/{name}/transcript-state")
@@ -472,9 +472,9 @@ def create_app() -> FastAPI:
             await websocket.close(code=4401, reason="unauthorized")
             return
         if not tmux_session_exists(name):
-            await websocket.close(code=4404, reason=f"tmux session not found: {name}")
+            await websocket.close(code=4404, reason=f"session not found: {name}")
             return
-        terminal = PtyTerminal.attach_tmux(name)
+        terminal = PtyTerminal.attach_session(name)
         reader = asyncio.create_task(stream_pty_to_websocket(terminal, websocket))
         try:
             while True:
