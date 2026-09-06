@@ -1,14 +1,29 @@
 {% extends "base.html" %}
+{% from "_staragent_update.html" import staragent_update with context %}
 {% block title %}{{ current_node.name }} · StarAgent{% endblock %}
 {% block content %}
   <section class="page-head node-overview-head">
     <div class="page-title">
-      <span class="page-kicker">{{ t("overview.kicker") }}</span>
+      <span class="page-kicker">{{ t("node.current") }}</span>
       <h1>{{ current_node.name }}</h1>
       <p>{{ t("overview.description") }}</p>
     </div>
     <span class="pill node-status-{{ current_node.status }}">{{ t("status." ~ current_node.status) }}</span>
   </section>
+
+  {{ staragent_update(
+    "node-update",
+    t("overview.update_title"),
+    t("overview.update_description", node=current_node.name),
+    "/api/nodes/" ~ (current_node.name | urlencode) ~ "/staragent-update/check",
+    "/api/nodes/" ~ (current_node.name | urlencode) ~ "/staragent-update/apply",
+    "/api/nodes/" ~ (current_node.name | urlencode) ~ "/staragent-update",
+    runtime=current_node.runtime,
+    update_supported=current_node.staragent_update_supported,
+    node_available=current_node.status != "disconnected",
+    product_label="StarAgent · " ~ current_node.name,
+    section_class="band node-staragent-update",
+  ) }}
 
   <section class="node-workspace-grid" aria-label="{{ t('overview.sections', node=current_node.name) }}">
     <a class="node-workspace-card" href="/nodes/{{ current_node.name | urlencode }}/sessions">
@@ -68,4 +83,7 @@
       </div>
     </dl>
   </section>
+{% endblock %}
+{% block head_extra %}
+  <script src="{{ url_for('static', path='settings.js') }}?v={{ static_version('settings.js') }}" defer></script>
 {% endblock %}

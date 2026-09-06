@@ -39,7 +39,7 @@ from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.agent_history import resume_worker_command
-from staragent.agent_tools import AgentToolUpdateBusyError, agent_catalog_payload
+from staragent.agent_tools import AgentToolUpdateBusyError, agent_catalog_payload, agent_tool_spec
 from staragent.auth import hub_auth_token as stored_hub_auth_token
 from staragent.auth import hub_auth_token_source
 from staragent.dashboard.i18n import (
@@ -64,6 +64,7 @@ from staragent.files import (
     file_raw_info_payload,
     file_raw_payload,
 )
+from staragent.harness_terminal import open_codex_login_terminal, open_harness_terminal
 from staragent.hub import (
     NODE_HEARTBEAT_INTERVAL_SECONDS,
     NodeEntry,
@@ -77,9 +78,16 @@ from staragent.hub import (
     load_nodes,
     mark_hub_session_seen,
     node_agent_history_payload,
+    node_agent_tool_install_payload,
     node_agent_tool_update_payload,
     node_agent_tools_payload,
     node_by_name,
+    node_codex_logout_payload,
+    node_harness_configuration_payload,
+    node_save_harness_config,
+    node_save_harness_environment,
+    node_staragent_update_apply_payload,
+    node_staragent_update_status_payload,
     refresh_remote_node_heartbeats,
     remove_node,
     request_json,
@@ -102,7 +110,22 @@ from staragent.runtime import (
     start_tmux_worker,
     tmux_session_exists,
 )
-from staragent.schemas import CreateDirectory, CreateWorker, SendMessage, TerminalInput
+from staragent.schemas import (
+    CreateDirectory,
+    CreateWorker,
+    HarnessConfigRequest,
+    HarnessEnvironmentRequest,
+    SendMessage,
+    TerminalInput,
+)
+from staragent.self_update import (
+    STARAGENT_UPDATE_CONFLICTS,
+    StarAgentUpdateBusyError,
+    StarAgentUpdateError,
+    apply_official_update,
+    official_update_status,
+    schedule_dashboard_restart,
+)
 from staragent.session_parser import (
     tmux_transcript_state,
     transcript_state_from_payload,
@@ -112,11 +135,29 @@ from staragent.state import atomic_write_bytes, atomic_write_json, file_lock, lo
 from staragent.tailscale import tailscale_hub_payload
 from staragent.text import strip_ansi
 from staragent.transcript import parse_transcript
-from staragent.web_terminal import stream_pty_to_websocket
+from staragent.web_terminal import interact_with_pty_websocket, stream_pty_to_websocket
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(PACKAGE_DIR / "templates"))
 STATIC_DIR = PACKAGE_DIR / "static"
+DASHBOARD_MODES = frozenset({"hub", "launcher"})
+DASHBOARD_MODE_ENV = "STARAGENT_DASHBOARD_MODE"
+
+
+def dashboard_mode(value: str | None = None) -> str:
+    mode = str(value or os.environ.get(DASHBOARD_MODE_ENV) or "hub").strip().lower()
+    if mode not in DASHBOARD_MODES:
+        raise ValueError(f"Unsupported StarAgent dashboard mode: {mode}")
+    return mode
+
+
+def dashboard_template_context(request: Request) -> dict[str, str]:
+    return {"dashboard_mode": getattr(request.app.state, "dashboard_mode", "hub")}
+
+
+templates = Jinja2Templates(
+    directory=str(PACKAGE_DIR / "templates"),
+    context_processors=[dashboard_template_context],
+)
 
 
 def static_version(path: str) -> int:
@@ -217,20 +258,42 @@ PROXY_ENV_NAMES = (
     "no_proxy",
 )
 TRUE_VALUES = {"1", "true", "yes"}
+NODE_UPDATE_CONFLICTS = STARAGENT_UPDATE_CONFLICTS | {"node_update_unsupported"}
+
+
+def staragent_update_error_response(
+    error: StarAgentUpdateError,
+    *,
+    status_code: int = 502,
+) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": error.code, "detail": str(error)},
+        status_code=status_code,
+    )
+
+
+def staragent_update_payload_response(payload: dict[str, object]) -> JSONResponse:
+    if payload.get("ok") is True:
+        return JSONResponse(payload)
+    error = str(payload.get("error") or "node_update_failed")
+    status_code = 409 if error in NODE_UPDATE_CONFLICTS else 502
+    return JSONResponse(payload, status_code=status_code)
 
 
 @contextlib.asynccontextmanager
 async def dashboard_lifespan(app: FastAPI):
+    mode = getattr(app.state, "dashboard_mode", "hub")
     with contextlib.suppress(OSError):
         append_hub_event(
             "info",
             "hub.started",
-            "Hub application started.",
+            f"StarAgent {mode} application started.",
             source="hub.runtime",
-            details={"pid": os.getpid()},
+            details={"pid": os.getpid(), "mode": mode},
         )
     app.state.http_terminal_janitor = asyncio.create_task(http_terminal_janitor())
-    app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
+    if mode == "hub":
+        app.state.node_heartbeat = asyncio.create_task(node_heartbeat_loop())
     try:
         yield
     finally:
@@ -248,21 +311,23 @@ async def dashboard_lifespan(app: FastAPI):
             append_hub_event(
                 "info",
                 "hub.stopped",
-                "Hub application stopped gracefully.",
+                f"StarAgent {mode} application stopped gracefully.",
                 source="hub.runtime",
-                details={"pid": os.getpid()},
+                details={"pid": os.getpid(), "mode": mode},
             )
 
 
-def create_app() -> FastAPI:
+def create_app(mode: str | None = None) -> FastAPI:
+    resolved_mode = dashboard_mode(mode)
     app = FastAPI(title="StarAgent", lifespan=dashboard_lifespan)
+    app.state.dashboard_mode = resolved_mode
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.mount("/static", StaticFiles(directory=str(PACKAGE_DIR / "static")), name="static")
 
     register_auth_routes(app)
     register_theme_routes(app)
     register_settings_routes(app)
-    register_pages_routes(app)
+    register_pages_routes(app, mode=resolved_mode)
     register_terminal_routes(app)
     register_sessions_routes(app)
     register_nodes_routes(app)
@@ -415,18 +480,90 @@ def register_settings_routes(app: FastAPI) -> None:
         )
         return response
 
+    @app.get("/api/settings/update")
+    def staragent_update_status() -> JSONResponse:
+        try:
+            return JSONResponse({"ok": True, **official_update_status()})
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            return staragent_update_error_response(exc)
 
-def register_pages_routes(app: FastAPI) -> None:
+    @app.post("/api/settings/update/check")
+    def check_staragent_update() -> JSONResponse:
+        try:
+            return JSONResponse({"ok": True, **official_update_status(refresh=True)})
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            append_hub_event(
+                "warning",
+                "hub.update_check_failed",
+                "Could not check the official StarAgent update channel.",
+                source="hub.update",
+                details={"reason": exc.code},
+            )
+            return staragent_update_error_response(exc)
+
+    @app.post("/api/settings/update/apply")
+    def install_staragent_update() -> JSONResponse:
+        try:
+            result = apply_official_update()
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            append_hub_event(
+                "warning",
+                "hub.update_failed",
+                "StarAgent refused or failed an official update.",
+                source="hub.update",
+                details={"reason": exc.code},
+            )
+            status_code = 409 if exc.code in STARAGENT_UPDATE_CONFLICTS else 502
+            return staragent_update_error_response(exc, status_code=status_code)
+
+        after = result.get("after") if isinstance(result.get("after"), dict) else {}
+        before = result.get("before") if isinstance(result.get("before"), dict) else {}
+        updated = bool(result.get("updated"))
+        restart_scheduled = schedule_dashboard_restart() if updated else False
+        if updated:
+            append_hub_event(
+                "info",
+                "hub.updated",
+                "StarAgent fast-forwarded to the latest official commit.",
+                source="hub.update",
+                details={
+                    "branch": after.get("branch", ""),
+                    "before_commit": before.get("current_short_commit", ""),
+                    "after_commit": after.get("current_short_commit", ""),
+                    "restart_scheduled": restart_scheduled,
+                },
+            )
+        return JSONResponse({**result, "restart_scheduled": restart_scheduled})
+
+
+def register_pages_routes(app: FastAPI, *, mode: str) -> None:
+    launcher = mode == "launcher"
+
+    def scoped_node_view(node_id: str):
+        if launcher and node_id != "local":
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}")
+        return dashboard_node_view(node_id)
+
     @app.get("/")
     def index() -> RedirectResponse:
-        return RedirectResponse("/nodes", status_code=303)
+        target = "/nodes/local/agents" if launcher else "/nodes"
+        return RedirectResponse(target, status_code=303)
 
     @app.get("/sessions")
     def legacy_sessions_page() -> RedirectResponse:
-        return RedirectResponse("/nodes", status_code=303)
+        target = "/nodes/local/sessions" if launcher else "/nodes"
+        return RedirectResponse(target, status_code=303)
 
     @app.get("/nodes", response_class=HTMLResponse)
-    def nodes_page(request: Request) -> HTMLResponse:
+    def nodes_page(request: Request) -> Response:
+        if launcher:
+            return RedirectResponse("/nodes/local/agents", status_code=303)
         node_views = sorted(
             collect_session_navigation_nodes(),
             key=lambda node: (not node.entry.is_local, node.name),
@@ -443,7 +580,8 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/agents")
     def legacy_agents_page() -> RedirectResponse:
-        return RedirectResponse("/nodes", status_code=303)
+        target = "/nodes/local/agents" if launcher else "/nodes"
+        return RedirectResponse(target, status_code=303)
 
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request) -> HTMLResponse:
@@ -458,11 +596,12 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/logs")
     def legacy_logs_page() -> RedirectResponse:
-        return RedirectResponse("/nodes", status_code=303)
+        target = "/nodes/local/logs" if launcher else "/nodes"
+        return RedirectResponse(target, status_code=303)
 
     @app.get("/nodes/{node_id}", response_class=HTMLResponse)
     def node_page(request: Request, node_id: str) -> HTMLResponse:
-        node_view = dashboard_node_view(node_id)
+        node_view = scoped_node_view(node_id)
         return templates.TemplateResponse(
             request,
             "node.html",
@@ -475,7 +614,7 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/nodes/{node_id}/sessions", response_class=HTMLResponse)
     def node_sessions_page(request: Request, node_id: str) -> HTMLResponse:
-        node_view = dashboard_node_view(node_id)
+        node_view = scoped_node_view(node_id)
         views = sorted(node_view.sessions, key=lambda item: item.name)
         return templates.TemplateResponse(
             request,
@@ -499,7 +638,7 @@ def register_pages_routes(app: FastAPI) -> None:
         node_id: str,
         agent_name: str = "codex",
     ) -> HTMLResponse:
-        node_view = dashboard_node_view(node_id)
+        node_view = scoped_node_view(node_id)
         agent_catalog = agent_catalog_payload()
         selected_agent = next(
             (tool for tool in agent_catalog if tool.get("name") == agent_name),
@@ -542,7 +681,7 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/nodes/{node_id}/logs", response_class=HTMLResponse)
     def node_logs_page(request: Request, node_id: str) -> HTMLResponse:
-        node_view = dashboard_node_view(node_id)
+        node_view = scoped_node_view(node_id)
         return templates.TemplateResponse(
             request,
             "logs.html",
@@ -562,6 +701,8 @@ def register_pages_routes(app: FastAPI) -> None:
 
     @app.get("/nodes/{node_id}/sessions/{name}", response_class=HTMLResponse)
     def node_session_detail(request: Request, node_id: str, name: str) -> HTMLResponse:
+        if launcher and node_id != "local":
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}")
         view = node_session_view(node_id, name, prefer_cached=True)
         if view:
             return session_response(request, view)
@@ -595,6 +736,49 @@ def register_terminal_routes(app: FastAPI) -> None:
         else:
             await proxy_terminal_socket(websocket, node, name)
 
+    @app.websocket("/ws/nodes/{node_id}/agent-tools/{agent}/terminal")
+    async def node_agent_terminal_socket(
+        websocket: WebSocket,
+        node_id: str,
+        agent: str,
+    ) -> None:
+        if not websocket_is_authenticated(websocket):
+            await websocket.accept()
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        try:
+            node = node_by_name(node_id)
+        except KeyError:
+            await websocket.accept()
+            await websocket.close(code=4404, reason=f"node not found: {node_id}")
+            return
+        spec = agent_tool_spec(agent)
+        if spec is None:
+            await websocket.accept()
+            await websocket.close(code=4404, reason=f"agent harness not found: {agent}")
+            return
+        if node.is_local:
+            await local_agent_terminal_socket(websocket, node, spec.name)
+        else:
+            await proxy_agent_terminal_socket(websocket, node, spec.name)
+
+    @app.websocket("/ws/nodes/{node_id}/agent-tools/codex/auth/login")
+    async def node_codex_login_socket(websocket: WebSocket, node_id: str) -> None:
+        if not websocket_is_authenticated(websocket):
+            await websocket.accept()
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        try:
+            node = node_by_name(node_id)
+        except KeyError:
+            await websocket.accept()
+            await websocket.close(code=4404, reason=f"node not found: {node_id}")
+            return
+        if node.is_local:
+            await local_codex_login_socket(websocket, node)
+        else:
+            await proxy_codex_login_socket(websocket, node)
+
     async def local_terminal_socket(websocket: WebSocket, name: str) -> None:
         await websocket.accept()
         if not tmux_session_exists(name):
@@ -616,6 +800,72 @@ def register_terminal_routes(app: FastAPI) -> None:
         finally:
             reader.cancel()
             terminal.close()
+
+    async def local_agent_terminal_socket(
+        websocket: WebSocket,
+        node: NodeEntry,
+        agent: str,
+    ) -> None:
+        await websocket.accept()
+        opened = False
+        try:
+            with open_harness_terminal(agent) as terminal:
+                opened = True
+                append_node_event(
+                    node.name,
+                    "info",
+                    "agent.terminal_opened",
+                    f"{agent} interactive shell opened.",
+                    source="hub.agents",
+                    details={"agent": agent},
+                )
+                await interact_with_pty_websocket(terminal, websocket)
+        except ValueError as exc:
+            await websocket.close(code=4404, reason=str(exc)[:120])
+        except OSError:
+            await websocket.close(code=1011, reason="could not start interactive shell")
+        finally:
+            if opened:
+                append_node_event(
+                    node.name,
+                    "info",
+                    "agent.terminal_closed",
+                    f"{agent} interactive shell closed.",
+                    source="hub.agents",
+                    details={"agent": agent},
+                )
+
+    async def local_codex_login_socket(websocket: WebSocket, node: NodeEntry) -> None:
+        await websocket.accept()
+        opened = False
+        try:
+            with open_codex_login_terminal() as terminal:
+                opened = True
+                append_node_event(
+                    node.name,
+                    "info",
+                    "agent.auth_login_started",
+                    "Codex device login started.",
+                    source="hub.agents",
+                    details={"agent": "codex"},
+                )
+                await interact_with_pty_websocket(
+                    terminal,
+                    websocket,
+                    max_age_seconds=15 * 60,
+                )
+        except OSError:
+            await websocket.close(code=1011, reason="could not start Codex login")
+        finally:
+            if opened:
+                append_node_event(
+                    node.name,
+                    "info",
+                    "agent.auth_login_finished",
+                    "Codex device login terminal closed.",
+                    source="hub.agents",
+                    details={"agent": "codex"},
+                )
 
 
 def register_sessions_routes(app: FastAPI) -> None:
@@ -890,6 +1140,169 @@ def register_nodes_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
         return node_agent_tools_payload(node, refresh=refresh)
 
+    @app.get("/api/nodes/{node_id}/agent-tools/{agent}/configuration")
+    def node_harness_configuration(node_id: str, agent: str) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_harness_configuration_payload(node, agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_dashboard_json(payload)
+
+    @app.put("/api/nodes/{node_id}/agent-tools/{agent}/configuration/file")
+    def update_node_harness_config(
+        node_id: str,
+        agent: str,
+        request: HarnessConfigRequest,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_save_harness_config(node, agent, request.content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(
+                status_code=exc.code,
+                detail=remote_http_error_detail(exc),
+            ) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info",
+            "agent.config_saved",
+            f"{agent} configuration was saved on {node.name}.",
+            source="hub.agents",
+            details={"node": node.name, "agent": agent},
+        )
+        return no_store_dashboard_json(payload)
+
+    @app.put("/api/nodes/{node_id}/agent-tools/{agent}/configuration/environment")
+    def update_node_harness_environment(
+        node_id: str,
+        agent: str,
+        request: HarnessEnvironmentRequest,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_save_harness_environment(node, agent, request.variables)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(
+                status_code=exc.code,
+                detail=remote_http_error_detail(exc),
+            ) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info",
+            "agent.environment_saved",
+            f"{agent} environment was saved on {node.name}.",
+            source="hub.agents",
+            details={
+                "node": node.name,
+                "agent": agent,
+                "variables": sorted(request.variables),
+            },
+        )
+        return no_store_dashboard_json(payload)
+
+    @app.post("/api/nodes/{node_id}/agent-tools/codex/auth/logout")
+    def logout_node_codex(node_id: str) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_codex_logout_payload(node)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(
+                status_code=exc.code,
+                detail=remote_http_error_detail(exc),
+            ) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if payload.get("ok") else "warning",
+            "agent.auth_logout" if payload.get("ok") else "agent.auth_logout_failed",
+            f"Codex {'logged out' if payload.get('ok') else 'logout failed'} on {node.name}.",
+            source="hub.agents",
+            details={"node": node.name, "agent": "codex"},
+        )
+        return no_store_dashboard_json(payload)
+
+    @app.get("/api/nodes/{node_id}/staragent-update")
+    def node_staragent_update_status(node_id: str) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_staragent_update_status_payload(node)
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            return staragent_update_error_response(exc)
+        return staragent_update_payload_response(payload)
+
+    @app.post("/api/nodes/{node_id}/staragent-update/check")
+    def check_node_staragent_update(node_id: str) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_staragent_update_status_payload(node, refresh=True)
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            append_hub_event(
+                "warning",
+                "node.update_check_failed",
+                f"Could not check the StarAgent update channel on {node.name}.",
+                source="hub.nodes",
+                details={"node": node.name, "reason": exc.code},
+            )
+            return staragent_update_error_response(exc)
+        if payload.get("ok") is not True:
+            append_hub_event(
+                "warning",
+                "node.update_check_failed",
+                f"Could not check the StarAgent update channel on {node.name}.",
+                source="hub.nodes",
+                details={"node": node.name, "reason": payload.get("error") or "unknown"},
+            )
+        return staragent_update_payload_response(payload)
+
+    @app.post("/api/nodes/{node_id}/staragent-update/apply")
+    def install_node_staragent_update(node_id: str) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_staragent_update_apply_payload(node)
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc, status_code=409)
+        except StarAgentUpdateError as exc:
+            append_hub_event(
+                "warning",
+                "node.update_failed",
+                f"StarAgent refused or failed an update on {node.name}.",
+                source="hub.nodes",
+                details={"node": node.name, "reason": exc.code},
+            )
+            status_code = 409 if exc.code in STARAGENT_UPDATE_CONFLICTS else 502
+            return staragent_update_error_response(exc, status_code=status_code)
+
+        if payload.get("ok") is True and payload.get("updated") and node.is_local:
+            payload["restart_scheduled"] = schedule_dashboard_restart()
+        level = "info" if payload.get("ok") else "warning"
+        event = "node.updated" if payload.get("ok") else "node.update_failed"
+        append_hub_event(
+            level,
+            event,
+            f"StarAgent update {'completed' if payload.get('ok') else 'failed'} on {node.name}.",
+            source="hub.nodes",
+            details={
+                "node": node.name,
+                "updated": bool(payload.get("updated")),
+                "restart_scheduled": bool(payload.get("restart_scheduled")),
+                "reason": payload.get("error") or "",
+            },
+        )
+        return staragent_update_payload_response(payload)
+
     @app.post("/api/nodes/{node_id}/agent-tools/{agent}/update")
     def update_node_agent_tool(node_id: str, agent: str) -> dict[str, object]:
         try:
@@ -914,6 +1327,40 @@ def register_nodes_routes(app: FastAPI) -> None:
                 "before_version": result.get("before_version") or "",
                 "after_version": result.get("after_version") or "",
                 "changed": bool(result.get("changed")),
+                "error": result.get("error") or "",
+            },
+        )
+        return result
+
+    @app.post("/api/nodes/{node_id}/agent-tools/{agent}/install/{option_id}")
+    def install_node_agent_tool(
+        node_id: str,
+        agent: str,
+        option_id: str,
+    ) -> dict[str, object]:
+        try:
+            node = node_by_name(node_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
+        try:
+            result = node_agent_tool_install_payload(node, agent, option_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AgentToolUpdateBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if result.get("ok") else "warning",
+            "agent.install_succeeded" if result.get("ok") else "agent.install_failed",
+            f"{result.get('label') or agent} installation "
+            f"{'completed' if result.get('ok') else 'failed'} on {node.name}.",
+            source="hub.agents",
+            details={
+                "node": node.name,
+                "agent": result.get("agent") or agent,
+                "option": result.get("option") or "",
+                "source": result.get("source") or "",
+                "after_status": result.get("after_status") or "",
+                "after_version": result.get("after_version") or "",
                 "error": result.get("error") or "",
             },
         )
@@ -1608,8 +2055,26 @@ async def node_heartbeat_loop() -> None:
 
 
 async def proxy_terminal_socket(websocket: WebSocket, node: NodeEntry, name: str) -> None:
+    path = f"/ws/sessions/{urllib.parse.quote(name)}/terminal"
+    await proxy_node_websocket(websocket, node, path)
+
+
+async def proxy_agent_terminal_socket(
+    websocket: WebSocket,
+    node: NodeEntry,
+    agent: str,
+) -> None:
+    path = f"/ws/agent-tools/{urllib.parse.quote(agent, safe='')}/terminal"
+    await proxy_node_websocket(websocket, node, path)
+
+
+async def proxy_codex_login_socket(websocket: WebSocket, node: NodeEntry) -> None:
+    await proxy_node_websocket(websocket, node, "/ws/agent-tools/codex/auth/login")
+
+
+async def proxy_node_websocket(websocket: WebSocket, node: NodeEntry, path: str) -> None:
     await websocket.accept()
-    remote_url = websocket_url(node, f"/ws/sessions/{urllib.parse.quote(name)}/terminal")
+    remote_url = websocket_url(node, path)
     try:
         async with websockets.connect(remote_url, **websocket_connect_kwargs(node)) as remote:
             to_remote = asyncio.create_task(proxy_browser_to_agent(websocket, remote))
@@ -1719,6 +2184,10 @@ def dashboard_node_entry(node_id: str) -> NodeEntry:
         raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
 
 
+def no_store_dashboard_json(payload: object) -> JSONResponse:
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+
 def dashboard_node_view(node_id: str):
     return collect_node_navigation_view(dashboard_node_entry(node_id))
 
@@ -1781,6 +2250,7 @@ def node_payload(node) -> dict[str, object]:
         "session_count": node.session_count,
         "error": node.error,
         "removable": node.is_removable,
+        "runtime": node.runtime,
         "sessions": [
             {
                 "name": session.name,

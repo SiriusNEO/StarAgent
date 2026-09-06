@@ -3,13 +3,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from typing import Any
 
+from staragent.codex_app_server import codex_app_server_requests
+from staragent.event_log import redact_log_text
+from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
 
 AGENT_AUTH_TIMEOUT_SECONDS = 3.0
+CODEX_DOCTOR_TIMEOUT_SECONDS = 4.0
+CODEX_LOGOUT_TIMEOUT_SECONDS = 10.0
 AGENT_AUTH_STATUSES = {
     "authenticated",
     "not_authenticated",
@@ -19,10 +25,26 @@ AGENT_AUTH_STATUSES = {
     "error",
     "unknown",
 }
+AGENT_CREDENTIAL_TYPES = {
+    "api_key",
+    "bearer_token",
+    "chatgpt",
+    "command",
+    "environment",
+    "external",
+    "none",
+    "unknown",
+}
 AUTH_ACTIONS = {
     "codex": "codex login",
     "claude": "claude auth login",
     "opencode": "opencode auth login",
+}
+CODEX_PROVIDER_LABELS = {
+    "openai": "OpenAI",
+    "ollama": "Ollama",
+    "lmstudio": "LM Studio",
+    "amazon-bedrock": "Amazon Bedrock",
 }
 
 
@@ -33,10 +55,275 @@ def probe_agent_auth(agent: str, executable: str) -> dict[str, object]:
         return probe_claude_auth(executable)
     if agent == "opencode":
         return probe_opencode_auth(executable)
-    return unknown_agent_auth(agent, "Login detection is not supported for this CLI.")
+    return unknown_agent_auth(agent, "Access detection is not supported for this CLI.")
 
 
 def probe_codex_auth(executable: str) -> dict[str, object]:
+    environment = auth_environment("codex")
+    try:
+        responses = codex_app_server_requests(
+            executable,
+            {
+                "account/read": {"refreshToken": False},
+                "config/read": {"includeLayers": False},
+            },
+            timeout=AGENT_AUTH_TIMEOUT_SECONDS,
+            env=environment,
+        )
+        status = codex_auth_from_app_server(responses, environment)
+        if status is not None:
+            return status
+    except (OSError, RuntimeError, TimeoutError, ValueError, json.JSONDecodeError):
+        pass
+
+    doctor_status = probe_codex_doctor_auth(executable, environment)
+    if doctor_status is not None:
+        return doctor_status
+    return probe_codex_login_auth(executable, environment)
+
+
+def codex_auth_from_app_server(
+    responses: object,
+    environment: dict[str, str],
+) -> dict[str, object] | None:
+    if not isinstance(responses, dict):
+        return None
+    account_result = responses.get("account/read")
+    config_result = responses.get("config/read")
+    if not isinstance(account_result, dict) or not isinstance(config_result, dict):
+        return None
+    config = config_result.get("config")
+    requires_openai_auth = account_result.get("requiresOpenaiAuth")
+    if not isinstance(config, dict) or not isinstance(requires_openai_auth, bool):
+        return None
+
+    provider_id, provider_name, provider_config = codex_provider(config)
+    account = account_result.get("account")
+    if requires_openai_auth:
+        if isinstance(account, dict):
+            credential_type, method = codex_account_credential(account)
+            return agent_auth_status(
+                "codex",
+                status="authenticated",
+                source="codex-app-server",
+                provider=provider_name,
+                credential_type=credential_type,
+                method=method,
+            )
+        return agent_auth_status(
+            "codex",
+            status="not_authenticated",
+            source="codex-app-server",
+            provider=provider_name,
+            action=AUTH_ACTIONS["codex"],
+            detail="Codex requires an OpenAI login for the active provider.",
+        )
+
+    if isinstance(account, dict):
+        credential_type, method = codex_account_credential(account)
+        return agent_auth_status(
+            "codex",
+            status="configured",
+            source="codex-app-server",
+            provider=provider_name,
+            credential_type=credential_type,
+            method=method,
+        )
+
+    env_key = clean_environment_name(
+        provider_config.get("env_key") or provider_config.get("envKey")
+    )
+    if env_key:
+        return agent_auth_status(
+            "codex",
+            status="configured" if environment.get(env_key) else "not_configured",
+            source="codex-app-server",
+            provider=provider_name,
+            credential_type="environment",
+            credential_name=env_key,
+        )
+
+    command_auth = provider_config.get("auth")
+    if isinstance(command_auth, dict) and clean_auth_text(command_auth.get("command")):
+        return agent_auth_status(
+            "codex",
+            status="configured",
+            source="codex-app-server",
+            provider=provider_name,
+            credential_type="command",
+        )
+    if provider_config.get("experimental_bearer_token") or provider_config.get(
+        "experimentalBearerToken"
+    ):
+        return agent_auth_status(
+            "codex",
+            status="configured",
+            source="codex-app-server",
+            provider=provider_name,
+            credential_type="bearer_token",
+        )
+    return agent_auth_status(
+        "codex",
+        status="configured",
+        source="codex-app-server",
+        provider=provider_name or provider_id,
+        credential_type="none",
+    )
+
+
+def codex_provider(config: dict[str, object]) -> tuple[str, str, dict[str, object]]:
+    provider_id = clean_auth_text(
+        config.get("model_provider") or config.get("modelProvider") or "openai",
+        max_chars=80,
+    )
+    provider_lookup = provider_id.lower()
+    provider_maps = config.get("model_providers") or config.get("modelProviders")
+    provider_config: dict[str, object] = {}
+    if isinstance(provider_maps, dict):
+        candidate = provider_maps.get(provider_id)
+        if not isinstance(candidate, dict):
+            candidate = next(
+                (
+                    value
+                    for key, value in provider_maps.items()
+                    if str(key).lower() == provider_lookup and isinstance(value, dict)
+                ),
+                None,
+            )
+        if isinstance(candidate, dict):
+            provider_config = candidate
+    provider_name = clean_auth_text(provider_config.get("name"), max_chars=80)
+    if not provider_name:
+        provider_name = CODEX_PROVIDER_LABELS.get(provider_lookup, provider_id)
+    return provider_id, provider_name, provider_config
+
+
+def codex_account_credential(account: dict[str, object]) -> tuple[str, str]:
+    account_type = re.sub(r"[^a-z]", "", str(account.get("type") or "").lower())
+    if account_type == "chatgpt":
+        return "chatgpt", "ChatGPT"
+    if account_type == "apikey":
+        return "api_key", "OpenAI API key"
+    return "external", ""
+
+
+def probe_codex_doctor_auth(
+    executable: str,
+    environment: dict[str, str],
+) -> dict[str, object] | None:
+    try:
+        result = subprocess.run(
+            [executable, "doctor", "--json", "--summary"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            capture_output=True,
+            timeout=CODEX_DOCTOR_TIMEOUT_SECONDS,
+            env=environment,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return codex_auth_from_doctor(payload)
+
+
+def codex_auth_from_doctor(payload: object) -> dict[str, object] | None:
+    if not isinstance(payload, dict):
+        return None
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        return None
+    config_check = checks.get("config.load")
+    auth_check = checks.get("auth.credentials")
+    if not isinstance(config_check, dict) or not isinstance(auth_check, dict):
+        return None
+    config_details = config_check.get("details")
+    auth_details = auth_check.get("details")
+    if not isinstance(config_details, dict) or not isinstance(auth_details, dict):
+        return None
+
+    provider_id = clean_auth_text(config_details.get("model provider"), max_chars=80).lower()
+    if not provider_id:
+        return None
+    provider_name = codex_doctor_provider_name(checks, provider_id)
+    source = "codex-doctor"
+    env_match = re.fullmatch(
+        r"([A-Za-z_][A-Za-z0-9_]*)\s+\((present|missing)\)",
+        str(auth_details.get("provider auth env var") or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    if env_match:
+        env_key, state = env_match.groups()
+        return agent_auth_status(
+            "codex",
+            status="configured" if state.lower() == "present" else "not_configured",
+            source=source,
+            provider=provider_name,
+            credential_type="environment",
+            credential_name=env_key,
+        )
+
+    requires_value = str(auth_details.get("model provider requires OpenAI auth") or "").lower()
+    requires_openai_auth = provider_id == "openai" or requires_value == "true"
+    check_status = str(auth_check.get("status") or "").lower()
+    if requires_openai_auth:
+        if check_status == "ok":
+            stored_mode = str(auth_details.get("stored auth mode") or "")
+            credential_type, method = codex_account_credential({"type": stored_mode})
+            return agent_auth_status(
+                "codex",
+                status="authenticated",
+                source=source,
+                provider=provider_name,
+                credential_type=credential_type,
+                method=method,
+            )
+        if check_status == "fail":
+            return agent_auth_status(
+                "codex",
+                status="not_authenticated",
+                source=source,
+                provider=provider_name,
+                action=AUTH_ACTIONS["codex"],
+                detail="Codex requires an OpenAI login for the active provider.",
+            )
+        return None
+    if check_status == "ok":
+        return agent_auth_status(
+            "codex",
+            status="configured",
+            source=source,
+            provider=provider_name,
+            credential_type="none",
+        )
+    if check_status == "fail":
+        return agent_auth_status(
+            "codex",
+            status="not_configured",
+            source=source,
+            provider=provider_name,
+        )
+    return None
+
+
+def codex_doctor_provider_name(checks: dict[str, object], provider_id: str) -> str:
+    network_check = checks.get("network.websocket_reachability")
+    if isinstance(network_check, dict):
+        details = network_check.get("details")
+        if isinstance(details, dict):
+            name = clean_auth_text(details.get("provider name"), max_chars=80)
+            if name:
+                return name
+    return CODEX_PROVIDER_LABELS.get(provider_id, provider_id)
+
+
+def probe_codex_login_auth(
+    executable: str,
+    environment: dict[str, str],
+) -> dict[str, object]:
     try:
         result = subprocess.run(
             [executable, "login", "status"],
@@ -45,7 +332,7 @@ def probe_codex_auth(executable: str) -> dict[str, object]:
             text=True,
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
-            env=auth_environment(),
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return auth_error("codex", "Codex login check timed out.")
@@ -62,6 +349,8 @@ def probe_codex_auth(executable: str) -> dict[str, object]:
             "codex",
             status="authenticated",
             source="codex-login-status",
+            provider="OpenAI",
+            credential_type=codex_login_credential_type(method),
             method=method,
             detail="Codex reports an active login.",
         )
@@ -70,6 +359,7 @@ def probe_codex_auth(executable: str) -> dict[str, object]:
             "codex",
             status="not_authenticated",
             source="codex-login-status",
+            provider="OpenAI",
             action=AUTH_ACTIONS["codex"],
             detail="Run Codex login to authenticate this service account.",
         )
@@ -78,6 +368,58 @@ def probe_codex_auth(executable: str) -> dict[str, object]:
         output or f"Codex login check exited with code {result.returncode}.",
         source="codex-login-status",
     )
+
+
+def codex_login_credential_type(method: str) -> str:
+    normalized = method.lower()
+    if "chatgpt" in normalized:
+        return "chatgpt"
+    if "api" in normalized and "key" in normalized:
+        return "api_key"
+    return "unknown"
+
+
+def logout_codex(executable: str = "") -> dict[str, object]:
+    command = executable or shutil.which("codex") or ""
+    if not command:
+        raise ValueError("Codex is not installed in the Node service PATH.")
+    try:
+        result = subprocess.run(
+            [command, "logout"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            capture_output=True,
+            timeout=CODEX_LOGOUT_TIMEOUT_SECONDS,
+            env=auth_environment("codex"),
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": "Codex logout timed out.",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": clean_auth_text(exc),
+        }
+    output = redact_log_text(
+        first_auth_line(result.stdout, result.stderr),
+        max_chars=300,
+    )
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": output or f"Codex logout exited with code {result.returncode}.",
+        }
+    return {
+        "ok": True,
+        "status": "not_authenticated",
+        "detail": "Codex credentials were removed from this Node.",
+    }
 
 
 def probe_claude_auth(executable: str) -> dict[str, object]:
@@ -89,7 +431,7 @@ def probe_claude_auth(executable: str) -> dict[str, object]:
             text=True,
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
-            env=auth_environment(),
+            env=auth_environment("claude"),
         )
     except subprocess.TimeoutExpired:
         return auth_error("claude", "Claude authentication check timed out.")
@@ -132,7 +474,7 @@ def probe_opencode_auth(executable: str) -> dict[str, object]:
             text=True,
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
-            env=auth_environment(),
+            env=auth_environment("opencode"),
         )
     except subprocess.TimeoutExpired:
         return auth_error("opencode", "OpenCode authentication check timed out.")
@@ -194,6 +536,9 @@ def agent_auth_status(
     *,
     status: str,
     source: str = "",
+    provider: str = "",
+    credential_type: str = "unknown",
+    credential_name: str = "",
     method: str = "",
     action: str = "",
     detail: str = "",
@@ -205,6 +550,9 @@ def agent_auth_status(
             "status": status,
             "source": source,
             "checked_at": utc_timestamp(),
+            "provider": provider,
+            "credential_type": credential_type,
+            "credential_name": credential_name,
             "method": method,
             "action": action,
             "detail": detail,
@@ -228,11 +576,22 @@ def normalize_agent_auth(agent: str, value: object) -> dict[str, object]:
         authenticated = True
     elif status == "not_authenticated":
         authenticated = False
+    credential_type = str(value.get("credential_type") or "unknown").strip().lower()
+    if credential_type not in AGENT_CREDENTIAL_TYPES:
+        credential_type = "unknown"
+    credential_name = (
+        clean_environment_name(value.get("credential_name"))
+        if credential_type == "environment"
+        else ""
+    )
     return {
         "status": status,
         "authenticated": authenticated,
         "source": clean_auth_text(value.get("source"), max_chars=80),
         "checked_at": clean_auth_text(value.get("checked_at"), max_chars=80),
+        "provider": clean_auth_text(value.get("provider"), max_chars=80),
+        "credential_type": credential_type,
+        "credential_name": credential_name,
         "method": clean_auth_text(value.get("method"), max_chars=80),
         "action": action,
         "detail": clean_auth_text(value.get("detail"), max_chars=300),
@@ -243,7 +602,7 @@ def normalize_agent_auth(agent: str, value: object) -> dict[str, object]:
 def unknown_agent_auth(
     agent: str,
     detail: str = (
-        "Login state was not reported by this Node; update StarAgent there if it remains unknown."
+        "Access state was not reported by this Node; update StarAgent there if it remains unknown."
     ),
     *,
     source: str = "",
@@ -259,9 +618,10 @@ def auth_error(agent: str, detail: object, *, source: str = "") -> dict[str, obj
     return agent_auth_status(agent, status="error", source=source, detail=clean_auth_text(detail))
 
 
-def auth_environment() -> dict[str, str]:
+def auth_environment(agent: str = "") -> dict[str, str]:
+    environment = harness_process_environment(agent) if agent else os.environ.copy()
     return {
-        **os.environ,
+        **environment,
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "NO_COLOR": "1",
@@ -280,6 +640,11 @@ def first_auth_line(*values: str) -> str:
 def clean_auth_text(value: Any, *, max_chars: int = 240) -> str:
     text = " ".join(strip_ansi(str(value or "")).replace("\x00", "").split())
     return f"{text[:max_chars]}…" if len(text) > max_chars else text
+
+
+def clean_environment_name(value: object) -> str:
+    name = str(value or "").strip()
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", name) else ""
 
 
 def safe_int(value: object) -> int:

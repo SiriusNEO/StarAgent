@@ -1,3 +1,4 @@
+{% set launcher_mode = dashboard_mode == "launcher" %}
 <!doctype html>
 <html lang="{{ current_language(request) }}">
   <head>
@@ -66,10 +67,10 @@
     <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ static_version('styles.css') }}">
     {% block head_extra %}{% endblock %}
   </head>
-  <body>
+  <body data-dashboard-mode="{{ dashboard_mode }}">
     <header class="topbar">
       <div class="topbar-left">
-        <a class="brand-lockup" href="/nodes" aria-label="StarAgent">
+        <a class="brand-lockup" href="{{ '/nodes/local/agents' if launcher_mode else '/nodes' }}" aria-label="StarAgent">
           <img
             class="brand-logo"
             src="{{ url_for('static', path='staragent-logo.svg') }}?v={{ static_version('staragent-logo.svg') }}"
@@ -78,6 +79,7 @@
             alt=""
           >
           <span class="brand">StarAgent</span>
+          {% if launcher_mode %}<span class="brand-edition">Launcher</span>{% endif %}
         </a>
         {% if current_node is defined and current_node %}
           <button
@@ -91,7 +93,7 @@
           </button>
         {% endif %}
         <nav class="app-nav" aria-label="{{ t('nav.primary') }}">
-          <a class="{{ 'is-active' if current_section == 'nodes' else '' }}" href="/nodes">{{ t("nav.nodes") }}</a>
+          {% if not launcher_mode %}<a class="{{ 'is-active' if current_section == 'nodes' else '' }}" href="/nodes">{{ t("nav.nodes") }}</a>{% endif %}
           <a class="{{ 'is-active' if current_section == 'lark' else '' }}" href="/lark">{{ t("nav.lark") }}</a>
           <a class="{{ 'is-active' if current_section == 'settings' else '' }}" href="/settings">{{ t("nav.settings") }}</a>
         </nav>
@@ -107,13 +109,20 @@
         <aside class="node-workspace-sidebar" id="node-workspace-sidebar" aria-label="{{ t('node.workspace_for', node=current_node.name) }}">
           <div class="node-workspace-sidebar-head">
             <div class="node-workspace-topline">
-              <a class="node-workspace-back" href="/nodes">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="m15 18-6-6 6-6"></path>
-                  <path d="M9 12h10"></path>
-                </svg>
-                <span>{{ t("node.all") }}</span>
-              </a>
+              {% if launcher_mode %}
+                <span class="node-workspace-mode">
+                  <span aria-hidden="true"></span>
+                  StarAgent Launcher
+                </span>
+              {% else %}
+                <a class="node-workspace-back" href="/nodes">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m15 18-6-6 6-6"></path>
+                    <path d="M9 12h10"></path>
+                  </svg>
+                  <span>{{ t("node.all") }}</span>
+                </a>
+              {% endif %}
               <button type="button" class="node-workspace-close" aria-label="{{ t('node.close_navigation') }}">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="m6 6 12 12"></path>
@@ -121,7 +130,12 @@
                 </svg>
               </button>
             </div>
-            <div class="node-workspace-node-card">
+            <a
+              class="node-workspace-node-card{{ ' is-active' if current_section == 'overview' else '' }}"
+              href="/nodes/{{ current_node.name | urlencode }}"
+              aria-label="{{ t('node.current') }}: {{ current_node.name }}"
+              {% if current_section == 'overview' %}aria-current="page"{% endif %}
+            >
               <div class="node-workspace-identity">
                 <span class="node-workspace-node-mark" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
@@ -147,23 +161,17 @@
                 </svg>
                 <code>{{ current_node.endpoint }}</code>
               </div>
-            </div>
+              <div class="node-workspace-runtime" title="{{ current_node.runtime.branch or '' }}{% if current_node.runtime.short_commit %} · {{ current_node.runtime.short_commit }}{% endif %}">
+                <span>StarAgent</span>
+                <code>
+                  {% if current_node.staragent_version %}v{{ current_node.staragent_version }}{% else %}{{ t("node.version_unknown") }}{% endif %}
+                  {% if current_node.runtime.short_commit %} · {{ current_node.runtime.short_commit }}{% endif %}
+                </code>
+              </div>
+            </a>
           </div>
           <span class="node-workspace-section-label">{{ t("node.workspace") }}</span>
           <nav class="node-workspace-menu" aria-label="{{ t('node.navigation') }}">
-            <a class="{{ 'is-active' if current_section == 'overview' else '' }}" href="/nodes/{{ current_node.name | urlencode }}" {% if current_section == 'overview' %}aria-current="page"{% endif %}>
-              <span class="node-workspace-menu-main">
-                <span class="node-workspace-menu-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24">
-                    <rect x="4" y="4" width="6" height="6" rx="1.5"></rect>
-                    <rect x="14" y="4" width="6" height="6" rx="1.5"></rect>
-                    <rect x="4" y="14" width="6" height="6" rx="1.5"></rect>
-                    <rect x="14" y="14" width="6" height="6" rx="1.5"></rect>
-                  </svg>
-                </span>
-                <span>{{ t("node.overview") }}</span>
-              </span>
-            </a>
             <a class="{{ 'is-active' if current_section == 'sessions' else '' }}" href="/nodes/{{ current_node.name | urlencode }}/sessions" {% if current_section == 'sessions' %}aria-current="page"{% endif %}>
               <span class="node-workspace-menu-main">
                 <span class="node-workspace-menu-icon" aria-hidden="true">

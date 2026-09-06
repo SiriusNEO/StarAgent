@@ -11,6 +11,7 @@ import signal
 import struct
 import subprocess
 import termios
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 MAX_TERMINAL_INPUT_BYTES = 64 * 1024
@@ -102,6 +103,43 @@ class PtyTerminal:
             preexec_fn=os.setsid,
         )
         os.close(slave_fd)
+        return cls(master_fd=master_fd, process=process)
+
+    @classmethod
+    def spawn(
+        cls,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        cols: int = 120,
+        rows: int = 36,
+    ) -> PtyTerminal:
+        if not argv or not all(isinstance(item, str) and item for item in argv):
+            raise ValueError("PTY command must be a non-empty argv list.")
+        master_fd, slave_fd = pty.openpty()
+        set_winsize(master_fd, cols, rows)
+        process_env = dict(env) if env is not None else os.environ.copy()
+        process_env.pop("TMUX", None)
+        process_env.pop("LD_LIBRARY_PATH", None)
+        process_env["TERM"] = "xterm-256color"
+        process_env["COLORTERM"] = "truecolor"
+        try:
+            process = subprocess.Popen(
+                list(argv),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+                cwd=cwd,
+                env=process_env,
+                preexec_fn=os.setsid,
+            )
+        except Exception:
+            os.close(master_fd)
+            raise
+        finally:
+            os.close(slave_fd)
         return cls(master_fd=master_fd, process=process)
 
     async def read(self) -> bytes:

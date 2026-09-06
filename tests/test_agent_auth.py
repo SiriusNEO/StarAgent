@@ -6,7 +6,36 @@ import subprocess
 from staragent import agent_auth, agent_tools
 
 
+def codex_diagnostics(
+    *,
+    provider: str = "openai",
+    provider_config: dict[str, object] | None = None,
+    account: object = None,
+    requires_openai_auth: bool = True,
+) -> dict[str, object]:
+    config: dict[str, object] = {"model_provider": provider}
+    if provider_config is not None:
+        config["model_providers"] = {provider: provider_config}
+    return {
+        "account/read": {
+            "account": account,
+            "requiresOpenaiAuth": requires_openai_auth,
+        },
+        "config/read": {"config": config},
+    }
+
+
+def force_codex_login_status_fallback(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr(
+        agent_auth,
+        "codex_app_server_requests",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unsupported")),
+    )
+    monkeypatch.setattr(agent_auth, "probe_codex_doctor_auth", lambda *args: None)
+
+
 def test_codex_auth_reports_login_method_without_identity(monkeypatch) -> None:
+    force_codex_login_status_fallback(monkeypatch)
     monkeypatch.setattr(
         agent_auth.subprocess,
         "run",
@@ -27,6 +56,7 @@ def test_codex_auth_reports_login_method_without_identity(monkeypatch) -> None:
 
 
 def test_codex_auth_reports_signed_out_with_login_command(monkeypatch) -> None:
+    force_codex_login_status_fallback(monkeypatch)
     monkeypatch.setattr(
         agent_auth.subprocess,
         "run",
@@ -38,6 +68,120 @@ def test_codex_auth_reports_signed_out_with_login_command(monkeypatch) -> None:
     assert auth["status"] == "not_authenticated"
     assert auth["authenticated"] is False
     assert auth["action"] == "codex login"
+
+
+def test_codex_custom_provider_uses_configured_environment_credential(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "must-not-leak")
+    monkeypatch.setattr(
+        agent_auth,
+        "codex_app_server_requests",
+        lambda *args, **kwargs: codex_diagnostics(
+            provider="deepseek",
+            provider_config={"name": "DeepSeek", "env_key": "DEEPSEEK_API_KEY"},
+            requires_openai_auth=False,
+        ),
+    )
+
+    auth = agent_auth.probe_codex_auth("/tools/codex")
+
+    assert auth["status"] == "configured"
+    assert auth["authenticated"] is None
+    assert auth["provider"] == "DeepSeek"
+    assert auth["credential_type"] == "environment"
+    assert auth["credential_name"] == "DEEPSEEK_API_KEY"
+    assert auth["action"] == ""
+    assert "must-not-leak" not in json.dumps(auth)
+
+
+def test_codex_custom_provider_reports_missing_environment_without_login_action(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        agent_auth,
+        "codex_app_server_requests",
+        lambda *args, **kwargs: codex_diagnostics(
+            provider="deepseek",
+            provider_config={"name": "DeepSeek", "env_key": "DEEPSEEK_API_KEY"},
+            requires_openai_auth=False,
+        ),
+    )
+
+    auth = agent_auth.probe_codex_auth("/tools/codex")
+
+    assert auth["status"] == "not_configured"
+    assert auth["authenticated"] is None
+    assert auth["provider"] == "DeepSeek"
+    assert auth["credential_name"] == "DEEPSEEK_API_KEY"
+    assert auth["action"] == ""
+
+
+def test_codex_provider_without_auth_is_ready_without_openai_login(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_auth,
+        "codex_app_server_requests",
+        lambda *args, **kwargs: codex_diagnostics(
+            provider="local-proxy",
+            provider_config={"name": "Local proxy"},
+            requires_openai_auth=False,
+        ),
+    )
+
+    auth = agent_auth.probe_codex_auth("/tools/codex")
+
+    assert auth["status"] == "configured"
+    assert auth["provider"] == "Local proxy"
+    assert auth["credential_type"] == "none"
+    assert auth["action"] == ""
+
+
+def test_codex_openai_auth_drops_account_identity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_auth,
+        "codex_app_server_requests",
+        lambda *args, **kwargs: codex_diagnostics(
+            account={
+                "type": "chatgpt",
+                "email": "must-not-leak@example.com",
+                "planType": "pro",
+            },
+        ),
+    )
+
+    auth = agent_auth.probe_codex_auth("/tools/codex")
+
+    assert auth["status"] == "authenticated"
+    assert auth["provider"] == "OpenAI"
+    assert auth["credential_type"] == "chatgpt"
+    assert "must-not-leak" not in json.dumps(auth)
+    assert "planType" not in auth
+
+
+def test_codex_doctor_fallback_understands_custom_provider_environment() -> None:
+    auth = agent_auth.codex_auth_from_doctor(
+        {
+            "checks": {
+                "config.load": {
+                    "details": {"model provider": "deepseek"},
+                },
+                "auth.credentials": {
+                    "status": "ok",
+                    "details": {
+                        "model provider requires OpenAI auth": "false",
+                        "provider auth env var": "DEEPSEEK_API_KEY (present)",
+                    },
+                },
+                "network.websocket_reachability": {
+                    "details": {"provider name": "DeepSeek"},
+                },
+            }
+        }
+    )
+
+    assert auth is not None
+    assert auth["status"] == "configured"
+    assert auth["provider"] == "DeepSeek"
+    assert auth["credential_name"] == "DEEPSEEK_API_KEY"
 
 
 def test_claude_auth_allowlists_status_and_drops_account_identity(monkeypatch) -> None:
@@ -115,6 +259,9 @@ def test_remote_auth_normalization_drops_unknown_fields_and_commands() -> None:
         {
             "status": "authenticated",
             "method": "ChatGPT",
+            "provider": "OpenAI",
+            "credential_type": "chatgpt",
+            "credential_name": "SHOULD_BE_DROPPED",
             "action": "printenv OPENAI_API_KEY",
             "email": "must-not-leak@example.com",
             "secret": "drop-me",
@@ -124,6 +271,9 @@ def test_remote_auth_normalization_drops_unknown_fields_and_commands() -> None:
 
     assert normalized["status"] == "authenticated"
     assert normalized["action"] == ""
+    assert normalized["provider"] == "OpenAI"
+    assert normalized["credential_type"] == "chatgpt"
+    assert normalized["credential_name"] == ""
     assert normalized["provider_count"] == 100
     assert "email" not in normalized
     assert "secret" not in normalized

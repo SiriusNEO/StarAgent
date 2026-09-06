@@ -48,6 +48,19 @@ def test_codex_usage_reports_remaining_windows_and_reset_count(monkeypatch) -> N
     assert "must-not-leak" not in json.dumps(usage)
 
 
+def test_codex_usage_marks_missing_limits_as_provider_specific(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_usage,
+        "codex_app_server_request",
+        lambda executable, method, timeout: {},
+    )
+
+    usage = agent_usage.probe_codex_usage("/tools/codex")
+
+    assert usage["status"] == "unavailable"
+    assert usage["message_code"] == "provider_rate_limits_unavailable"
+
+
 def test_claude_usage_is_manual_and_checks_auth_without_a_model_request(monkeypatch) -> None:
     calls: list[list[str]] = []
 

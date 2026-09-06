@@ -55,6 +55,7 @@ if (workerForm) {
   let newConversationCwd = cwdInput.value;
   let suggestedSessionName = "";
   let workerExplorer = null;
+  let maintenanceRequestId = 0;
 
   const selectedAgent = () => presetSelect.selectedOptions[0]?.dataset.agent || "";
   const selectedAgentLabel = () => agentLabels[selectedAgent()] || t("sessions.agent_cli");
@@ -206,9 +207,10 @@ if (workerForm) {
       }
     }
   };
-  const syncCliMaintenance = () => {
+  const syncCliMaintenance = async (refresh = false) => {
     const agent = selectedAgent();
     const supported = ["codex", "claude", "opencode"].includes(agent);
+    const requestId = ++maintenanceRequestId;
     maintenance.hidden = !supported;
     if (!supported) {
       return;
@@ -217,6 +219,48 @@ if (workerForm) {
     maintenanceTitle.textContent = t("sessions.update_named", {agent: label});
     maintenanceStatus.textContent = t("sessions.update_node_hint", {node: nodeSelect.value});
     updateButton.textContent = t("sessions.update_named", {agent: label});
+    updateButton.hidden = false;
+    updateButton.disabled = true;
+    const node = nodeSelect.value;
+    try {
+      const query = refresh ? "?refresh=true" : "";
+      const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/agent-tools${query}`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.detail || t("agents.check_failed"));
+      }
+      if (requestId !== maintenanceRequestId) {
+        return;
+      }
+      const tool = (Array.isArray(body.tools) ? body.tools : [])
+        .find((item) => item?.name === agent);
+      if (!tool || tool.status !== "available") {
+        updateButton.hidden = true;
+        maintenanceStatus.textContent = tool?.error || t("agents.not_installed");
+        return;
+      }
+      const updateStatus = tool.update?.status || "unknown";
+      if (updateStatus === "up_to_date") {
+        updateButton.hidden = true;
+        maintenanceStatus.textContent = tool.update.latest_version
+          ? t("agents.up_to_date_version", {version: tool.update.latest_version})
+          : t("agents.up_to_date");
+      } else {
+        updateButton.hidden = false;
+        maintenanceStatus.textContent = updateStatus === "update_available" && tool.update.latest_version
+          ? t("agents.update_available_version", {version: tool.update.latest_version})
+          : t("sessions.update_node_hint", {node});
+      }
+    } catch (_error) {
+      if (requestId === maintenanceRequestId) {
+        updateButton.hidden = false;
+        maintenanceStatus.textContent = t("sessions.update_node_hint", {node});
+      }
+    } finally {
+      if (requestId === maintenanceRequestId && !maintenance.classList.contains("is-updating")) {
+        updateButton.disabled = updateButton.hidden;
+      }
+    }
   };
 
   const requestedNode = initialParams.get("node") || "";
@@ -281,12 +325,13 @@ if (workerForm) {
         ? t("sessions.updated", {agent: label, before, after})
         : t("sessions.already_current", {agent: label, version: after});
       maintenance.classList.add("is-success");
+      await syncCliMaintenance(true);
     } catch (error) {
       maintenanceStatus.textContent = error.message || t("sessions.update_failed");
       maintenance.classList.add("is-error");
     } finally {
       maintenance.classList.remove("is-updating");
-      updateButton.disabled = false;
+      updateButton.disabled = updateButton.hidden;
       createButton.disabled = false;
       updateButton.textContent = t("sessions.update_named", {agent: label});
     }
