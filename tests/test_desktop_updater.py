@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ def load_script(name: str):
 
 
 manifest = load_script("build_updater_manifest")
+nightly = load_script("prepare_nightly_version")
 
 
 def add_signed_asset(root: Path, name: str, signature: str) -> None:
@@ -49,6 +51,28 @@ def test_updater_manifest_maps_bundle_specific_and_universal_targets(tmp_path: P
     assert result["platforms"]["darwin-x86_64"]["url"].endswith("/StarAgent.app.tar.gz")
 
 
+def test_updater_manifest_supports_rolling_nightly_release(tmp_path: Path) -> None:
+    add_signed_asset(tmp_path, "StarAgent_0.2.0-dev.42_amd64.AppImage", "appimage")
+    add_signed_asset(tmp_path, "StarAgent_0.2.0-dev.42_amd64.deb", "deb")
+    add_signed_asset(tmp_path, "StarAgent_0.2.0-dev.42_x64-setup.exe", "nsis")
+    add_signed_asset(tmp_path, "StarAgent_0.2.0-dev.42_universal.app.tar.gz", "mac")
+    commit = "0123456789abcdef0123456789abcdef01234567"
+
+    result = manifest.build_manifest(
+        tmp_path,
+        "SiriusNEO/StarAgent",
+        "nightly",
+        "Automated Nightly build.",
+        "2026-09-07T12:00:00+00:00",
+        version="0.2.0-dev.42",
+        commit=commit.upper(),
+    )
+
+    assert result["version"] == "0.2.0-dev.42"
+    assert result["commit"] == commit
+    assert "/releases/download/nightly/" in result["platforms"]["linux-x86_64"]["url"]
+
+
 def test_updater_manifest_requires_every_shipped_installer_signature(tmp_path: Path) -> None:
     (tmp_path / "StarAgent_0.2.0_amd64.AppImage").write_bytes(b"installer")
 
@@ -60,3 +84,47 @@ def test_updater_manifest_requires_every_shipped_installer_signature(tmp_path: P
 def test_updater_manifest_rejects_non_semver_tags(tag: str) -> None:
     with pytest.raises(manifest.ManifestError):
         manifest.release_version(tag)
+
+
+@pytest.mark.parametrize("commit", ["abcdef", "../latest.json", "g" * 40])
+def test_updater_manifest_rejects_untrusted_commit_metadata(commit: str) -> None:
+    with pytest.raises(manifest.ManifestError):
+        manifest.validate_commit(commit)
+
+
+def _copy_version_fixture(tmp_path: Path) -> None:
+    for relative in (
+        "staragent/__init__.py",
+        "desktop/package.json",
+        "desktop/package-lock.json",
+        "desktop/src-tauri/tauri.conf.json",
+        "desktop/src-tauri/Cargo.toml",
+        "desktop/src-tauri/Cargo.lock",
+    ):
+        source = ROOT / relative
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+
+def test_nightly_version_is_unique_and_synchronized(tmp_path: Path) -> None:
+    _copy_version_fixture(tmp_path)
+    source = next(iter(nightly.configured_versions(tmp_path).values()))
+
+    result = nightly.prepare_nightly(tmp_path, 42, write=True)
+
+    assert result == f"{source.split('-', 1)[0]}-dev.42"
+    assert set(nightly.configured_versions(tmp_path).values()) == {result}
+
+
+def test_nightly_version_refuses_inconsistent_source_versions(tmp_path: Path) -> None:
+    _copy_version_fixture(tmp_path)
+    package_path = tmp_path / "desktop" / "package.json"
+    source = next(iter(nightly.configured_versions(tmp_path).values()))
+    package_path.write_text(
+        package_path.read_text(encoding="utf-8").replace(source, "9.9.9"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(nightly.NightlyVersionError, match="not synchronized"):
+        nightly.prepare_nightly(tmp_path, 42)

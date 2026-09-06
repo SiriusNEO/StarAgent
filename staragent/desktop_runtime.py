@@ -23,7 +23,7 @@ def prepare_desktop_environment() -> None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
     os.environ.setdefault("STARAGENT_STATE_DIR", str(default_state_directory()))
     if os.name == "nt":
-        from staragent.native_sessions import augmented_windows_path
+        from staragent.windows import augmented_windows_path
 
         os.environ["PATH"] = augmented_windows_path()
         home = Path.home()

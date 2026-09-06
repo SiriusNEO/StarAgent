@@ -466,7 +466,9 @@ if (agentToolsBand) {
     });
     installDialog.querySelector(".agent-install-dialog-node").textContent = node;
     installDialog.querySelector(".agent-install-dialog-source").textContent = source;
-    installDialog.querySelector(".agent-update-dialog-command code").textContent = option.command;
+    const commandPanel = installDialog.querySelector(".agent-update-dialog-command");
+    commandPanel.hidden = !option.command;
+    commandPanel.querySelector("code").textContent = option.command || "";
     if (sourceIcon && dialogIcon) {
       dialogIcon.src = sourceIcon.src;
     }
@@ -678,9 +680,18 @@ if (agentToolsBand) {
       const method = document.createElement("span");
       method.className = "agent-install-option-method";
       method.textContent = installMethodLabel(option.method);
-      const command = document.createElement("code");
-      command.textContent = option.command || "";
-      information.append(sourceLine, method, command);
+      information.append(sourceLine, method);
+      if (option.command) {
+        const command = document.createElement("code");
+        command.textContent = option.command;
+        information.appendChild(command);
+      }
+      if (option.native_binary) {
+        const note = document.createElement("small");
+        note.className = "agent-install-option-note";
+        note.textContent = t("agents.install_native_binary_note");
+        information.appendChild(note);
+      }
       const missingRequirements = Array.isArray(option.missing_requirements)
         ? option.missing_requirements.join(", ")
         : "";
@@ -695,12 +706,14 @@ if (agentToolsBand) {
 
       const controls = document.createElement("div");
       controls.className = "agent-install-option-controls";
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "copy-button inline-copy";
-      copy.dataset.copy = option.command || "";
-      copy.textContent = t("agents.copy_install");
-      controls.appendChild(copy);
+      if (option.command) {
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "copy-button inline-copy";
+        copy.dataset.copy = option.command;
+        copy.textContent = t("agents.copy_install");
+        controls.appendChild(copy);
+      }
 
       const install = document.createElement("button");
       install.type = "button";

@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from staragent import native_sessions, runtime
+from staragent import native_sessions, runtime, windows
 from staragent.dashboard.app import session_quick_commands
 from staragent.models import SessionConfig, SessionStatus, SessionView
 
@@ -83,9 +83,9 @@ def test_windows_shell_command_is_encoded_and_keeps_diagnostics_shell(monkeypatc
     assert "Dropping into PowerShell" in script
 
 
-def test_windows_pty_wraps_npm_command_shims_with_cmd(monkeypatch) -> None:
+def test_windows_process_wraps_npm_command_shims_with_cmd(monkeypatch) -> None:
     monkeypatch.setattr(
-        native_sessions.shutil,
+        windows.shutil,
         "which",
         lambda command, path=None: (
             "C:/Users/test/AppData/Roaming/npm/codex.cmd"
@@ -94,11 +94,59 @@ def test_windows_pty_wraps_npm_command_shims_with_cmd(monkeypatch) -> None:
         ),
     )
 
-    argv = native_sessions.windows_pty_argv(["codex", "login", "--device-auth"], {"PATH": "C:/bin"})
+    argv = windows.windows_process_argv(["codex", "login", "--device-auth"], {"PATH": "C:/bin"})
 
     assert argv[:4] == ["C:/Windows/System32/cmd.exe", "/d", "/s", "/c"]
     assert "codex.cmd" in argv[4]
     assert "--device-auth" in argv[4]
+
+
+def test_windows_process_reports_a_missing_command_before_create_process(monkeypatch) -> None:
+    monkeypatch.setattr(windows.shutil, "which", lambda command, path=None: None)
+
+    with pytest.raises(FileNotFoundError, match="Required command not found: npm"):
+        windows.windows_process_argv(
+            ["npm", "install"],
+            {"PATH": "C:/bin"},
+            require_executable=True,
+        )
+
+
+def test_windows_process_reports_a_missing_command_processor(monkeypatch) -> None:
+    monkeypatch.setattr(
+        windows.shutil,
+        "which",
+        lambda command, path=None: "C:/tools/codex.cmd" if command == "codex" else None,
+    )
+
+    with pytest.raises(FileNotFoundError, match="command processor"):
+        windows.windows_process_argv(
+            ["codex", "--version"],
+            {"PATH": "C:/tools"},
+            require_executable=True,
+        )
+
+
+def test_augmented_windows_path_includes_native_harness_locations(tmp_path) -> None:
+    system = tmp_path / "system-bin"
+    home = tmp_path / "home"
+    app_data = tmp_path / "AppData" / "Roaming"
+    local_app_data = tmp_path / "AppData" / "Local"
+    result = windows.augmented_windows_path(
+        {
+            "PATH": str(system),
+            "APPDATA": str(app_data),
+            "LOCALAPPDATA": str(local_app_data),
+            "PROGRAMFILES": str(tmp_path / "Program Files"),
+            "USERPROFILE": str(home),
+        }
+    ).split(windows.os.pathsep)
+
+    assert result[0] == str(system)
+    assert str(app_data / "npm") in result
+    assert str(local_app_data / "Programs" / "OpenAI" / "Codex" / "bin") in result
+    assert str(home / ".opencode" / "bin") in result
+    assert str(tmp_path / "Program Files" / "nodejs") in result
 
 
 def test_spawn_conpty_forces_native_backend(monkeypatch, tmp_path) -> None:

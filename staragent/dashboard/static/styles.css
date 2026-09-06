@@ -3620,6 +3620,12 @@ dd {
   line-height: 1.45;
 }
 
+.agent-install-option-note {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .agent-install-option-controls {
   align-items: center;
   display: flex;
@@ -3992,6 +3998,10 @@ dd {
   display: grid;
   gap: 8px;
   padding: 13px 14px;
+}
+
+.agent-install-dialog .agent-update-dialog-command[hidden] {
+  display: none;
 }
 
 .agent-update-dialog-command > span {

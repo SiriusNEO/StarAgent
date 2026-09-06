@@ -45,7 +45,10 @@ Windows 会把固定参数直接传给安装包内的 `staragent-runtime.exe`，
 
 Windows 本机模式只需要带 WebView2 的受支持 Windows 系统。安装包已包含 StarAgent、Python、
 pywinpty 与 Dashboard 静态资源，不使用 WSL 或 tmux。Codex、Claude Code 等 Harness CLI 按需
-安装，可在 Agents 页面选择 npm 官方源或国内镜像。
+安装，可直接在 Agents 页面一键完成。Codex 与 Claude Code 使用官方原生 PowerShell 安装器；
+OpenCode 只下载官方 Windows 可执行文件，按 GitHub 发布的 SHA-256 校验后安装到用户的
+`.opencode\bin` 目录。这些推荐路线不会安装 Node.js 或 npm。npmjs、npmmirror 与腾讯云仅作为
+已有 npm 用户的显式备用项，registry 参数只对当次命令生效。
 
 Linux（以 Debian/Ubuntu 为例）：
 
@@ -69,19 +72,28 @@ macOS/Linux 桌面应用通常拿不到 shell 启动文件中的 `PATH`，因此
 
 ## 自动更新
 
-桌面应用每次启动会检查 GitHub 最新 Release。发现 SemVer 更新后，连接窗口会显示版本和 Release
-Notes，不会打断用户；也可以点击右上角版本号手动检查。安装始终需要用户确认：点击**更新并重启**
-后，应用会展示下载进度、验证更新包签名、安装与当前包类型匹配的产物，然后重新启动。
+连接窗口的版本号旁提供持久化的 **Stable / Nightly** 更新通道选择。Stable 跟随 GitHub 最新正式
+Release；Nightly 是由相关 `dev` commit 自动构建的滚动预发布，每次构建都有单调递增的版本号（例如
+`0.1.3-dev.142`）并嵌入完整源码 commit。预发布安装默认选择 Nightly，正式版本默认选择 Stable；
+切换通道后会立即检查，并在本机记住选择。
+
+桌面应用每次启动也会检查所选通道。发现更新的 SemVer 后，连接窗口会显示版本、短 commit 和
+Release Notes，不会打断用户；点击右上角版本号可以手动检查。安装始终需要用户确认：点击**更新并
+重启**后，应用会展示下载进度、验证更新包签名、安装与当前包类型匹配的产物，然后重新启动。切换
+通道不会强制降级；如果当前 Nightly 超前于 Stable，需要等 Stable 的 SemVer 追平后才会提示更新。
 
 更新会停止由桌面应用持有的 Launcher runtime。确认更新前请保存本地 Session 中正在进行的工作；
 Windows Session 尤其需要注意，因为它运行在内置 runtime 中。选择“稍后”不会停止任何进程。
 
-Release 更新包安装前必须通过 Tauri updater 签名验证。这和 Windows Authenticode、Apple
-notarization 等操作系统发行者签名不是同一回事。Dashboard WebView 无权调用更新命令，只有内置
-连接窗口具备桌面 capability。
+Stable 与 Nightly 更新包安装前都必须通过同一把 Tauri updater 公钥验签。应用只接受编译时写死的
+两个 manifest 地址，WebView 不能传入任意更新服务器。滚动 Nightly 会先上传带唯一名字的安装包，
+最后替换包含完整源码 commit 的 manifest，避免发布切换期间出现安装包与签名不匹配。这和 Windows
+Authenticode、Apple notarization 等操作系统发行者签名不是同一回事。Dashboard WebView 无权调用
+更新命令，只有内置连接窗口具备桌面 capability。
 
 早于此功能的旧安装包无法凭空获得 updater，需要手动安装首个支持自动更新的桌面版本；此后的版本
-即可走应用内更新通道。
+即可走应用内更新通道。已经带有旧版 Stable-only updater、但早于通道选择器的构建，也需要手动安装
+一次支持通道的安装包（或等待下一个 Stable 桥接版本），之后才能在应用内选择 Nightly。
 
 ## 开发与构建
 
@@ -117,11 +129,11 @@ npm run desktop:build
 NSIS/MSI 和 DMG 都依赖各自平台的工具链。
 
 仓库中的 `Desktop` GitHub Actions 工作流会构建 Linux x64、Windows x64 和同时支持 Intel/
-Apple Silicon 的 macOS Universal 版本。桌面代码 PR、`dev`/`main` push、GitHub Release 发布或
-手动触发时，安装包会分别作为 workflow artifact 上传；如果由已发布 Release 触发，workflow 会
-为 updater 产物签名，把安装包和签名附加到 **Assets**，并生成应用内更新所需的 `latest.json`。
-manifest 包含包类型维度，因此 `.deb`、AppImage、NSIS、MSI 和 macOS 客户端不会收到不兼容的包。
-开发版 Artifact 仍需登录 GitHub 后从对应 workflow run 下载。
+Apple Silicon 的 macOS Universal 版本。桌面代码 PR、`dev`/`main` push、带版本号的 GitHub Release
+发布或手动触发时，安装包会分别作为 workflow artifact 上传。正式 Release 会签名并发布 Stable
+资产与 manifest；相关 `dev` push 会为 Python、npm、Cargo 和 Tauri 计算同一个 Nightly 版本，签名
+updater 产物，再原子更新滚动的 `nightly` 预发布。manifest 包含包类型维度，因此 `.deb`、AppImage、
+NSIS、MSI 和 macOS 客户端不会收到不兼容的包。单次 workflow Artifact 仍需登录 GitHub 后下载。
 
 Release 构建依赖仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`。对应公钥已写入 `tauri.conf.json`；私钥绝不
 进入仓库，且必须安全备份。丢失私钥后，已有安装将无法升级到用新密钥签名的版本。CI 还会检查

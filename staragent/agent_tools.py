@@ -33,7 +33,9 @@ from staragent.agent_usage import (
 )
 from staragent.event_log import redact_log_text
 from staragent.harness_config import harness_process_environment
+from staragent.opencode_install import OpenCodeInstallError, install_opencode_windows
 from staragent.text import strip_ansi
+from staragent.windows import augmented_windows_path, windows_process_argv
 
 AGENT_TOOL_CACHE_TTL_SECONDS = 60.0
 AGENT_TOOL_PROBE_TIMEOUT_SECONDS = 3.0
@@ -43,6 +45,7 @@ AGENT_TOOL_UPDATE_OUTPUT_MAX_CHARS = 4_000
 AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES = 1024 * 1024
 AGENT_TOOL_STATUSES = {"available", "missing", "error", "unknown"}
 AGENT_UPDATE_STATUSES = {"up_to_date", "update_available", "unknown"}
+AGENT_INSTALL_PLATFORMS = {"posix", "windows"}
 CODEX_UPDATE_CACHE_MAX_AGE_SECONDS = 48 * 60 * 60
 CODEX_UPDATE_CACHE_MAX_BYTES = 16 * 1024
 CLI_VERSION_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9_.-])v?(\d+)\.(\d+)\.(\d+)(?![A-Za-z0-9_.-])")
@@ -77,6 +80,10 @@ class AgentInstallOption:
     recommended: bool = False
     china: bool = False
     source_url: str = ""
+    platform: str = "posix"
+    script_args: tuple[str, ...] = ()
+    script_suffix: str = ".sh"
+    native_action: str = ""
 
     @property
     def requirements(self) -> tuple[str, ...]:
@@ -128,10 +135,22 @@ AGENT_TOOL_SPECS = (
     ),
 )
 
-NATIVE_INSTALLERS = {
+POSIX_NATIVE_INSTALLERS = {
     "codex": ("https://chatgpt.com/codex/install.sh", "sh"),
     "claude": ("https://claude.ai/install.sh", "bash"),
     "opencode": ("https://opencode.ai/install", "bash"),
+}
+WINDOWS_NATIVE_INSTALLERS = {
+    "codex": (
+        "https://chatgpt.com/codex/install.ps1",
+        "powershell.exe",
+        'powershell -ExecutionPolicy Bypass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+    ),
+    "claude": (
+        "https://claude.ai/install.ps1",
+        "powershell.exe",
+        'powershell -ExecutionPolicy Bypass -c "irm https://claude.ai/install.ps1 | iex"',
+    ),
 }
 INSTALL_SOURCE_URLS = {
     "npmmirror": "https://npmmirror.com/",
@@ -147,22 +166,66 @@ class AgentToolUpdateBusyError(RuntimeError):
     pass
 
 
-def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]:
-    script_url, interpreter = NATIVE_INSTALLERS[spec.name]
-    script_command = f"curl -fsSL {script_url} | {interpreter}"
+def current_install_platform() -> str:
+    return "windows" if os.name == "nt" else "posix"
+
+
+def normalize_install_platform(value: object, *, fallback: str | None = None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in AGENT_INSTALL_PLATFORMS:
+        return normalized
+    return fallback or current_install_platform()
+
+
+def agent_install_options(
+    spec: AgentToolSpec,
+    *,
+    platform_name: str | None = None,
+) -> tuple[AgentInstallOption, ...]:
+    target = normalize_install_platform(platform_name)
+    if target == "windows":
+        if spec.name in WINDOWS_NATIVE_INSTALLERS:
+            script_url, interpreter, script_command = WINDOWS_NATIVE_INSTALLERS[spec.name]
+            script_args = ("-NoProfile", "-ExecutionPolicy", "Bypass", "-File")
+            script_suffix = ".ps1"
+            native_action = ""
+            native_provider = spec.vendor
+            native_source_url = spec.docs_url
+        elif spec.name == "opencode":
+            script_url = ""
+            interpreter = ""
+            script_command = ""
+            script_args = ()
+            script_suffix = ".zip"
+            native_action = "opencode-windows-release"
+            native_provider = "OpenCode GitHub Releases"
+            native_source_url = "https://github.com/anomalyco/opencode/releases/latest"
+        else:
+            raise ValueError(f"No native Windows installer is configured for {spec.label}.")
+    else:
+        script_url, interpreter = POSIX_NATIVE_INSTALLERS[spec.name]
+        script_command = f"curl -fsSL {script_url} | {interpreter}"
+        script_args = ()
+        script_suffix = ".sh"
+        native_action = ""
+        native_provider = spec.vendor
+        native_source_url = spec.docs_url
     package = f"{spec.npm_package}@latest"
-    windows = os.name == "nt"
     return (
         AgentInstallOption(
             id="official-native",
             method="native",
             source="official",
-            provider=spec.vendor,
+            provider=native_provider,
             command=script_command,
             script_url=script_url,
             interpreter=interpreter,
-            recommended=not windows,
-            source_url=spec.docs_url,
+            recommended=True,
+            source_url=native_source_url,
+            platform=target,
+            script_args=script_args,
+            script_suffix=script_suffix,
+            native_action=native_action,
         ),
         AgentInstallOption(
             id="official-npm",
@@ -177,8 +240,8 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
                 package,
                 "--registry=https://registry.npmjs.org",
             ),
-            recommended=windows,
             source_url=f"https://www.npmjs.com/package/{spec.npm_package}",
+            platform=target,
         ),
         AgentInstallOption(
             id="npmmirror",
@@ -195,6 +258,7 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
             ),
             china=True,
             source_url=INSTALL_SOURCE_URLS["npmmirror"],
+            platform=target,
         ),
         AgentInstallOption(
             id="tencent-mirror",
@@ -211,13 +275,26 @@ def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]
             ),
             china=True,
             source_url=INSTALL_SOURCE_URLS["tencent"],
+            platform=target,
         ),
     )
 
 
-def agent_install_option(spec: AgentToolSpec, option_id: str) -> AgentInstallOption:
+def agent_install_option(
+    spec: AgentToolSpec,
+    option_id: str,
+    *,
+    platform_name: str | None = None,
+) -> AgentInstallOption:
     normalized = str(option_id or "").strip().lower()
-    option = next((item for item in agent_install_options(spec) if item.id == normalized), None)
+    option = next(
+        (
+            item
+            for item in agent_install_options(spec, platform_name=platform_name)
+            if item.id == normalized
+        ),
+        None,
+    )
     if option is None:
         raise ValueError(f"Unsupported install option for {spec.label}: {option_id}")
     return option
@@ -249,6 +326,8 @@ def install_option_payload(
         "recommended": option.recommended,
         "china": option.china,
         "source_url": option.source_url,
+        "platform": option.platform,
+        "native_binary": bool(option.native_action),
         "available": available,
         "missing_requirements": missing,
     }
@@ -257,6 +336,8 @@ def install_option_payload(
 def install_options_payload(
     spec: AgentToolSpec,
     reported: object = None,
+    *,
+    platform_name: str | None = None,
 ) -> list[dict[str, object]]:
     by_id = (
         {str(item.get("id") or ""): item for item in reported if isinstance(item, dict)}
@@ -265,12 +346,15 @@ def install_options_payload(
     )
     return [
         install_option_payload(option, None if by_id is None else by_id.get(option.id, {}))
-        for option in agent_install_options(spec)
+        for option in agent_install_options(spec, platform_name=platform_name)
     ]
 
 
 def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
-    cache_key = "\0".join(os.environ.get(name, "") for name in ("PATH", "HOME", "CODEX_HOME"))
+    platform_name = current_install_platform()
+    cache_key = "\0".join(
+        [platform_name, *(os.environ.get(name, "") for name in ("PATH", "HOME", "CODEX_HOME"))]
+    )
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _CACHE.get(cache_key)
@@ -282,6 +366,7 @@ def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
             "supported": True,
             "updates_supported": True,
             "installs_supported": True,
+            "platform": platform_name,
             "scope": "executable",
             "checked_at": utc_timestamp(),
             "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -303,8 +388,11 @@ def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
         )
     resolved_executable = os.path.realpath(executable)
     try:
+        command = [executable, *spec.version_args]
+        if os.name == "nt":
+            command = windows_process_argv(command, environment, require_executable=True)
         result = subprocess.run(
-            [executable, *spec.version_args],
+            command,
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -368,6 +456,7 @@ def tool_status(
     auth: object = None,
     usage: object = None,
     install_options: object = None,
+    install_platform: str | None = None,
 ) -> dict[str, object]:
     normalized_status = status if status in AGENT_TOOL_STATUSES else "unknown"
     resolved = resolved_executable or executable
@@ -422,7 +511,11 @@ def tool_status(
         "update_action": update_action,
         "update_note": update_note(normalized_status, method),
         "update": normalized_update,
-        "install_options": install_options_payload(spec, install_options),
+        "install_options": install_options_payload(
+            spec,
+            install_options,
+            platform_name=install_platform,
+        ),
         "docs_url": spec.docs_url,
         "history_supported": spec.history_supported,
         "auth": normalized_auth,
@@ -437,10 +530,12 @@ def unknown_agent_tools_payload(
     supported: bool = False,
     stale: bool = False,
 ) -> dict[str, object]:
+    platform_name = current_install_platform()
     return {
         "supported": supported,
         "updates_supported": False,
         "installs_supported": False,
+        "platform": platform_name,
         "scope": "executable",
         "checked_at": "",
         "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -453,6 +548,7 @@ def unknown_agent_tools_payload(
 def normalize_agent_tools_payload(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         return unknown_agent_tools_payload("Node returned an invalid agent tool payload.")
+    platform_name = normalize_install_platform(payload.get("platform"))
     raw_tools = payload.get("tools")
     by_name = (
         {str(item.get("name") or ""): item for item in raw_tools if isinstance(item, dict)}
@@ -463,7 +559,14 @@ def normalize_agent_tools_payload(payload: object) -> dict[str, object]:
     for spec in AGENT_TOOL_SPECS:
         raw = by_name.get(spec.name)
         if not raw:
-            tools.append(tool_status(spec, status="unknown", error="No result reported."))
+            tools.append(
+                tool_status(
+                    spec,
+                    status="unknown",
+                    error="No result reported.",
+                    install_platform=platform_name,
+                )
+            )
             continue
         status = str(raw.get("status") or "unknown").lower()
         tools.append(
@@ -479,12 +582,14 @@ def normalize_agent_tools_payload(payload: object) -> dict[str, object]:
                 auth=raw.get("auth"),
                 usage=raw.get("usage"),
                 install_options=raw.get("install_options", []),
+                install_platform=platform_name,
             )
         )
     return {
         "supported": bool(payload.get("supported", True)),
         "updates_supported": bool(payload.get("updates_supported", False)),
         "installs_supported": bool(payload.get("installs_supported", False)),
+        "platform": platform_name,
         "scope": "executable",
         "checked_at": clean_tool_text(payload.get("checked_at"), max_chars=80),
         "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -528,6 +633,7 @@ def install_agent_tool(name: str, option_id: str) -> dict[str, object]:
             "ok": False,
             "agent": spec.name,
             "label": spec.label,
+            "platform": option.platform,
             "option": option.id,
             "source": option.source,
             "provider": option.provider,
@@ -579,8 +685,19 @@ def install_agent_tool(name: str, option_id: str) -> dict[str, object]:
 
 
 def run_agent_install_option(option: AgentInstallOption) -> tuple[int, str]:
+    if option.native_action:
+        if option.native_action != "opencode-windows-release":
+            return 2, "Install option is not executable."
+        try:
+            asset = install_opencode_windows()
+        except (OpenCodeInstallError, OSError) as exc:
+            return 1, clean_update_output(exc)
+        return 0, f"Installed OpenCode {asset.version} from its verified official Windows release."
     if option.argv:
-        return run_agent_command(option.argv, timeout=AGENT_TOOL_INSTALL_TIMEOUT_SECONDS)
+        return run_agent_command(
+            option.argv,
+            timeout=AGENT_TOOL_INSTALL_TIMEOUT_SECONDS,
+        )
     if not option.script_url or not option.interpreter:
         return 2, "Install option is not executable."
     try:
@@ -589,11 +706,11 @@ def run_agent_install_option(option: AgentInstallOption) -> tuple[int, str]:
         return 1, clean_update_output(exc)
     try:
         with tempfile.TemporaryDirectory(prefix="staragent-install-") as directory:
-            path = Path(directory) / "install.sh"
+            path = Path(directory) / f"install{option.script_suffix}"
             path.write_bytes(script)
             path.chmod(0o700)
             return run_agent_command(
-                (option.interpreter, str(path)),
+                (option.interpreter, *option.script_args, str(path)),
                 timeout=AGENT_TOOL_INSTALL_TIMEOUT_SECONDS,
             )
     except OSError as exc:
@@ -613,6 +730,15 @@ def download_install_script(url: str) -> bytes:
         headers={"User-Agent": "StarAgent harness installer"},
     )
     with urllib.request.urlopen(request, timeout=20) as response:
+        final = urllib.parse.urlparse(response.geturl())
+        if final.scheme != "https" or final.hostname not in {
+            "chatgpt.com",
+            "releases.openai.com",
+            "claude.ai",
+            "opencode.ai",
+            "raw.githubusercontent.com",
+        }:
+            raise ValueError("Installer endpoint redirected to an untrusted host.")
         content_length = safe_int(response.headers.get("Content-Length"))
         if content_length > AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES:
             raise RuntimeError("Installer script is too large.")
@@ -689,7 +815,8 @@ def update_agent_tool(name: str) -> dict[str, object]:
 
 
 def update_argv(spec: AgentToolSpec, tool: dict[str, object], command: str) -> list[str]:
-    expected = update_command(spec, "available", str(tool.get("install_method") or "unknown"))
+    install_method = str(tool.get("install_method") or "unknown")
+    expected = update_command(spec, "available", install_method)
     if not expected or command != expected:
         raise ValueError(f"Unsupported update command for {spec.label}.")
     argv = shlex.split(expected)
@@ -708,7 +835,14 @@ def run_agent_command(
     timeout: float,
 ) -> tuple[int, str]:
     command = list(argv)
+    environment = update_environment()
     try:
+        if os.name == "nt":
+            command = windows_process_argv(
+                command,
+                environment,
+                require_executable=True,
+            )
         result = subprocess.run(
             command,
             check=False,
@@ -716,12 +850,14 @@ def run_agent_command(
             text=True,
             capture_output=True,
             timeout=timeout,
-            env=update_environment(),
+            env=environment,
         )
     except subprocess.TimeoutExpired as exc:
         output = clean_update_output(exc.stdout, exc.stderr)
         detail = f"Command timed out after {timeout:g}s."
         return 124, f"{output}\n{detail}".strip()
+    except FileNotFoundError as exc:
+        return 127, clean_update_output(exc)
     except OSError as exc:
         return 127, clean_update_output(exc)
     return result.returncode, clean_update_output(result.stdout, result.stderr)
@@ -748,7 +884,14 @@ def normalize_agent_update_result(name: str, value: object) -> dict[str, object]
     command = clean_tool_text(payload.get("command"), max_chars=200)
     allowed_commands = {
         update_command(spec, "available", method)
-        for method in ("npm", "homebrew", "standalone", "native", "install-script", "unknown")
+        for method in (
+            "npm",
+            "homebrew",
+            "standalone",
+            "native",
+            "install-script",
+            "unknown",
+        )
     }
     allowed_commands.discard("")
     if command not in allowed_commands:
@@ -772,7 +915,10 @@ def normalize_agent_install_result(name: str, value: object) -> dict[str, object
     if spec is None:
         raise ValueError(f"Unsupported Agent CLI: {name}")
     payload = value if isinstance(value, dict) else {}
-    options = {option.id: option for option in agent_install_options(spec)}
+    platform_name = normalize_install_platform(payload.get("platform"))
+    options = {
+        option.id: option for option in agent_install_options(spec, platform_name=platform_name)
+    }
     option = options.get(str(payload.get("option") or ""))
     command = clean_tool_text(payload.get("command"), max_chars=300)
     valid_option = option is not None and command == option.command
@@ -785,6 +931,7 @@ def normalize_agent_install_result(name: str, value: object) -> dict[str, object
         "ok": bool(payload.get("ok")) and valid_option,
         "agent": spec.name,
         "label": spec.label,
+        "platform": platform_name,
         "option": option.id if option else "",
         "source": option.source if option else "",
         "provider": option.provider if option else "",
@@ -922,9 +1069,12 @@ def probe_environment(agent: str = "") -> dict[str, str]:
         value = str(directory)
         if value not in path_entries:
             path_entries.append(value)
+    search_path = os.pathsep.join(path_entries)
+    if os.name == "nt":
+        search_path = augmented_windows_path({**environment, "PATH": search_path})
     return {
         **environment,
-        "PATH": os.pathsep.join(path_entries),
+        "PATH": search_path,
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "NO_COLOR": "1",
@@ -933,7 +1083,7 @@ def probe_environment(agent: str = "") -> dict[str, str]:
 
 
 def update_environment() -> dict[str, str]:
-    return {
+    environment = {
         **os.environ,
         "NO_COLOR": "1",
         "TERM": "dumb",
@@ -941,6 +1091,9 @@ def update_environment() -> dict[str, str]:
         "npm_config_fund": "false",
         "npm_config_update_notifier": "false",
     }
+    if os.name == "nt":
+        environment["PATH"] = augmented_windows_path(environment)
+    return environment
 
 
 def agent_tool_spec(name: str) -> AgentToolSpec | None:
@@ -971,17 +1124,23 @@ def detect_install_method(
     executable: str,
     resolved_executable: str,
 ) -> str:
-    combined = f"{executable}\n{resolved_executable}".lower()
-    package_path = spec.npm_package.lower().replace("@", "").replace("/", os.sep)
-    normalized = combined.replace("@", "").replace("/", os.sep)
+    combined = f"{executable}\n{resolved_executable}".lower().replace("\\", "/")
+    package_path = spec.npm_package.lower().replace("@", "")
+    normalized = combined.replace("@", "")
     if "node_modules" in normalized and package_path in normalized:
+        return "npm"
+    if combined.endswith(f"/npm/{spec.command}.cmd"):
         return "npm"
     if any(fragment in combined for fragment in ("/cellar/", "/homebrew/", "/linuxbrew/")):
         return "homebrew"
-    if spec.name == "codex" and ".codex/packages/standalone" in combined:
+    if spec.name == "codex" and any(
+        fragment in combined
+        for fragment in ("/.codex/packages/standalone", "/programs/openai/codex/bin/")
+    ):
         return "standalone"
     if spec.name == "claude" and any(
-        fragment in combined for fragment in ("/.claude/local/", "/.local/share/claude/")
+        fragment in combined
+        for fragment in ("/.claude/local/", "/.local/share/claude/", "/.local/bin/claude.exe")
     ):
         return "native"
     if spec.name == "opencode" and "/.opencode/bin/" in combined:
@@ -993,7 +1152,15 @@ def normalize_install_method(value: str) -> str:
     normalized = str(value or "").strip().lower()
     return (
         normalized
-        if normalized in {"npm", "homebrew", "standalone", "native", "install-script", "missing"}
+        if normalized
+        in {
+            "npm",
+            "homebrew",
+            "standalone",
+            "native",
+            "install-script",
+            "missing",
+        }
         else "unknown"
     )
 

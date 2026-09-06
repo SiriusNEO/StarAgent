@@ -12,6 +12,7 @@ from staragent.codex_app_server import codex_app_server_requests
 from staragent.event_log import redact_log_text
 from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
+from staragent.windows import windows_process_argv
 
 AGENT_AUTH_TIMEOUT_SECONDS = 3.0
 CODEX_DOCTOR_TIMEOUT_SECONDS = 4.0
@@ -213,7 +214,7 @@ def probe_codex_doctor_auth(
 ) -> dict[str, object] | None:
     try:
         result = subprocess.run(
-            [executable, "doctor", "--json", "--summary"],
+            auth_process_argv(executable, "doctor", "--json", "--summary", env=environment),
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -326,7 +327,7 @@ def probe_codex_login_auth(
 ) -> dict[str, object]:
     try:
         result = subprocess.run(
-            [executable, "login", "status"],
+            auth_process_argv(executable, "login", "status", env=environment),
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -380,18 +381,19 @@ def codex_login_credential_type(method: str) -> str:
 
 
 def logout_codex(executable: str = "") -> dict[str, object]:
-    command = executable or shutil.which("codex") or ""
+    environment = auth_environment("codex")
+    command = executable or shutil.which("codex", path=environment.get("PATH")) or ""
     if not command:
         raise ValueError("Codex is not installed in the Node service PATH.")
     try:
         result = subprocess.run(
-            [command, "logout"],
+            auth_process_argv(command, "logout", env=environment),
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
             capture_output=True,
             timeout=CODEX_LOGOUT_TIMEOUT_SECONDS,
-            env=auth_environment("codex"),
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return {
@@ -423,15 +425,16 @@ def logout_codex(executable: str = "") -> dict[str, object]:
 
 
 def probe_claude_auth(executable: str) -> dict[str, object]:
+    environment = auth_environment("claude")
     try:
         result = subprocess.run(
-            [executable, "auth", "status", "--json"],
+            auth_process_argv(executable, "auth", "status", "--json", env=environment),
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
-            env=auth_environment("claude"),
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return auth_error("claude", "Claude authentication check timed out.")
@@ -466,15 +469,16 @@ def probe_claude_auth(executable: str) -> dict[str, object]:
 
 
 def probe_opencode_auth(executable: str) -> dict[str, object]:
+    environment = auth_environment("opencode")
     try:
         result = subprocess.run(
-            [executable, "auth", "list"],
+            auth_process_argv(executable, "auth", "list", env=environment),
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
-            env=auth_environment("opencode"),
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return auth_error("opencode", "OpenCode authentication check timed out.")
@@ -627,6 +631,13 @@ def auth_environment(agent: str = "") -> dict[str, str]:
         "NO_COLOR": "1",
         "TERM": "dumb",
     }
+
+
+def auth_process_argv(executable: str, *args: str, env: dict[str, str]) -> list[str]:
+    command = [executable, *args]
+    if os.name == "nt":
+        return windows_process_argv(command, env, require_executable=True)
+    return command
 
 
 def first_auth_line(*values: str) -> str:

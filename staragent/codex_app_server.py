@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import select
 import subprocess
 import time
@@ -9,6 +10,7 @@ from contextlib import suppress
 from typing import Any
 
 from staragent import __version__
+from staragent.windows import windows_process_argv
 
 
 def codex_app_server_request(
@@ -36,14 +38,22 @@ def codex_app_server_requests(
 ) -> dict[str, dict[str, Any]]:
     if not requests:
         return {}
+    environment = dict(env) if env is not None else None
+    command = [executable, "app-server", "--stdio"]
+    if os.name == "nt":
+        command = windows_process_argv(
+            command,
+            environment if environment is not None else os.environ,
+            require_executable=True,
+        )
     process = subprocess.Popen(
-        [executable, "app-server", "--stdio"],
+        command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
         bufsize=1,
-        env=dict(env) if env is not None else None,
+        env=environment,
     )
     deadline = time.monotonic() + timeout
     try:

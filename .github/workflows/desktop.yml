@@ -28,7 +28,10 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ${{ matrix.os }}
+    env:
+      STARAGENT_BUILD_COMMIT: ${{ github.sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +68,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
+
+      - name: Prepare unique Nightly version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        shell: bash
+        run: |
+          python desktop/scripts/prepare_nightly_version.py \
+            --run-number "$GITHUB_RUN_NUMBER" \
+            --write
 
       - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -146,13 +157,29 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo test
 
+      - name: Select updater artifact mode
+        id: updater-artifacts
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+        run: |
+          config=""
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            config="--config src-tauri/tauri.updater.conf.json"
+          fi
+          if [[ "$EVENT_NAME" == "push" && "$GIT_REF" == "refs/heads/dev" ]]; then
+            config="--config src-tauri/tauri.updater.conf.json"
+          fi
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+
       - name: Build native bundles
         uses: tauri-apps/tauri-action@v1
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           projectPath: desktop
-          args: ${{ matrix.args }} ${{ github.event_name == 'release' && '--config src-tauri/tauri.updater.conf.json' || '' }}
+          args: ${{ matrix.args }} ${{ steps.updater-artifacts.outputs.config }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -171,7 +198,7 @@ jobs:
 
   publish:
     name: Attach installers to release
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
     needs: build
     runs-on: ubuntu-22.04
     permissions:
@@ -202,7 +229,8 @@ jobs:
             --output release-assets/latest.json \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$RELEASE_TAG" \
-            --published-at "$RELEASE_PUBLISHED_AT"
+            --published-at "$RELEASE_PUBLISHED_AT" \
+            --commit "$GITHUB_SHA"
 
       - name: Upload installer assets
         env:
@@ -230,3 +258,154 @@ jobs:
           gh release upload "$RELEASE_TAG" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
+  publish-nightly:
+    name: Publish rolling Nightly update
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: staragent-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Prepare Nightly metadata
+        id: nightly
+        shell: bash
+        run: |
+          version="$(python desktop/scripts/prepare_nightly_version.py \
+            --run-number "$GITHUB_RUN_NUMBER")"
+          published_at="$(git show -s --format=%cI "$GITHUB_SHA")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "published_at=$published_at" >> "$GITHUB_OUTPUT"
+
+      - name: Give the macOS updater a unique asset name
+        env:
+          NIGHTLY_VERSION: ${{ steps.nightly.outputs.version }}
+        shell: bash
+        run: |
+          mapfile -d '' archives < <(find release-assets -type f -name '*.app.tar.gz' -print0)
+          if (( ${#archives[@]} != 1 )); then
+            echo "Expected one macOS updater archive; found ${#archives[@]}." >&2
+            exit 1
+          fi
+          source="${archives[0]}"
+          signature="${source}.sig"
+          if [[ ! -f "$signature" ]]; then
+            echo "The macOS updater signature is missing." >&2
+            exit 1
+          fi
+          destination="$(dirname "$source")/StarAgent_${NIGHTLY_VERSION}_universal.app.tar.gz"
+          mv "$source" "$destination"
+          mv "$signature" "${destination}.sig"
+
+      - name: Build signed Nightly updater manifest
+        env:
+          RELEASE_NOTES: Nightly build from dev commit ${{ github.sha }}.
+          NIGHTLY_VERSION: ${{ steps.nightly.outputs.version }}
+          NIGHTLY_PUBLISHED_AT: ${{ steps.nightly.outputs.published_at }}
+        run: |
+          python desktop/scripts/build_updater_manifest.py \
+            --asset-dir release-assets \
+            --output release-assets/latest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag nightly \
+            --version "$NIGHTLY_VERSION" \
+            --published-at "$NIGHTLY_PUBLISHED_AT" \
+            --commit "$GITHUB_SHA"
+
+      - name: Publish Nightly assets atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_VERSION: ${{ steps.nightly.outputs.version }}
+        shell: bash
+        run: |
+          nightly_tag="nightly"
+          notes="Automated ${NIGHTLY_VERSION} build from dev commit ${GITHUB_SHA}."
+          if ! gh release view "$nightly_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$nightly_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "StarAgent Nightly" \
+              --notes "$notes" \
+              --prerelease
+          fi
+
+          previous_version=""
+          previous_manifest_dir="$RUNNER_TEMP/staragent-previous-manifest"
+          mkdir -p "$previous_manifest_dir"
+          if gh release download "$nightly_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json \
+            --dir "$previous_manifest_dir" 2>/dev/null; then
+            previous_version="$(jq -r '.version // empty' "$previous_manifest_dir/latest.json")"
+            if [[ ! "$previous_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+              previous_version=""
+            fi
+          fi
+
+          mapfile -d '' assets < <(
+            find release-assets -type f \( \
+              -name '*.AppImage' -o \
+              -name '*.deb' -o \
+              -name '*.rpm' -o \
+              -name '*.dmg' -o \
+              -name '*.app.tar.gz' -o \
+              -name '*-setup.exe' -o \
+              -name '*.msi' -o \
+              -name '*.sig' \
+            \) -print0
+          )
+          if (( ${#assets[@]} == 0 )); then
+            echo "No Nightly installer assets were produced." >&2
+            exit 1
+          fi
+
+          gh release upload "$nightly_tag" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release upload "$nightly_tag" release-assets/latest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+          gh api --method PATCH \
+            "repos/$GITHUB_REPOSITORY/git/refs/tags/$nightly_tag" \
+            -f sha="$GITHUB_SHA" \
+            -F force=true >/dev/null
+          gh release edit "$nightly_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "StarAgent Nightly" \
+            --notes "$notes" \
+            --prerelease
+
+          declare -A keep=()
+          for asset in "${assets[@]}" release-assets/latest.json; do
+            keep["$(basename "$asset")"]=1
+          done
+          while IFS= read -r name; do
+            if [[ -n "$previous_version" && "$name" == *"$previous_version"* ]]; then
+              continue
+            fi
+            if [[ -n "$name" && -z "${keep[$name]+present}" ]]; then
+              gh release delete-asset "$nightly_tag" "$name" \
+                --repo "$GITHUB_REPOSITORY" \
+                --yes
+            fi
+          done < <(
+            gh release view "$nightly_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets[].name'
+          )

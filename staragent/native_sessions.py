@@ -5,7 +5,6 @@ import base64
 import os
 import queue
 import shutil
-import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -13,6 +12,8 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from staragent.windows import augmented_windows_path
 
 MAX_SCROLLBACK_BYTES = 4 * 1024 * 1024
 MAX_ATTACH_SNAPSHOT_BYTES = 1024 * 1024
@@ -62,52 +63,6 @@ def windows_shell_argv(command: str = "", *, keep_open: bool = True) -> list[str
         argv.append("-NoExit")
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return [*argv, "-EncodedCommand", encoded]
-
-
-def augmented_windows_path(environment: Mapping[str, str] | None = None) -> str:
-    source = dict(os.environ if environment is None else environment)
-    entries = [item for item in source.get("PATH", "").split(os.pathsep) if item]
-    home = Path(source.get("USERPROFILE") or Path.home())
-    app_data = source.get("APPDATA", "")
-    local_app_data = source.get("LOCALAPPDATA", "")
-    program_files = source.get("ProgramFiles", "")
-    candidates = (
-        Path(app_data) / "npm" if app_data else None,
-        Path(local_app_data) / "Microsoft" / "WindowsApps" if local_app_data else None,
-        Path(program_files) / "nodejs" if program_files else None,
-        home / ".local" / "bin",
-        home / ".claude" / "local",
-        home / ".opencode" / "bin",
-        home / ".bun" / "bin",
-        home / "scoop" / "shims",
-    )
-    seen = {os.path.normcase(os.path.normpath(item)) for item in entries}
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        value = str(candidate)
-        key = os.path.normcase(os.path.normpath(value))
-        if key not in seen:
-            entries.append(value)
-            seen.add(key)
-    return os.pathsep.join(entries)
-
-
-def windows_pty_argv(argv: Sequence[str], environment: Mapping[str, str]) -> list[str]:
-    command = list(argv)
-    if not command:
-        raise ValueError("PTY command must not be empty.")
-    executable = shutil.which(command[0], path=environment.get("PATH")) or command[0]
-    if Path(executable).suffix.lower() not in {".bat", ".cmd"}:
-        command[0] = executable
-        return command
-    command_line = subprocess.list2cmdline([executable, *command[1:]])
-    command_prompt = (
-        environment.get("COMSPEC")
-        or shutil.which("cmd.exe", path=environment.get("PATH"))
-        or "cmd.exe"
-    )
-    return [command_prompt, "/d", "/s", "/c", command_line]
 
 
 def spawn_conpty_process(
