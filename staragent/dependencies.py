@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -16,7 +17,18 @@ class Dependency:
 
 
 DEPENDENCIES = (
-    Dependency("tmux", "tmux", "tmux", "", required=True, note="Required for all sessions."),
+    Dependency(
+        "conpty" if os.name == "nt" else "tmux",
+        "Windows ConPTY" if os.name == "nt" else "tmux",
+        "" if os.name == "nt" else "tmux",
+        "",
+        required=True,
+        note=(
+            "Bundled native terminal backend; WSL is not required."
+            if os.name == "nt"
+            else "Required for all sessions."
+        ),
+    ),
     Dependency(
         "tailscale",
         "Tailscale",
@@ -33,6 +45,20 @@ def dependencies_status() -> dict[str, object]:
 
 
 def dependency_status(dependency: Dependency) -> dict[str, object]:
+    if dependency.name == "conpty":
+        from staragent.native_sessions import native_session_backend_available
+
+        installed = native_session_backend_available()
+        return {
+            "name": dependency.name,
+            "label": dependency.label,
+            "required": dependency.required,
+            "installed": installed,
+            "version": "Bundled" if installed else "",
+            "install_command": "",
+            "note": dependency.note,
+            "error": "" if installed else "Bundled ConPTY component is unavailable.",
+        }
     executable = shutil.which(dependency.command)
     installed = bool(executable)
     return {
@@ -58,6 +84,17 @@ def ensure_dependencies() -> dict[str, object]:
             results.append({**before, "changed": False, "ok": True, "log": ""})
             continue
         command = install_command(dependency)
+        if not command:
+            results.append(
+                {
+                    **before,
+                    "changed": False,
+                    "ok": False,
+                    "error": before.get("error") or "No automatic installer is available.",
+                    "log": "",
+                }
+            )
+            continue
         try:
             result = subprocess.run(
                 command,

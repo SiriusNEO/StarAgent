@@ -160,7 +160,7 @@ def test_node_pages_keep_navigation_and_actions_in_node_scope(monkeypatch) -> No
     assert 'data-update-apply-url="/api/nodes/worker/staragent-update/apply"' in node_root.text
     assert 'class="node-workspace-runtime"' in node_root.text
     assert sessions.status_code == 200
-    assert "Manage live tmux sessions on worker." in sessions.text
+    assert "Manage live Agent sessions on worker." in sessions.text
     assert "worker-only" in sessions.text
     assert 'aria-label="Sessions on worker"' in sessions.text
     assert 'href="/nodes/worker/sessions/worker-only"' in sessions.text

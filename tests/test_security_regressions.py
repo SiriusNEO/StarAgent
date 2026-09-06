@@ -48,6 +48,22 @@ def test_parse_client_message_rejects_invalid_json() -> None:
     assert parse_client_message(json.dumps(["input"])) == ("unknown", None)
 
 
+def test_runtime_identity_is_public_but_contains_no_secret(monkeypatch) -> None:
+    monkeypatch.setenv("STARAGENT_AUTH_TOKEN", "dashboard-secret")
+    monkeypatch.setenv("STARAGENT_DESKTOP_BUNDLED", "1")
+
+    response = TestClient(create_dashboard_app(mode="launcher")).get("/api/runtime")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "mode": "launcher",
+        "session_backend": "tmux",
+        "desktop_bundled": True,
+    }
+    assert "dashboard-secret" not in response.text
+
+
 def test_parse_client_message_rejects_oversized_input() -> None:
     message = json.dumps({"type": "input", "data": "x" * (65 * 1024)})
     assert parse_client_message(message) == ("unknown", None)

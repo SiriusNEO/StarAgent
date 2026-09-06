@@ -11,7 +11,7 @@ from staragent.pty_terminal import PtyTerminal, TerminalOutputFilter, parse_clie
 async def stream_pty_to_websocket(terminal: PtyTerminal, websocket: WebSocket) -> None:
     output_filter = TerminalOutputFilter()
     try:
-        while terminal.process.poll() is None:
+        while True:
             data = await terminal.read()
             if not data:
                 break

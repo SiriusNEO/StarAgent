@@ -14,7 +14,7 @@
 
 StarAgent 是一个 local-first 的 **Agent Harness Launcher**，同时也可以作为管理多个 Node 的 Hub。它来自我自己并行使用多个 agent 的实践：
 
-> **我们需要一个轻量的 tmux wrapper，用来管理 Codex / Claude Code，支持跨机器连接，并且能从任意设备访问。**
+> **我们需要一个轻量的持久终端 wrapper，用来管理 Codex / Claude Code，支持跨机器连接，并且能从任意设备访问。**
 
 ## 设计原则
 
@@ -26,7 +26,7 @@ StarAgent 围绕日常使用 coding agent 时最常见的几个需求构建：
 
 基于实际使用经验，StarAgent 采用了对这个工作流足够简单、有效的技术栈，让它像是在管理一个小型 coding agent 团队：
 
-- **tmux-first**。所有 coding agent CLI session 都运行在长期存在的 tmux session 里。为了保持一致，系统级后台服务也会表示为 tmux session。Session 模型见 [SESSIONS.md](SESSIONS.md)。
+- **使用平台原生的持久终端**。Windows Desktop 通过 ConPTY 承载 Session；Linux、macOS 与服务器 Node 继续使用长期存在的 tmux session。Session 模型见 [SESSIONS.md](SESSIONS.md)。
 
 - **通过 Tailscale 实现跨机器连接**。Tailscale 提供安全、统一的跨机器网络层。配置方式见 [tailscale/README.md](tailscale/README.md)。
 
@@ -54,7 +54,7 @@ Session 详情页左侧提供类似 IM 的会话切换栏，可以直接切换�
 
 ![展示 Codex、Claude Code 与 OpenCode 的 StarAgent Agents 页面](assets/demo-agents-anime.webp)
 
-**注意：** 这不会影响你手动 SSH 到服务器并 attach 到对应 tmux session 进行开发。Web 界面本质上只是 parser；服务器上的 tmux CLI session 始终是 ground truth。
+**注意：** 在 Linux/macOS Node 上，仍可手动 SSH 到服务器并 attach 对应 tmux session；Windows Desktop 则由内置 runtime 持有原生 ConPTY session。两种情况下，关闭浏览器或工作区页面都只是 detach，不会停止 Agent session。
 
 ## Launcher
 
@@ -74,9 +74,9 @@ Settings 和 Current Node 详情页与 Hub 中选中一个 Node 后看到的是�
 
 ## 桌面版
 
-项目现在提供基于 Tauri 的 Windows、Linux 与 macOS 桌面入口，可以启动本机 Launcher，
-也可以连接已有 Hub。Windows 本机模式通过 WSL2 运行，以继续复用现有 tmux/PTY Session
-模型。
+项目现在提供基于 Tauri 的 Windows、Linux 与 macOS 桌面应用，可以启动本机 Launcher，
+也可以连接已有 Hub。Windows 安装包内置 StarAgent Python runtime，并使用 Windows 原生
+ConPTY 承载终端与持久 Session；无需安装 WSL、Python 或 tmux。
 
 ### 下载预编译安装包
 
@@ -94,6 +94,10 @@ GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果�
 压缩包，说明它早于桌面版打包流程；请改用更新版本、CI Artifact，或使用上面的源码安装方式。
 `v0.1.1` 及更早版本不包含桌面安装包。
 
+支持 updater 的桌面版本会在启动时自动检查这个 Release 通道。发现新版后会展示已签名更新提示、
+版本号和 Release Notes，只有确认**更新并重启**后才开始安装。如果当前安装早于 updater 功能，需先
+手动安装一次首个支持自动更新的版本。
+
 也可以通过 [GitHub CLI](https://cli.github.com/) 下载同一份 Release 文件：
 
 ```bash
@@ -106,9 +110,11 @@ gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
 运行，在 **Artifacts** 中下载 `staragent-windows-x64`、`staragent-linux-x64` 或
 `staragent-macos-universal`。下载 Actions Artifact 需要登录 GitHub。
 
-目前这些安装包仍是未签名的预览构建，并且只包含桌面入口，不内置 tmux/Python runtime：连接
-已有 Hub 可以直接使用，本机 Launcher 模式仍需按 [DESKTOP.zh-CN.md](DESKTOP.zh-CN.md) 安装
-对应平台依赖。该文档也包含本机构建方式与签名状态。
+Release 的 updater 产物带有 Tauri 更新签名，但操作系统发行者签名仍待补充，因此仍可能出现“未知
+发行者”提示。Windows 本机模式已自包含；Codex、Claude Code 等 Agent Harness CLI 仍是按需组件，
+可直接在 Agents 页面选择官方源或国内镜像安装。Linux/macOS 本机模式仍使用系统中的 StarAgent
+CLI 与 tmux。运行时、自动更新、构建和签名细节见
+[DESKTOP.zh-CN.md](DESKTOP.zh-CN.md)。
 
 ## Hub
 

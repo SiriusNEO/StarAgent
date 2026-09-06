@@ -1,4 +1,4 @@
-import {invoke} from "@tauri-apps/api/core";
+import {Channel, invoke} from "@tauri-apps/api/core";
 import "./styles.css";
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8765";
@@ -8,12 +8,12 @@ const LANGUAGE_KEY = "staragent.desktop.language";
 const messages = {
   en: {
     desktopEdition: "Desktop",
-    eyebrow: "Native workspace gateway",
+    eyebrow: "Native agent workspace",
     title: "Open your agent workspace.",
     subtitle: "Launch StarAgent on this machine, or connect securely to an existing Hub.",
     localMode: "Local mode",
     localTitle: "This machine",
-    localDescription: "Start the single-Node Launcher and keep all sessions on this computer.",
+    localDescription: "Start the single-Node Launcher locally. Windows uses the bundled ConPTY runtime—no WSL required.",
     runtime: "Runtime",
     checking: "Checking local runtime…",
     strategy: "Strategy",
@@ -39,16 +39,31 @@ const messages = {
     runtimeCheckFailed: "Could not inspect the local runtime.",
     unknownError: "Something went wrong. Try again or open StarAgent from a terminal for details.",
     native: "Native",
-    wsl: "WSL2",
+    bundled: "Bundled native",
+    sessionBackend: "Session backend",
+    checkUpdates: "Check for desktop updates",
+    checkingUpdates: "Checking for updates…",
+    updateKicker: "Signed desktop update",
+    updateAvailable: "A new version is ready",
+    versionTransition: "StarAgent {current} → {next}",
+    updateRestartWarning: "The app will restart. Save work in local Sessions before updating.",
+    later: "Later",
+    updateAndRestart: "Update & restart",
+    preparingUpdate: "Preparing secure download…",
+    downloadingUpdate: "Downloading update…",
+    installingUpdate: "Verifying package and starting installer…",
+    upToDate: "StarAgent Desktop is up to date.",
+    updateCheckFailed: "Could not check for desktop updates.",
+    updateInstallFailed: "The desktop update could not be installed.",
   },
   zh: {
     desktopEdition: "桌面版",
-    eyebrow: "原生工作区入口",
+    eyebrow: "原生 Agent 工作区",
     title: "打开你的 Agent 工作区",
     subtitle: "在当前机器启动 StarAgent，或安全连接到已有 Hub。",
     localMode: "本机模式",
     localTitle: "当前机器",
-    localDescription: "启动单 Node Launcher，所有 Session 都保留在这台机器上。",
+    localDescription: "在本机启动单 Node Launcher；Windows 使用内置 ConPTY，无需 WSL。",
     runtime: "运行环境",
     checking: "正在检测本机运行环境…",
     strategy: "启动方式",
@@ -74,7 +89,22 @@ const messages = {
     runtimeCheckFailed: "无法检测本机运行环境。",
     unknownError: "发生了错误。请重试，或从 Terminal 启动 StarAgent 查看详情。",
     native: "本机",
-    wsl: "WSL2",
+    bundled: "内置原生运行时",
+    sessionBackend: "Session 后端",
+    checkUpdates: "检查桌面版更新",
+    checkingUpdates: "正在检查更新…",
+    updateKicker: "已签名的桌面版更新",
+    updateAvailable: "新版本已经准备好",
+    versionTransition: "StarAgent {current} → {next}",
+    updateRestartWarning: "更新会重启应用。请先保存本地 Session 中正在进行的工作。",
+    later: "稍后",
+    updateAndRestart: "更新并重启",
+    preparingUpdate: "正在准备安全下载…",
+    downloadingUpdate: "正在下载更新…",
+    installingUpdate: "正在验签并启动安装程序…",
+    upToDate: "StarAgent 桌面版已是最新版本。",
+    updateCheckFailed: "无法检查桌面版更新。",
+    updateInstallFailed: "桌面版更新安装失败。",
   },
 };
 
@@ -87,10 +117,10 @@ const elements = {
   launchLocal: document.querySelector("#launch-local"),
   strategyDot: document.querySelector("#strategy-dot"),
   strategyValue: document.querySelector("#strategy-value"),
-  staragentDot: document.querySelector("#staragent-dot"),
-  staragentValue: document.querySelector("#staragent-value"),
-  tmuxDot: document.querySelector("#tmux-dot"),
-  tmuxValue: document.querySelector("#tmux-value"),
+  runtimeDot: document.querySelector("#staragent-runtime-dot"),
+  runtimeValue: document.querySelector("#staragent-runtime-value"),
+  backendDot: document.querySelector("#session-backend-dot"),
+  backendValue: document.querySelector("#session-backend-value"),
   installHint: document.querySelector("#install-hint"),
   copyInstall: document.querySelector("#copy-install"),
   hubForm: document.querySelector("#hub-form"),
@@ -98,11 +128,26 @@ const elements = {
   connectHub: document.querySelector("#connect-hub"),
   messageBar: document.querySelector("#message-bar"),
   messageText: document.querySelector("#message-text"),
+  updateButton: document.querySelector("#desktop-update-button"),
+  desktopVersion: document.querySelector("#desktop-version"),
+  updatePanel: document.querySelector("#desktop-update-panel"),
+  updateVersion: document.querySelector("#desktop-update-version"),
+  updateNotes: document.querySelector("#desktop-update-notes"),
+  updateLater: document.querySelector("#desktop-update-later"),
+  updateLaterButton: document.querySelector("#desktop-update-later-button"),
+  updateInstall: document.querySelector("#desktop-update-install"),
+  updateProgress: document.querySelector("#desktop-update-progress"),
+  updateProgressBar: document.querySelector("#desktop-update-progress-bar"),
+  updateProgressText: document.querySelector("#desktop-update-progress-text"),
 };
 
 let language = localStorage.getItem(LANGUAGE_KEY)
   || (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 let environment = null;
+let desktopUpdate = null;
+let updateCheckInFlight = false;
+let pendingUpdateReady = false;
+let installingUpdate = false;
 
 function t(key) {
   return messages[language][key] || messages.en[key] || key;
@@ -118,7 +163,14 @@ function applyLanguage() {
     "aria-label",
     language === "zh" ? "Switch to English" : "切换到中文",
   );
+  elements.updateButton.setAttribute("aria-label", t("checkUpdates"));
+  elements.updateButton.title = t("checkUpdates");
+  elements.updateLater.setAttribute("aria-label", t("later"));
+  elements.updateLater.title = t("later");
   if (environment) renderEnvironment(environment);
+  if (desktopUpdate && !installingUpdate) {
+    renderDesktopUpdate(desktopUpdate, {reveal: false});
+  }
 }
 
 function setMessage(message, type = "info") {
@@ -142,20 +194,143 @@ function markAvailability(dot, available) {
   dot.dataset.available = available ? "true" : "false";
 }
 
+function interpolate(message, values) {
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replace(`{${key}}`, value),
+    message,
+  );
+}
+
+function renderDesktopUpdate(info, {reveal = true} = {}) {
+  desktopUpdate = info;
+  elements.desktopVersion.textContent = `v${info.currentVersion}`;
+  elements.updateButton.classList.toggle("has-update", info.available);
+  if (!info.available) {
+    elements.updatePanel.hidden = true;
+    return;
+  }
+
+  elements.updateVersion.textContent = interpolate(t("versionTransition"), {
+    current: info.currentVersion,
+    next: info.version,
+  });
+  elements.updateNotes.textContent = info.notes || "";
+  elements.updateNotes.hidden = !info.notes;
+  elements.updateProgress.hidden = true;
+  elements.updateProgress.classList.remove("is-indeterminate", "is-error");
+  elements.updateProgressBar.style.width = "0%";
+  elements.updateProgressText.textContent = "";
+  if (reveal) elements.updatePanel.hidden = false;
+}
+
+function setUpdateControlsDisabled(disabled) {
+  elements.updateButton.disabled = disabled;
+  elements.updateLater.disabled = disabled;
+  elements.updateLaterButton.disabled = disabled;
+  elements.updateInstall.disabled = disabled;
+}
+
+async function refreshDesktopUpdate({silent = false} = {}) {
+  if (updateCheckInFlight || installingUpdate) return;
+  updateCheckInFlight = true;
+  pendingUpdateReady = false;
+  elements.updateButton.classList.add("is-checking");
+  if (!silent) setMessage(t("checkingUpdates"));
+  try {
+    const info = await invoke("check_desktop_update");
+    pendingUpdateReady = info.available;
+    renderDesktopUpdate(info);
+    if (!info.available && !silent) setMessage(t("upToDate"), "success");
+  } catch (error) {
+    if (!silent) setMessage(`${t("updateCheckFailed")} ${String(error)}`, "error");
+  } finally {
+    updateCheckInFlight = false;
+    elements.updateButton.classList.remove("is-checking");
+  }
+}
+
+function dismissDesktopUpdate() {
+  if (installingUpdate) return;
+  elements.updatePanel.hidden = true;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateDownloadProgress(downloaded, total) {
+  elements.updateProgress.hidden = false;
+  if (total > 0) {
+    const percent = Math.min(100, Math.round((downloaded / total) * 100));
+    elements.updateProgress.classList.remove("is-indeterminate");
+    elements.updateProgressBar.style.width = `${percent}%`;
+    elements.updateProgressText.textContent = `${t("downloadingUpdate")} ${percent}%`;
+    return;
+  }
+  elements.updateProgress.classList.add("is-indeterminate");
+  elements.updateProgressText.textContent = `${t("downloadingUpdate")} ${formatBytes(downloaded)}`;
+}
+
+async function installDesktopUpdate() {
+  if (installingUpdate) return;
+  if (!pendingUpdateReady) {
+    await refreshDesktopUpdate();
+    return;
+  }
+
+  installingUpdate = true;
+  pendingUpdateReady = false;
+  setUpdateControlsDisabled(true);
+  elements.updatePanel.hidden = false;
+  elements.updateProgress.hidden = false;
+  elements.updateProgress.classList.add("is-indeterminate");
+  elements.updateProgress.classList.remove("is-error");
+  elements.updateProgressText.textContent = t("preparingUpdate");
+  let downloaded = 0;
+  let total = null;
+  const onEvent = new Channel((event) => {
+    if (event.event === "started") {
+      elements.updateProgressText.textContent = t("preparingUpdate");
+    } else if (event.event === "progress") {
+      downloaded += event.chunkLength;
+      total = event.contentLength || total;
+      updateDownloadProgress(downloaded, total);
+    } else if (event.event === "downloaded") {
+      elements.updateProgress.classList.remove("is-indeterminate");
+      elements.updateProgressBar.style.width = "100%";
+      elements.updateProgressText.textContent = t("installingUpdate");
+    }
+  });
+
+  try {
+    await invoke("install_desktop_update", {onEvent});
+  } catch (error) {
+    installingUpdate = false;
+    setUpdateControlsDisabled(false);
+    elements.updateProgress.classList.remove("is-indeterminate");
+    elements.updateProgress.classList.add("is-error");
+    elements.updateProgressText.textContent = t("updateInstallFailed");
+    setMessage(`${t("updateInstallFailed")} ${String(error)}`, "error");
+    await refreshDesktopUpdate({silent: true});
+  }
+}
+
 function renderEnvironment(info) {
   environment = info;
+  elements.desktopVersion.textContent = `v${info.desktopVersion}`;
   elements.runtimeLoading.hidden = true;
   elements.runtimeStatus.hidden = false;
 
-  const strategyAvailable = info.strategy === "native" || info.wslAvailable;
+  const strategyAvailable = info.strategy === "native" || info.strategy === "bundled";
   markAvailability(elements.strategyDot, strategyAvailable);
-  elements.strategyValue.textContent = info.strategy === "wsl" ? t("wsl") : t("native");
-  markAvailability(elements.staragentDot, info.staragentAvailable);
-  elements.staragentValue.textContent = info.staragentVersion || (info.staragentAvailable ? t("available") : t("unavailable"));
-  markAvailability(elements.tmuxDot, info.tmuxAvailable);
-  elements.tmuxValue.textContent = info.tmuxVersion || (info.tmuxAvailable ? t("available") : t("unavailable"));
+  elements.strategyValue.textContent = info.strategy === "bundled" ? t("bundled") : t("native");
+  markAvailability(elements.runtimeDot, info.runtimeAvailable);
+  elements.runtimeValue.textContent = info.runtimeVersion || (info.runtimeAvailable ? t("available") : t("unavailable"));
+  markAvailability(elements.backendDot, info.sessionBackendAvailable);
+  elements.backendValue.textContent = info.sessionBackend || (info.sessionBackendAvailable ? t("available") : t("unavailable"));
 
-  const ready = strategyAvailable && info.staragentAvailable && info.tmuxAvailable;
+  const ready = strategyAvailable && info.runtimeAvailable && info.sessionBackendAvailable;
   elements.launchLocal.disabled = !ready;
   elements.runtimeHelp.hidden = ready;
   elements.installHint.textContent = info.installHint || "";
@@ -222,6 +397,16 @@ elements.hubForm.addEventListener("submit", async (event) => {
 });
 
 elements.refreshRuntime.addEventListener("click", refreshEnvironment);
+elements.updateButton.addEventListener("click", () => {
+  if (desktopUpdate?.available && pendingUpdateReady) {
+    elements.updatePanel.hidden = false;
+    return;
+  }
+  refreshDesktopUpdate();
+});
+elements.updateLater.addEventListener("click", dismissDesktopUpdate);
+elements.updateLaterButton.addEventListener("click", dismissDesktopUpdate);
+elements.updateInstall.addEventListener("click", installDesktopUpdate);
 elements.languageButton.addEventListener("click", () => {
   language = language === "zh" ? "en" : "zh";
   localStorage.setItem(LANGUAGE_KEY, language);
@@ -239,3 +424,4 @@ elements.copyInstall.addEventListener("click", async () => {
 elements.hubEndpoint.value = localStorage.getItem(ENDPOINT_KEY) || "";
 applyLanguage();
 refreshEnvironment();
+refreshDesktopUpdate({silent: true});

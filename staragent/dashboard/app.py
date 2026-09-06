@@ -360,6 +360,15 @@ def register_auth_routes(app: FastAPI) -> None:
             request, "login.html", {"next": safe_next_path(next), "error": ""}
         )
 
+    @app.get("/api/runtime")
+    def runtime_info() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "mode": getattr(app.state, "dashboard_mode", "hub"),
+            "session_backend": "conpty" if os.name == "nt" else "tmux",
+            "desktop_bundled": os.environ.get("STARAGENT_DESKTOP_BUNDLED") == "1",
+        }
+
     @app.post("/login")
     async def login(request: Request):
         body = (await request.body()).decode("utf-8")
@@ -782,10 +791,10 @@ def register_terminal_routes(app: FastAPI) -> None:
     async def local_terminal_socket(websocket: WebSocket, name: str) -> None:
         await websocket.accept()
         if not tmux_session_exists(name):
-            await websocket.close(code=4404, reason=f"tmux session not found: {name}")
+            await websocket.close(code=4404, reason=f"session not found: {name}")
             return
 
-        terminal = PtyTerminal.attach_tmux(name)
+        terminal = PtyTerminal.attach_session(name)
         reader = asyncio.create_task(stream_pty_to_websocket(terminal, websocket))
         try:
             while True:
@@ -930,7 +939,7 @@ def register_sessions_routes(app: FastAPI) -> None:
                 node, "GET", f"/api/sessions/{urllib.parse.quote(name)}/output?lines={lines}"
             )
         if not tmux_session_exists(name):
-            raise HTTPException(status_code=404, detail=f"tmux session not found: {name}")
+            raise HTTPException(status_code=404, detail=f"session not found: {name}")
         return {"output": capture_tmux_pane_ansi(name, lines=lines)}
 
     @app.get("/api/sessions/{name}/transcript-state", deprecated=True)
@@ -1939,7 +1948,7 @@ def valid_token(value: str) -> bool:
 
 
 def is_public_path(path: str) -> bool:
-    return path == "/login" or path.startswith("/static/")
+    return path in {"/login", "/api/runtime"} or path.startswith("/static/")
 
 
 def add_static_cache_header(request: Request, response) -> None:
@@ -1995,8 +2004,8 @@ async def open_http_terminal(node: NodeEntry, name: str) -> HttpTerminal:
     if not node.is_local:
         raise RuntimeError("HTTP terminal fallback is only available for local nodes")
     if not tmux_session_exists(name):
-        raise ValueError(f"tmux session not found: {name}")
-    bridge.terminal = PtyTerminal.attach_tmux(name)
+        raise ValueError(f"session not found: {name}")
+    bridge.terminal = PtyTerminal.attach_session(name)
     bridge.reader = asyncio.create_task(stream_pty_to_queue(bridge.terminal, bridge.queue))
     return bridge
 
@@ -2004,7 +2013,7 @@ async def open_http_terminal(node: NodeEntry, name: str) -> HttpTerminal:
 async def stream_pty_to_queue(terminal: PtyTerminal, queue: asyncio.Queue[bytes | None]) -> None:
     output_filter = TerminalOutputFilter()
     try:
-        while terminal.process.poll() is None:
+        while True:
             data = await terminal.read()
             if not data:
                 break
@@ -2203,7 +2212,6 @@ def request_is_speculative_navigation(request: Request) -> bool:
 def session_response(request: Request, view) -> HTMLResponse:
     if not request_is_speculative_navigation(request):
         mark_hub_session_seen(view)
-    attach_command = tmux_attach_command(view)
     current_node = collect_node_navigation_view(dashboard_node_entry(view.node_id))
     sidebar_sessions = sorted(current_node.sessions, key=lambda item: item.name)
     return templates.TemplateResponse(
@@ -2212,8 +2220,7 @@ def session_response(request: Request, view) -> HTMLResponse:
         {
             "view": view,
             "relative_time": relative_time,
-            "attach_command": attach_command,
-            "tmux_commands": tmux_quick_commands(view),
+            "session_commands": session_quick_commands(view),
             "initial_token_usage": None,
             "sidebar_sessions": sidebar_sessions,
             "sidebar_session_count": len(sidebar_sessions),
@@ -3156,12 +3163,14 @@ def pending_chat_user_messages(
     return pending
 
 
-def tmux_attach_command(view) -> str:
-    session = view.config.session or view.name
-    return f"tmux attach -t {shlex.quote(session)}"
-
-
-def tmux_quick_commands(view) -> list[dict[str, str]]:
+def session_quick_commands(view) -> list[dict[str, str]]:
+    if view.backend == "ConPTY":
+        return [
+            {"label": "Backend", "command": "Windows ConPTY"},
+            {"label": "Attach", "command": "Open the Terminal panel below"},
+            {"label": "Detach", "command": "Close this view; the Session keeps running"},
+            {"label": "Stop", "command": "Use the Stop button above"},
+        ]
     session = view.config.session or view.name
     quoted_session = shlex.quote(session)
     return [

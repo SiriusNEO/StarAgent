@@ -68,7 +68,7 @@
           <span>{{ t("detail.from_shell") }}</span>
         </div>
         <div class="command tmux-command-box">
-          {% for item in tmux_commands %}
+          {% for item in session_commands %}
             <div class="tmux-help-row">
               <span>{{ item.label }}</span>
               <code>{{ item.command }}</code>
@@ -157,7 +157,7 @@
           <div class="terminal-status">
             <span class="terminal-connection-meta" aria-label="{{ t('detail.connection_method') }}">
               <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
-              <strong class="terminal-connection-value">PTY</strong>
+              <strong class="terminal-connection-value">{{ view.terminal_backend }}</strong>
               <span class="terminal-connection-divider" aria-hidden="true">·</span>
               <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
               <strong class="terminal-connection-value terminal-transport-value">WebSocket</strong>

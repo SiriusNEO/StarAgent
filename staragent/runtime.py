@@ -47,6 +47,16 @@ STARAGENT_MANAGED_OPTION = "@staragent.managed"
 STARAGENT_AGENT_OPTION = "@staragent.agent"
 
 
+def native_windows_sessions() -> bool:
+    return os.name == "nt"
+
+
+def native_registry():
+    from staragent.native_sessions import native_session_registry
+
+    return native_session_registry()
+
+
 def tmux_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("LD_LIBRARY_PATH", None)
@@ -66,7 +76,7 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
     statuses: dict[str, SessionStatus] = {}
     panes = tmux_active_panes()
     pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], lines)
-    process_tree = process_children()
+    process_tree = {} if native_windows_sessions() else process_children()
     git_cache: dict[str, tuple[str, list[str]]] = {}
     for session in sessions:
         name = str(session["name"])
@@ -92,7 +102,7 @@ def discover_local_tmux_navigation_statuses() -> dict[str, SessionStatus]:
     node = socket.gethostname()
     panes = tmux_active_panes()
     pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], 20)
-    process_tree = process_children()
+    process_tree = {} if native_windows_sessions() else process_children()
     adoptions = load_adoptions()
     statuses: dict[str, SessionStatus] = {}
     for session in sessions:
@@ -143,7 +153,7 @@ def discover_local_tmux_navigation_statuses() -> dict[str, SessionStatus]:
                 "needs_attention": status == "review",
                 "question": question,
                 "status_revision": lifecycle.lifecycle_id if lifecycle.final else "",
-                "source": "navigation",
+                "source": str(session.get("backend") or "navigation"),
                 "session_type": session_type,
                 "last_updated": updated.isoformat(),
             }
@@ -229,7 +239,7 @@ def local_tmux_status(
             "status_revision": lifecycle.lifecycle_id if lifecycle.final else "",
             "changed_files": changed_files,
             "recent_output": output,
-            "source": "adopted" if adopted else "tmux",
+            "source": "adopted" if adopted else str(session.get("backend") or "tmux"),
             "session_type": session_type,
             "last_updated": updated.isoformat(),
         }
@@ -237,6 +247,20 @@ def local_tmux_status(
 
 
 def list_tmux_sessions() -> list[dict[str, int | str]]:
+    if native_windows_sessions():
+        return [
+            {
+                "name": session.name,
+                "windows": 1,
+                "attached": session.subscriber_count,
+                "activity": session.activity,
+                "created": session.created,
+                "managed": "agent",
+                "managed_agent": session.agent,
+                "backend": "conpty",
+            }
+            for session in native_registry().list()
+        ]
     command = [
         "tmux",
         "list-sessions",
@@ -276,6 +300,11 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
 
 
 def capture_tmux_pane(session: str, lines: int = 80) -> str:
+    if native_windows_sessions():
+        native = native_registry().get(session)
+        if not native:
+            return ""
+        return strip_ansi(native.snapshot(lines).decode("utf-8", errors="replace")).strip()
     command = ["tmux", "capture-pane", "-t", session, "-p", "-S", f"-{lines}"]
     result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     if result.returncode != 0:
@@ -293,6 +322,11 @@ def capture_tmux_pane_tails(sessions: list[str], lines: int = 20) -> dict[str, s
 
 
 def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
+    if native_windows_sessions():
+        native = native_registry().get(session)
+        if not native:
+            return ""
+        return native.snapshot(lines).decode("utf-8", errors="replace").rstrip()
     command = ["tmux", "capture-pane", "-t", session, "-p", "-e", "-S", f"-{lines}"]
     result = run_tmux(command[1:], check=False, text=True, capture_output=True)
     if result.returncode != 0:
@@ -301,6 +335,8 @@ def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
 
 
 def tmux_session_exists(session: str) -> bool:
+    if native_windows_sessions():
+        return native_registry().exists(session)
     try:
         result = run_tmux(["has-session", "-t", session], check=False, capture_output=True)
     except FileNotFoundError:
@@ -312,7 +348,16 @@ def send_tmux_message(session: str, text: str) -> None:
     if not text.strip():
         raise ValueError("Message is empty")
     if not tmux_session_exists(session):
-        raise ValueError(f"tmux session not found: {session}")
+        raise ValueError(f"session not found: {session}")
+
+    if native_windows_sessions():
+        native = native_registry().get(session)
+        if not native:
+            raise ValueError(f"session not found: {session}")
+        native.write(text)
+        time.sleep(0.08)
+        native.write("\r")
+        return
 
     result = run_tmux(
         ["send-keys", "-t", session, "-l", text],
@@ -339,7 +384,14 @@ def send_tmux_input(session: str, data: str) -> None:
     if not data:
         return
     if not tmux_session_exists(session):
-        raise ValueError(f"tmux session not found: {session}")
+        raise ValueError(f"session not found: {session}")
+
+    if native_windows_sessions():
+        native = native_registry().get(session)
+        if not native:
+            raise ValueError(f"session not found: {session}")
+        native.write(data)
+        return
 
     literal: list[str] = []
     for token in terminal_input_tokens(data):
@@ -428,9 +480,24 @@ def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: boo
     if not command:
         raise ValueError("Command is empty")
     if tmux_session_exists(name):
-        raise ValueError(f"tmux session already exists: {name}")
+        raise ValueError(f"session already exists: {name}")
 
     agent = agent_from_worker_command(command)
+    if native_windows_sessions():
+        managed = managed_harness_environment(agent) if agent != "unknown" else {}
+        environment = {**os.environ, **managed}
+        try:
+            native_registry().create(
+                name,
+                str(cwd_path),
+                command,
+                agent=agent,
+                environment=environment,
+                keep_shell_on_exit=keep_shell_on_exit,
+            )
+        except OSError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return
     environment_args = tmux_session_environment_args(agent)
     result = run_tmux(
         [
@@ -514,6 +581,22 @@ def ensure_tmux_session(name: str, cwd: str, command: str) -> None:
         raise ValueError("Command is empty")
     if tmux_session_exists(name):
         return
+    if native_windows_sessions():
+        agent = agent_from_worker_command(command)
+        managed = managed_harness_environment(agent) if agent != "unknown" else {}
+        environment = {**os.environ, **managed}
+        try:
+            native_registry().create(
+                name,
+                str(cwd_path),
+                command,
+                agent=agent,
+                environment=environment,
+                keep_shell_on_exit=False,
+            )
+        except OSError as exc:
+            raise RuntimeError(str(exc)) from exc
+        return
     result = run_tmux(
         ["new-session", "-d", "-s", name, "-c", str(cwd_path), command],
         check=False,
@@ -532,7 +615,10 @@ def wait_for_tmux_session(name: str, interval: float = 2.0) -> None:
 
 def kill_tmux_session(session: str) -> None:
     if not tmux_session_exists(session):
-        raise ValueError(f"tmux session not found: {session}")
+        raise ValueError(f"session not found: {session}")
+    if native_windows_sessions():
+        native_registry().kill(session)
+        return
     result = run_tmux(
         ["kill-session", "-t", session],
         check=False,
@@ -545,6 +631,16 @@ def kill_tmux_session(session: str) -> None:
 
 
 def tmux_active_panes() -> dict[str, dict[str, str | int]]:
+    if native_windows_sessions():
+        return {
+            session.name: {
+                "current_command": native_session_command(session.command, session.agent),
+                "current_path": session.cwd,
+                "pane_pid": session.pid,
+                "window_name": "",
+            }
+            for session in native_registry().list()
+        }
     result = run_tmux(
         [
             "list-panes",
@@ -576,6 +672,16 @@ def tmux_active_panes() -> dict[str, dict[str, str | int]]:
 
 
 def tmux_active_pane(session: str) -> dict[str, str | int]:
+    if native_windows_sessions():
+        native = native_registry().get(session)
+        if not native:
+            return {}
+        return {
+            "current_command": native_session_command(native.command, native.agent),
+            "current_path": native.cwd,
+            "pane_pid": native.pid,
+            "window_name": "",
+        }
     command = [
         "tmux",
         "display-message",
@@ -597,6 +703,15 @@ def tmux_active_pane(session: str) -> dict[str, str | int]:
         "pane_pid": safe_int(pane_pid),
         "window_name": window_name,
     }
+
+
+def native_session_command(command: str, agent: str) -> str:
+    if agent and agent != "unknown":
+        return agent
+    try:
+        return Path(shlex.split(command, posix=False)[0]).stem
+    except (IndexError, ValueError):
+        return "powershell"
 
 
 def classify_session_status(
@@ -684,7 +799,11 @@ def tmux_summary(session: dict[str, int | str], pane: dict[str, str | int], outp
     last_line = next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
     command = pane.get("current_command") or "unknown"
     pid = pane.get("pane_pid") or "-"
-    base = f"{session['windows']} window(s), attached={session['attached']}, command={command}, pane_pid={pid}."
+    backend = str(session.get("backend") or "tmux")
+    base = (
+        f"backend={backend}, {session['windows']} window(s), attached={session['attached']}, "
+        f"command={command}, pane_pid={pid}."
+    )
     return f"{base} Last output: {last_line}" if last_line else base
 
 

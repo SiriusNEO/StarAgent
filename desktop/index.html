@@ -22,7 +22,10 @@
           </span>
         </a>
         <div class="header-actions">
-          <span class="version-chip">v0.1.1</span>
+          <button class="version-chip" id="desktop-update-button" type="button" aria-label="Check for desktop updates" title="Check for desktop updates">
+            <span class="update-indicator" aria-hidden="true"></span>
+            <span id="desktop-version">v…</span>
+          </button>
           <button class="language-button" id="language-button" type="button" aria-label="Switch language">中</button>
         </div>
       </header>
@@ -65,14 +68,14 @@
                   <strong id="strategy-value">—</strong>
                 </div>
                 <div class="runtime-row">
-                  <span class="status-dot" id="staragent-dot"></span>
-                  <span>StarAgent CLI</span>
-                  <strong id="staragent-value">—</strong>
+                  <span class="status-dot" id="staragent-runtime-dot"></span>
+                  <span>StarAgent Runtime</span>
+                  <strong id="staragent-runtime-value">—</strong>
                 </div>
                 <div class="runtime-row">
-                  <span class="status-dot" id="tmux-dot"></span>
-                  <span>tmux</span>
-                  <strong id="tmux-value">—</strong>
+                  <span class="status-dot" id="session-backend-dot"></span>
+                  <span data-i18n="sessionBackend">Session backend</span>
+                  <strong id="session-backend-value">—</strong>
                 </div>
               </div>
               <div class="runtime-help" id="runtime-help" hidden>
@@ -128,5 +131,36 @@
         </section>
       </main>
     </div>
+
+    <aside class="update-panel" id="desktop-update-panel" role="dialog" aria-labelledby="desktop-update-title" aria-live="polite" hidden>
+      <div class="update-panel-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5"></path><path d="M5 20h14"></path></svg>
+      </div>
+      <div class="update-panel-content">
+        <div class="update-panel-heading">
+          <div>
+            <span class="update-kicker" data-i18n="updateKicker">Signed desktop update</span>
+            <h2 id="desktop-update-title" data-i18n="updateAvailable">A new version is ready</h2>
+          </div>
+          <button class="update-close" id="desktop-update-later" type="button" aria-label="Later" title="Later">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>
+          </button>
+        </div>
+        <p class="update-version" id="desktop-update-version"></p>
+        <p class="update-notes" id="desktop-update-notes" hidden></p>
+        <p class="update-warning" data-i18n="updateRestartWarning">The app will restart. Save work in local Sessions before updating.</p>
+        <div class="update-progress" id="desktop-update-progress" hidden>
+          <div class="update-progress-track" aria-hidden="true"><span id="desktop-update-progress-bar"></span></div>
+          <span id="desktop-update-progress-text"></span>
+        </div>
+        <div class="update-actions">
+          <button class="update-later-button" id="desktop-update-later-button" type="button" data-i18n="later">Later</button>
+          <button class="update-install-button" id="desktop-update-install" type="button">
+            <span data-i18n="updateAndRestart">Update &amp; restart</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5"></path><path d="M5 20h14"></path></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
   </body>
 </html>

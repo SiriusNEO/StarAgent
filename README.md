@@ -14,7 +14,7 @@
 
 StarAgent is a local-first **Agent Harness Launcher** and an optional multi-Node Hub for managing coding agent sessions. It reflects my own best practices for using multiple agents:
 
-> **We just need a lightweight tmux wrapper for Codex / Claude Code that supports cross-machine connections and can be accessed from any of my devices.**
+> **We need a lightweight persistent terminal wrapper for Codex / Claude Code that supports cross-machine connections and can be accessed from any device.**
 
 ## Design Principles
 
@@ -26,7 +26,7 @@ It is built around a few practical needs that show up when using coding agents d
 
 Based on hands-on experience, StarAgent uses the simplest effective stack for this workflow, making it feel like managing a small team of coding agents:
 
-- **tmux-first**. All coding agent CLI sessions run inside long-lived tmux sessions. For consistency, system-level background services are also represented as tmux sessions. See [SESSIONS.md](SESSIONS.md) for the session model.
+- **Platform-native persistent terminals**. Windows Desktop hosts sessions with ConPTY; Linux, macOS, and server Nodes use long-lived tmux sessions. See [SESSIONS.md](SESSIONS.md) for the session model.
 
 - **Cross-machine connectivity via Tailscale**. Tailscale provides a secure and unified network layer across machines. See [tailscale/README.md](tailscale/README.md) for the Tailscale setup.
 
@@ -54,7 +54,7 @@ Inspect Agent CLI availability, login state, update paths, and launch presets on
 
 ![StarAgent Agents dashboard with Codex, Claude Code, and OpenCode](assets/demo-agents-anime.webp)
 
-**NOTICE:** None of this gets in the way of manually SSHing into the server and attaching to the corresponding tmux session for development. The web interface is implemented entirely as a parser — the tmux CLI sessions on the server are always the ground truth.
+**NOTICE:** On Linux/macOS Nodes, none of this gets in the way of SSHing into the server and attaching to the corresponding tmux session. On Windows Desktop, the bundled runtime owns the native ConPTY session. In both cases, closing a browser or workspace view only detaches the view; it does not stop the Agent session.
 
 ## Launcher
 
@@ -74,9 +74,10 @@ Sessions, Logs, Settings, and Current Node details use the same views as a Node 
 
 ## Desktop
 
-A Tauri desktop gateway is available for Windows, Linux, and macOS. It can start the local Launcher or
-connect to an existing Hub; Windows local mode uses WSL2 so the existing tmux/PTY session model remains
-unchanged.
+A Tauri desktop app is available for Windows, Linux, and macOS. It can start the local Launcher or
+connect to an existing Hub. The Windows package includes the StarAgent Python runtime and uses the
+native Windows ConPTY backend for terminals and persistent Sessions—WSL, Python, and tmux are not
+required.
 
 ### Download a prebuilt package
 
@@ -94,6 +95,11 @@ Do not confuse GitHub's automatically generated **Source code** archives with de
 a release contains only those archives, it predates desktop packaging; use a newer release, a CI
 artifact, or the source installation above. `v0.1.1` and earlier do not contain desktop installers.
 
+Updater-enabled desktop releases check this channel automatically at startup. A signed update prompt
+shows the new version and release notes; installation only starts after you confirm **Update &
+restart**. If your current installation predates the updater, install the first updater-enabled release
+manually once.
+
 The same files can be downloaded with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
@@ -107,10 +113,11 @@ successful run, and download `staragent-windows-x64`, `staragent-linux-x64`, or
 `staragent-macos-universal` under **Artifacts**. GitHub requires sign-in to download workflow
 artifacts.
 
-These packages are currently unsigned preview builds. They provide the desktop gateway, not a bundled
-tmux/Python runtime: connecting to an existing Hub works directly, while local Launcher mode still
-needs the platform prerequisites in [DESKTOP.md](DESKTOP.md). That document also covers native builds
-and signing status.
+Release updater payloads carry a Tauri update signature, while operating-system publisher signing is
+still pending and may show an unknown-publisher warning. Windows local mode is self-contained; Agent
+Harness CLIs such as Codex or Claude Code remain optional and can be installed from the Agents page.
+Linux and macOS local mode still use the system StarAgent CLI and tmux. See
+[DESKTOP.md](DESKTOP.md) for runtime details, updates, native builds, and signing status.
 
 ## Hub
 

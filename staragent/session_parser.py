@@ -8,7 +8,7 @@ from staragent.transcript import TokenUsage, TranscriptState, parse_transcript
 
 def tmux_transcript_state(session: str, lines: int = 500) -> TranscriptState:
     if not tmux_session_exists(session):
-        raise ValueError(f"tmux session not found: {session}")
+        raise ValueError(f"session not found: {session}")
     output = strip_ansi(capture_tmux_pane_ansi(session, lines=max(20, min(lines, 500))))
     adopted = adopted_session(session)
     if adopted:

@@ -8,10 +8,14 @@ on:
     branches: [main, dev]
     paths:
       - "desktop/**"
+      - "staragent/**"
+      - "pyproject.toml"
       - ".github/workflows/desktop.yml"
   pull_request:
     paths:
       - "desktop/**"
+      - "staragent/**"
+      - "pyproject.toml"
       - ".github/workflows/desktop.yml"
 
 permissions:
@@ -48,6 +52,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -64,6 +72,63 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
 
+      - name: Build bundled Windows runtime
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pyinstaller
+          python desktop/scripts/smoke_windows_conpty.py
+          & desktop/scripts/build-windows-runtime.ps1 -TargetTriple x86_64-pc-windows-msvc
+
+      - name: Smoke test bundled Windows runtime
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $runtime = Start-Process -FilePath "desktop/src-tauri/binaries/staragent-runtime-x86_64-pc-windows-msvc.exe" -ArgumentList "--host", "127.0.0.1", "--port", "18765", "--mode", "launcher" -PassThru
+          $sessionCreated = $false
+          try {
+            $ready = $false
+            foreach ($attempt in 1..60) {
+              try {
+                $identity = Invoke-RestMethod "http://127.0.0.1:18765/api/runtime" -TimeoutSec 1
+                if ($identity.status -eq "ok" -and $identity.session_backend -eq "conpty" -and $identity.desktop_bundled) {
+                  $ready = $true
+                  break
+                }
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) { throw "Bundled runtime did not become ready." }
+
+            $body = @{
+              node = "local"
+              name = "windows-native-smoke"
+              cwd = $env:RUNNER_TEMP
+              command = "Write-Output packaged-conpty-ready"
+            } | ConvertTo-Json
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:18765/api/workers" -ContentType "application/json" -Body $body | Out-Null
+            $sessionCreated = $true
+
+            $terminalReady = $false
+            foreach ($attempt in 1..40) {
+              $capture = Invoke-RestMethod "http://127.0.0.1:18765/api/sessions/windows-native-smoke/output?lines=80" -TimeoutSec 1
+              if ($capture.output -match "packaged-conpty-ready") {
+                $terminalReady = $true
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if (-not $terminalReady) { throw "Bundled runtime did not produce ConPTY Session output." }
+          } finally {
+            if ($sessionCreated) {
+              try {
+                Invoke-RestMethod -Method Delete "http://127.0.0.1:18765/api/nodes/local/sessions/windows-native-smoke" -TimeoutSec 2 | Out-Null
+              } catch {}
+            }
+            taskkill /PID $runtime.Id /T /F 2>$null | Out-Null
+          }
+
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
@@ -72,16 +137,22 @@ jobs:
         working-directory: desktop
         run: npm run check
 
+      - name: Verify release version
+        if: github.event_name == 'release'
+        run: python desktop/scripts/check_release_version.py "${{ github.event.release.tag_name }}"
+
       - name: Test desktop core
         if: matrix.os == 'ubuntu-22.04'
         working-directory: desktop/src-tauri
         run: cargo test
 
       - name: Build native bundles
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           projectPath: desktop
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ github.event_name == 'release' && '--config src-tauri/tauri.updater.conf.json' || '' }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v4
@@ -91,10 +162,12 @@ jobs:
           path: |
             desktop/src-tauri/target/**/release/bundle/**/*.AppImage
             desktop/src-tauri/target/**/release/bundle/**/*.deb
+            desktop/src-tauri/target/**/release/bundle/**/*.rpm
             desktop/src-tauri/target/**/release/bundle/**/*.dmg
             desktop/src-tauri/target/**/release/bundle/**/*.app.tar.gz
             desktop/src-tauri/target/**/release/bundle/**/*-setup.exe
             desktop/src-tauri/target/**/release/bundle/**/*.msi
+            desktop/src-tauri/target/**/release/bundle/**/*.sig
 
   publish:
     name: Attach installers to release
@@ -105,12 +178,31 @@ jobs:
       actions: read
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Download installer artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: staragent-*
           path: release-assets
           merge-multiple: true
+
+      - name: Build signed updater manifest
+        env:
+          RELEASE_NOTES: ${{ github.event.release.body }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PUBLISHED_AT: ${{ github.event.release.published_at }}
+        run: |
+          python desktop/scripts/build_updater_manifest.py \
+            --asset-dir release-assets \
+            --output release-assets/latest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG" \
+            --published-at "$RELEASE_PUBLISHED_AT"
 
       - name: Upload installer assets
         env:
@@ -122,10 +214,13 @@ jobs:
             find release-assets -type f \( \
               -name '*.AppImage' -o \
               -name '*.deb' -o \
+              -name '*.rpm' -o \
               -name '*.dmg' -o \
               -name '*.app.tar.gz' -o \
               -name '*-setup.exe' -o \
-              -name '*.msi' \
+              -name '*.msi' -o \
+              -name '*.sig' -o \
+              -name 'latest.json' \
             \) -print0
           )
           if (( ${#assets[@]} == 0 )); then
