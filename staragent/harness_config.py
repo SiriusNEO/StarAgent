@@ -120,6 +120,10 @@ def harness_process_environment(
 ) -> dict[str, str]:
     environment = dict(os.environ if base is None else base)
     environment.update(managed_harness_environment(agent))
+    if os.name == "nt":
+        from staragent.windows import augmented_windows_path
+
+        environment["PATH"] = augmented_windows_path(environment)
     return environment
 
 

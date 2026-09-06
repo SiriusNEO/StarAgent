@@ -99,6 +99,13 @@ button { color: inherit; }
 .brand-copy span { margin-top: 4px; color: var(--soft); font-size: 10px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
 
 .header-actions { display: flex; align-items: center; gap: 9px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.update-channel-control { position: relative; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(255, 255, 255, 0.58); transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
+.update-channel-control > svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.update-channel-control select { max-width: 72px; border: 0; outline: 0; color: inherit; background: transparent; cursor: pointer; font: 750 10px/1 system-ui, sans-serif; }
+.update-channel-control select:disabled { cursor: wait; opacity: .65; }
+.update-channel-control:focus-within { border-color: rgba(49,94,251,.34); box-shadow: 0 0 0 3px rgba(49,94,251,.08); }
+.update-channel-control[data-channel="nightly"] { border-color: rgba(108, 92, 231, .24); color: #5547c8; background: rgba(241, 239, 255, .8); }
 .version-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(255, 255, 255, 0.58); cursor: pointer; font: 600 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
 .version-chip:hover { border-color: rgba(49,94,251,.25); color: var(--blue-dark); background: rgba(255,255,255,.9); }
 .version-chip:disabled { cursor: wait; opacity: .7; }
@@ -230,7 +237,8 @@ main { padding-top: clamp(30px, 4vh, 48px); }
 
 @media (max-width: 430px) {
   .app-shell { width: calc(100% - 20px); }
-  .version-chip { display: none; }
+  .update-channel-control > svg, .version-chip { display: none; }
+  .update-channel-control { padding-inline: 7px; }
   .workspace-card { min-height: 0; padding: 21px; }
   .runtime-panel { min-height: 126px; }
   .hub-form { min-height: 180px; }
@@ -248,7 +256,7 @@ main { padding-top: clamp(30px, 4vh, 48px); }
 @media (prefers-color-scheme: dark) {
   :root { color: #e7ebff; background: #101426; --ink: #e7ebff; --muted: #a5aec7; --soft: #7f8aa7; --line: rgba(173,188,234,.13); --surface: rgba(25,31,54,.88); --surface-strong: rgba(29,36,62,.96); --shadow: 0 28px 80px rgba(0,0,0,.3); }
   body { background: radial-gradient(circle at 10% 0%, rgba(50,77,168,.22), transparent 32rem), radial-gradient(circle at 90% 90%, rgba(38,115,128,.16), transparent 30rem), #111526; }
-  .brand-mark, .language-button, .version-chip { background: rgba(30,37,64,.8); }
+  .brand-mark, .language-button, .version-chip, .update-channel-control { background: rgba(30,37,64,.8); }
   .hero h1 { color: #f2f4ff; }
   .workspace-card { border-color: rgba(166,181,230,.1); }
   .hub-card { background: rgba(20,26,47,.82); }
@@ -261,6 +269,7 @@ main { padding-top: clamp(30px, 4vh, 48px); }
   .trust-note strong { color: #a9b6d8; }
   .version-chip:hover { color: #c6d2ff; background: rgba(39,48,79,.95); }
   .version-chip.has-update { color: #c7d3ff; background: rgba(48,68,128,.55); }
+  .update-channel-control[data-channel="nightly"] { color: #c7c0ff; background: rgba(79, 65, 160, .34); }
   .update-panel { border-color: rgba(174,190,239,.14); background: rgba(24,31,54,.95); box-shadow: 0 26px 75px rgba(0,0,0,.42); }
   .update-version { color: #c0cbec; }
   .update-close:hover, .update-later-button:hover { color: #e7ebff; background: rgba(112,137,217,.1); }

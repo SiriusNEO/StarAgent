@@ -4,6 +4,7 @@ import "./styles.css";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8765";
 const ENDPOINT_KEY = "staragent.desktop.hubEndpoint";
 const LANGUAGE_KEY = "staragent.desktop.language";
+const UPDATE_CHANNEL_KEY = "staragent.desktop.updateChannel";
 
 const messages = {
   en: {
@@ -41,9 +42,13 @@ const messages = {
     native: "Native",
     bundled: "Bundled native",
     sessionBackend: "Session backend",
+    updateChannel: "Update channel",
+    stableChannel: "Stable",
+    nightlyChannel: "Nightly",
     checkUpdates: "Check for desktop updates",
     checkingUpdates: "Checking for updates…",
-    updateKicker: "Signed desktop update",
+    stableUpdateKicker: "Signed stable update",
+    nightlyUpdateKicker: "Signed Nightly update",
     updateAvailable: "A new version is ready",
     versionTransition: "StarAgent {current} → {next}",
     updateRestartWarning: "The app will restart. Save work in local Sessions before updating.",
@@ -52,7 +57,7 @@ const messages = {
     preparingUpdate: "Preparing secure download…",
     downloadingUpdate: "Downloading update…",
     installingUpdate: "Verifying package and starting installer…",
-    upToDate: "StarAgent Desktop is up to date.",
+    upToDate: "The {channel} channel is up to date.",
     updateCheckFailed: "Could not check for desktop updates.",
     updateInstallFailed: "The desktop update could not be installed.",
   },
@@ -91,9 +96,13 @@ const messages = {
     native: "本机",
     bundled: "内置原生运行时",
     sessionBackend: "Session 后端",
+    updateChannel: "更新通道",
+    stableChannel: "稳定版",
+    nightlyChannel: "Nightly",
     checkUpdates: "检查桌面版更新",
     checkingUpdates: "正在检查更新…",
-    updateKicker: "已签名的桌面版更新",
+    stableUpdateKicker: "已签名的稳定版更新",
+    nightlyUpdateKicker: "已签名的 Nightly 更新",
     updateAvailable: "新版本已经准备好",
     versionTransition: "StarAgent {current} → {next}",
     updateRestartWarning: "更新会重启应用。请先保存本地 Session 中正在进行的工作。",
@@ -102,7 +111,7 @@ const messages = {
     preparingUpdate: "正在准备安全下载…",
     downloadingUpdate: "正在下载更新…",
     installingUpdate: "正在验签并启动安装程序…",
-    upToDate: "StarAgent 桌面版已是最新版本。",
+    upToDate: "{channel} 通道已是最新版本。",
     updateCheckFailed: "无法检查桌面版更新。",
     updateInstallFailed: "桌面版更新安装失败。",
   },
@@ -129,8 +138,11 @@ const elements = {
   messageBar: document.querySelector("#message-bar"),
   messageText: document.querySelector("#message-text"),
   updateButton: document.querySelector("#desktop-update-button"),
+  updateChannelControl: document.querySelector("#desktop-update-channel-control"),
+  updateChannel: document.querySelector("#desktop-update-channel"),
   desktopVersion: document.querySelector("#desktop-version"),
   updatePanel: document.querySelector("#desktop-update-panel"),
+  updateKicker: document.querySelector("#desktop-update-kicker"),
   updateVersion: document.querySelector("#desktop-update-version"),
   updateNotes: document.querySelector("#desktop-update-notes"),
   updateLater: document.querySelector("#desktop-update-later"),
@@ -145,12 +157,44 @@ let language = localStorage.getItem(LANGUAGE_KEY)
   || (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 let environment = null;
 let desktopUpdate = null;
+let updateChannel = "stable";
 let updateCheckInFlight = false;
 let pendingUpdateReady = false;
 let installingUpdate = false;
 
 function t(key) {
   return messages[language][key] || messages.en[key] || key;
+}
+
+function normalizedUpdateChannel(value) {
+  return value === "nightly" ? "nightly" : value === "stable" ? "stable" : "";
+}
+
+function updateChannelLabel(channel = updateChannel) {
+  return t(channel === "nightly" ? "nightlyChannel" : "stableChannel");
+}
+
+function compactCommit(commit) {
+  return typeof commit === "string" && commit.length >= 7 ? commit.slice(0, 7) : "";
+}
+
+function versionLabel(version, commit) {
+  return `v${versionDetail(version, commit)}`;
+}
+
+function versionDetail(version, commit) {
+  const shortCommit = compactCommit(commit);
+  return shortCommit ? `${version} · ${shortCommit}` : version;
+}
+
+function renderUpdateChannel() {
+  elements.updateChannel.value = updateChannel;
+  elements.updateChannelControl.dataset.channel = updateChannel;
+  elements.updateChannelControl.title = t("updateChannel");
+  elements.updateChannel.setAttribute("aria-label", t("updateChannel"));
+  elements.updateKicker.textContent = t(
+    updateChannel === "nightly" ? "nightlyUpdateKicker" : "stableUpdateKicker",
+  );
 }
 
 function applyLanguage() {
@@ -167,6 +211,7 @@ function applyLanguage() {
   elements.updateButton.title = t("checkUpdates");
   elements.updateLater.setAttribute("aria-label", t("later"));
   elements.updateLater.title = t("later");
+  renderUpdateChannel();
   if (environment) renderEnvironment(environment);
   if (desktopUpdate && !installingUpdate) {
     renderDesktopUpdate(desktopUpdate, {reveal: false});
@@ -203,7 +248,13 @@ function interpolate(message, values) {
 
 function renderDesktopUpdate(info, {reveal = true} = {}) {
   desktopUpdate = info;
-  elements.desktopVersion.textContent = `v${info.currentVersion}`;
+  elements.desktopVersion.textContent = versionLabel(
+    info.currentVersion,
+    environment?.buildCommit,
+  );
+  elements.updateKicker.textContent = t(
+    info.channel === "nightly" ? "nightlyUpdateKicker" : "stableUpdateKicker",
+  );
   elements.updateButton.classList.toggle("has-update", info.available);
   if (!info.available) {
     elements.updatePanel.hidden = true;
@@ -212,7 +263,7 @@ function renderDesktopUpdate(info, {reveal = true} = {}) {
 
   elements.updateVersion.textContent = interpolate(t("versionTransition"), {
     current: info.currentVersion,
-    next: info.version,
+    next: versionDetail(info.version, info.commit),
   });
   elements.updateNotes.textContent = info.notes || "";
   elements.updateNotes.hidden = !info.notes;
@@ -228,24 +279,29 @@ function setUpdateControlsDisabled(disabled) {
   elements.updateLater.disabled = disabled;
   elements.updateLaterButton.disabled = disabled;
   elements.updateInstall.disabled = disabled;
+  elements.updateChannel.disabled = disabled;
 }
 
 async function refreshDesktopUpdate({silent = false} = {}) {
   if (updateCheckInFlight || installingUpdate) return;
   updateCheckInFlight = true;
   pendingUpdateReady = false;
+  elements.updateChannel.disabled = true;
   elements.updateButton.classList.add("is-checking");
   if (!silent) setMessage(t("checkingUpdates"));
   try {
-    const info = await invoke("check_desktop_update");
+    const info = await invoke("check_desktop_update", {channel: updateChannel});
     pendingUpdateReady = info.available;
     renderDesktopUpdate(info);
-    if (!info.available && !silent) setMessage(t("upToDate"), "success");
+    if (!info.available && !silent) {
+      setMessage(interpolate(t("upToDate"), {channel: updateChannelLabel()}), "success");
+    }
   } catch (error) {
     if (!silent) setMessage(`${t("updateCheckFailed")} ${String(error)}`, "error");
   } finally {
     updateCheckInFlight = false;
     elements.updateButton.classList.remove("is-checking");
+    if (!installingUpdate) elements.updateChannel.disabled = false;
   }
 }
 
@@ -318,7 +374,7 @@ async function installDesktopUpdate() {
 
 function renderEnvironment(info) {
   environment = info;
-  elements.desktopVersion.textContent = `v${info.desktopVersion}`;
+  elements.desktopVersion.textContent = versionLabel(info.desktopVersion, info.buildCommit);
   elements.runtimeLoading.hidden = true;
   elements.runtimeStatus.hidden = false;
 
@@ -397,6 +453,16 @@ elements.hubForm.addEventListener("submit", async (event) => {
 });
 
 elements.refreshRuntime.addEventListener("click", refreshEnvironment);
+elements.updateChannel.addEventListener("change", () => {
+  updateChannel = normalizedUpdateChannel(elements.updateChannel.value) || "stable";
+  localStorage.setItem(UPDATE_CHANNEL_KEY, updateChannel);
+  pendingUpdateReady = false;
+  desktopUpdate = null;
+  elements.updatePanel.hidden = true;
+  elements.updateButton.classList.remove("has-update");
+  renderUpdateChannel();
+  refreshDesktopUpdate();
+});
 elements.updateButton.addEventListener("click", () => {
   if (desktopUpdate?.available && pendingUpdateReady) {
     elements.updatePanel.hidden = false;
@@ -422,6 +488,16 @@ elements.copyInstall.addEventListener("click", async () => {
 });
 
 elements.hubEndpoint.value = localStorage.getItem(ENDPOINT_KEY) || "";
-applyLanguage();
-refreshEnvironment();
-refreshDesktopUpdate({silent: true});
+
+async function initialize() {
+  applyLanguage();
+  await refreshEnvironment();
+  const storedChannel = normalizedUpdateChannel(localStorage.getItem(UPDATE_CHANNEL_KEY));
+  updateChannel = storedChannel
+    || (environment?.desktopVersion?.includes("-") ? "nightly" : "stable");
+  renderUpdateChannel();
+  elements.updateChannel.disabled = false;
+  await refreshDesktopUpdate({silent: true});
+}
+
+initialize();

@@ -48,8 +48,12 @@ There is no `wsl.exe` invocation. The app never accepts a runtime command from t
 
 Windows local mode requires a supported Windows installation with WebView2. StarAgent, Python,
 pywinpty, and the Dashboard assets are included in the installer; WSL and tmux are not used. Coding
-Harness CLIs are intentionally separate and can be installed from the Agents page using an official
-npm registry or one of the China-friendly mirrors.
+Harness CLIs are intentionally separate and can be installed with one click from the Agents page.
+Codex and Claude Code use their official native PowerShell installers. OpenCode is downloaded as its
+official Windows executable, verified against the SHA-256 digest published by GitHub, and installed
+in the user's `.opencode\bin` directory. These recommended routes do not install Node.js or npm.
+npmjs, npmmirror, and Tencent Cloud remain clearly labeled fallbacks for users who already have npm;
+their registry argument applies only to that command.
 
 Linux and macOS local mode require StarAgent and tmux before opening the desktop app.
 
@@ -75,23 +79,36 @@ command when a system runtime is missing. On macOS and Linux it resolves the use
 
 ## Automatic updates
 
-The desktop app checks the latest GitHub Release once at startup. When a newer SemVer release is
-available, the connection window shows its version and release notes without interrupting the user.
-The version chip can also run a manual check. Installation always requires confirmation: after the
-user selects **Update & restart**, the app reports download progress, verifies the package signature,
-installs the bundle matching the current package type, and relaunches.
+The connection window has a persistent **Stable / Nightly** update selector beside the version chip.
+Stable follows the latest normal GitHub Release. Nightly follows a rolling prerelease built from each
+relevant `dev` commit; every build receives a monotonic version such as `0.1.3-dev.142` and embeds
+the full source commit. Prerelease installations default to Nightly, while normal releases default to
+Stable. Selecting another channel immediately checks it and remembers the choice on this machine.
+
+The app also checks the selected channel once at startup. When a newer SemVer build is available, the
+connection window shows its version, short commit, and release notes without interrupting the user.
+The version chip can run a manual check. Installation always requires confirmation: after the user
+selects **Update & restart**, the app reports download progress, verifies the package signature,
+installs the bundle matching the current package type, and relaunches. Switching channels never forces
+a downgrade; after moving from an ahead-of-Stable Nightly, Stable becomes available when its SemVer
+catches up.
 
 Updating stops the Launcher runtime owned by the desktop app. Save work in a running local Session
 before confirming an update—especially on Windows, where those Sessions live inside the bundled
 runtime. Merely dismissing or postponing the update does not stop anything.
 
-Release packages are verified with Tauri's updater signature before installation. This signature is
-separate from operating-system publisher trust such as Windows Authenticode and Apple notarization.
-The Dashboard WebView cannot invoke update commands; only the bundled connection window has the
-desktop capability.
+Stable and Nightly packages are verified with the same Tauri updater public key before installation.
+The app accepts only two compiled-in manifest endpoints, so the WebView cannot supply an arbitrary
+update server. Each rolling Nightly manifest is uploaded after its uniquely named packages and carries
+the full source commit; this prevents a package/signature mismatch while the release is replaced.
+Tauri's signature is separate from operating-system publisher trust such as Windows Authenticode and
+Apple notarization. The Dashboard WebView cannot invoke update commands; only the bundled connection
+window has the desktop capability.
 
 Existing installs that predate the updater must install the first updater-enabled desktop release
-manually. Updates after that release use the in-app channel.
+manually. Builds that have the original Stable-only updater but predate the channel selector likewise
+need one manual channel-aware installer (or the next Stable bridge release) before they can opt into
+Nightly. Updates after that use the selected in-app channel.
 
 ## Develop and build
 
@@ -127,12 +144,13 @@ Installers are written below `desktop/src-tauri/target/*/release/bundle/`. Insta
 on the target operating system; in particular, MSI/NSIS and DMG tooling are platform-specific.
 
 The `Desktop` GitHub Actions workflow builds Linux x64, Windows x64, and a universal macOS binary. It
-runs for desktop pull requests, `dev`/`main` pushes, published GitHub Releases, or manual dispatch,
-and uploads each installer set as a workflow artifact. For a published Release, it signs each updater
-payload, attaches installers and signatures to that Release's **Assets**, and generates `latest.json`
-for the in-app channel. The manifest has bundle-specific entries, so `.deb`, AppImage, NSIS, MSI, and
-macOS clients do not receive an incompatible package. Development artifacts remain available from the
-individual workflow run and require a signed-in GitHub account to download.
+runs for desktop pull requests, `dev`/`main` pushes, published versioned GitHub Releases, or manual
+dispatch, and uploads each installer set as a workflow artifact. A versioned Release signs and
+publishes the Stable assets and manifest. A relevant `dev` push derives one synchronized Nightly
+version for Python, npm, Cargo, and Tauri, signs the updater payloads, and atomically refreshes the
+rolling `nightly` prerelease. The manifest has bundle-specific entries, so `.deb`, AppImage, NSIS,
+MSI, and macOS clients do not receive an incompatible package. Workflow artifacts remain available
+from the individual run and require a signed-in GitHub account to download.
 
 Release builds require the repository secret `TAURI_SIGNING_PRIVATE_KEY`. The corresponding public key
 is committed in `tauri.conf.json`; the private key must never be committed and must be backed up

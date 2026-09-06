@@ -67,7 +67,8 @@ def harness_terminal_argv(name: str) -> list[str]:
 
 def codex_login_argv() -> list[str]:
     spec = agent_tool_spec("codex")
-    executable = shutil.which(spec.command) if spec else None
+    environment = harness_process_environment("codex")
+    executable = shutil.which(spec.command, path=environment.get("PATH")) if spec else None
     if not executable:
         raise OSError("Codex is not installed in the Node service PATH.")
     return [executable, "login", "--device-auth"]

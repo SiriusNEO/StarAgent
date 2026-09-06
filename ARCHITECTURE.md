@@ -72,7 +72,11 @@ persistent tmux Session.
 Missing Harnesses expose a normalized catalog of reviewed install options: official native and npm
 routes plus npmmirror and Tencent Cloud npm routes for China. The browser sends only an option ID.
 Each Node resolves that ID back to fixed argv or a fixed official HTTPS installer before execution;
-per-command registry arguments do not mutate npm's global configuration.
+per-command registry arguments do not mutate npm's global configuration. Windows recommends the
+official native PowerShell installers for Codex and Claude Code. OpenCode is installed directly from
+its official Windows Release archive after StarAgent validates the asset metadata, size, redirect
+host, archive layout, and GitHub SHA-256 digest. npm routes remain explicit fallbacks and require an
+existing npm; StarAgent does not install or embed a second package manager.
 
 ## Data Flow
 
@@ -152,9 +156,12 @@ results on the Node and expose reviewed install or update options without execut
 or update begins only after a separate authenticated POST and user confirmation. The Node resolves a
 fixed install option or derives an update argv from the detected installation source, then executes it
 without a shell or interactive stdin. Official native installers are bounded downloads from fixed
-HTTPS hosts and run from temporary files. Per-Agent locks reject duplicate maintenance operations;
-output is bounded and redacted, results are normalized at the Hub boundary, and success or failure is
-written to the centralized log without command output. Login probes use
+HTTPS hosts and run from temporary files. Windows `.cmd` launchers are resolved explicitly and run
+through `cmd.exe`, so missing prerequisites become a bounded diagnostic instead of an unhandled
+`WinError 2`. Per-Agent locks reject duplicate maintenance operations. Output is bounded and
+redacted, results are normalized at the Hub boundary, and success or failure is written to the
+centralized log without command output.
+Login probes use
 `codex login status`, `claude auth status --json`, and `opencode auth list`. The same cached probe uses Codex's local read-only
 `account/rateLimits/read` app-server method for quota windows; Claude remaining usage is intentionally
 left to its interactive `/status` command. No identity or credential values are returned, and all
@@ -176,6 +183,14 @@ uses `git merge --ff-only` against the verified commit hash. It never accepts a 
 commit, or command from the browser. A successful local-Node update terminates only the supervised
 Dashboard child; a Remote-Node update terminates only the supervised Node child. tmux Agent Sessions
 are unaffected.
+
+The native desktop updater is a separate signed-binary path. Its connection window selects one of two
+compiled-in endpoints: the latest normal Release for Stable, or the rolling `nightly` prerelease for
+Nightly. Relevant `dev` pushes generate a monotonic prerelease SemVer, embed the full build commit, and
+sign each updater package. CI uploads uniquely named packages before replacing `latest.json`, then
+removes obsolete assets, so an interrupted rolling publish leaves either the old complete update or
+the new complete update available. The unprivileged Dashboard WebView cannot select an endpoint or
+invoke the updater.
 
 ## Logging and Supervision
 

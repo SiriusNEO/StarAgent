@@ -1,12 +1,44 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 from staragent.native_sessions import NativeSessionRegistry
+from staragent.windows import windows_process_argv
+
+
+def check_command_shim() -> None:
+    with tempfile.TemporaryDirectory(prefix="staragent-shim-smoke-") as directory:
+        shim_directory = Path(directory) / "command shims"
+        shim_directory.mkdir()
+        shim = shim_directory / "staragent-shim-smoke.cmd"
+        shim.write_text("@echo off\r\necho shim-ready\r\n", encoding="utf-8")
+        environment = {
+            **os.environ,
+            "PATH": f"{shim_directory}{os.pathsep}{os.environ['PATH']}",
+        }
+        command = windows_process_argv(
+            ["staragent-shim-smoke"],
+            environment,
+            require_executable=True,
+        )
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=environment,
+        )
+        if result.returncode != 0 or "shim-ready" not in result.stdout:
+            raise RuntimeError("Windows command shim did not execute through cmd.exe.")
 
 
 def main() -> None:
+    check_command_shim()
     registry = NativeSessionRegistry()
     session = registry.create(
         "native-smoke",
