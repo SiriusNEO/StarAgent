@@ -3,11 +3,17 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "windows"))]
+use std::process::{Child, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::ipc::Channel;
 use tauri::webview::{NewWindowResponse, WebviewWindowBuilder};
-use tauri::{AppHandle, Manager, RunEvent, WebviewUrl};
+use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl};
+#[cfg(target_os = "windows")]
+use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -16,19 +22,40 @@ const DASHBOARD_WINDOW: &str = "dashboard";
 
 #[derive(Default)]
 struct RuntimeState {
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<ManagedRuntime>>,
+}
+
+#[derive(Default)]
+struct DesktopUpdateState {
+    pending: Mutex<Option<Update>>,
+}
+
+enum ManagedRuntime {
+    #[cfg(not(target_os = "windows"))]
+    System(Child),
+    #[cfg(target_os = "windows")]
+    Bundled(tauri_plugin_shell::process::CommandChild),
+}
+
+#[cfg(target_os = "windows")]
+impl ManagedRuntime {
+    fn pid(&self) -> u32 {
+        match self {
+            Self::Bundled(child) => child.pid(),
+        }
+    }
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EnvironmentInfo {
+    desktop_version: &'static str,
     platform: &'static str,
     strategy: &'static str,
-    wsl_available: bool,
-    staragent_available: bool,
-    staragent_version: String,
-    tmux_available: bool,
-    tmux_version: String,
+    runtime_available: bool,
+    runtime_version: String,
+    session_backend: &'static str,
+    session_backend_available: bool,
     runtime_running: bool,
     default_endpoint: String,
     install_hint: String,
@@ -39,6 +66,29 @@ struct EnvironmentInfo {
 struct RuntimeStart {
     endpoint: String,
     reused: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopUpdateInfo {
+    current_version: String,
+    available: bool,
+    version: Option<String>,
+    notes: Option<String>,
+    published_at: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "event", rename_all = "camelCase")]
+enum DesktopUpdateEvent {
+    Started,
+    Progress {
+        #[serde(rename = "chunkLength")]
+        chunk_length: usize,
+        #[serde(rename = "contentLength")]
+        content_length: Option<u64>,
+    },
+    Downloaded,
 }
 
 #[derive(Default)]
@@ -79,33 +129,122 @@ async fn open_dashboard(app: AppHandle, endpoint: String) -> Result<String, Stri
     Ok(normalized)
 }
 
+#[tauri::command]
+async fn check_desktop_update(
+    app: AppHandle,
+    state: State<'_, DesktopUpdateState>,
+) -> Result<DesktopUpdateInfo, String> {
+    *state
+        .pending
+        .lock()
+        .map_err(|_| "The desktop update lock is unavailable.".to_string())? = None;
+
+    let exit_handle = app.clone();
+    let updater = app
+        .updater_builder()
+        .on_before_exit(move || {
+            stop_managed_runtime(&exit_handle);
+            exit_handle.cleanup_before_exit();
+        })
+        .build()
+        .map_err(|error| format!("Could not initialize desktop updates: {error}"))?;
+    let current_version = updater_current_version(&app);
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("Could not check for desktop updates: {error}"))?;
+
+    let Some(update) = update else {
+        return Ok(DesktopUpdateInfo {
+            current_version,
+            available: false,
+            version: None,
+            notes: None,
+            published_at: None,
+        });
+    };
+    let info = DesktopUpdateInfo {
+        current_version,
+        available: true,
+        version: Some(update.version.clone()),
+        notes: compact_update_notes(update.body.as_deref()),
+        published_at: update.date.map(|date| date.to_string()),
+    };
+    *state
+        .pending
+        .lock()
+        .map_err(|_| "The desktop update lock is unavailable.".to_string())? = Some(update);
+    Ok(info)
+}
+
+#[tauri::command]
+async fn install_desktop_update(
+    app: AppHandle,
+    state: State<'_, DesktopUpdateState>,
+    on_event: Channel<DesktopUpdateEvent>,
+) -> Result<(), String> {
+    let update = state
+        .pending
+        .lock()
+        .map_err(|_| "The desktop update lock is unavailable.".to_string())?
+        .take()
+        .ok_or_else(|| "Check for a desktop update before installing it.".to_string())?;
+
+    let _ = on_event.send(DesktopUpdateEvent::Started);
+    let progress_channel = on_event.clone();
+    let downloaded_channel = on_event;
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                let _ = progress_channel.send(DesktopUpdateEvent::Progress {
+                    chunk_length,
+                    content_length,
+                });
+            },
+            move || {
+                let _ = downloaded_channel.send(DesktopUpdateEvent::Downloaded);
+            },
+        )
+        .await
+        .map_err(|error| format!("Could not install the desktop update: {error}"))?;
+
+    // Windows exits from the updater after running the hook configured above.
+    // macOS and Linux need an explicit restart after the verified package is installed.
+    stop_managed_runtime(&app);
+    app.restart();
+}
+
+fn updater_current_version(app: &AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+fn compact_update_notes(notes: Option<&str>) -> Option<String> {
+    const MAX_CHARS: usize = 4_000;
+    let notes = notes?.trim();
+    if notes.is_empty() {
+        return None;
+    }
+    let mut compact = notes.chars().take(MAX_CHARS).collect::<String>();
+    if notes.chars().count() > MAX_CHARS {
+        compact.push('…');
+    }
+    Some(compact)
+}
+
 fn inspect_environment() -> Result<EnvironmentInfo, String> {
     let endpoint = local_endpoint(DEFAULT_PORT);
     if cfg!(target_os = "windows") {
-        let wsl_available = wsl_status("true").is_some();
-        let staragent_version = wsl_status("staragent version").unwrap_or_default();
-        let tmux_version = wsl_status("tmux -V").unwrap_or_default();
-        let install_hint = if !wsl_available {
-            "wsl --install -d Ubuntu".to_string()
-        } else {
-            concat!(
-                "wsl -- bash -lc \"sudo apt update && sudo apt install -y tmux pipx ",
-                "&& pipx install git+https://github.com/SiriusNEO/StarAgent.git ",
-                "&& pipx ensurepath\""
-            )
-            .to_string()
-        };
         return Ok(EnvironmentInfo {
+            desktop_version: env!("CARGO_PKG_VERSION"),
             platform: "windows",
-            strategy: "wsl",
-            wsl_available,
-            staragent_available: !staragent_version.is_empty(),
-            staragent_version,
-            tmux_available: !tmux_version.is_empty(),
-            tmux_version,
-            runtime_running: local_dashboard_ready(DEFAULT_PORT),
+            strategy: "bundled",
+            runtime_available: true,
+            runtime_version: format!("v{}", env!("CARGO_PKG_VERSION")),
+            session_backend: "Windows ConPTY",
+            session_backend_available: true,
+            runtime_running: local_runtime_ready(DEFAULT_PORT),
             default_endpoint: endpoint,
-            install_hint,
+            install_hint: String::new(),
         });
     }
 
@@ -130,18 +269,18 @@ fn inspect_environment() -> Result<EnvironmentInfo, String> {
         .to_string()
     };
     Ok(EnvironmentInfo {
+        desktop_version: env!("CARGO_PKG_VERSION"),
         platform: if cfg!(target_os = "macos") {
             "macos"
         } else {
             "linux"
         },
         strategy: "native",
-        wsl_available: false,
-        staragent_available: !staragent_version.is_empty(),
-        staragent_version,
-        tmux_available: !tmux_version.is_empty(),
-        tmux_version,
-        runtime_running: local_dashboard_ready(DEFAULT_PORT),
+        runtime_available: !staragent_version.is_empty(),
+        runtime_version: staragent_version,
+        session_backend: "tmux",
+        session_backend_available: !tmux_version.is_empty(),
+        runtime_running: local_runtime_ready(DEFAULT_PORT),
         default_endpoint: endpoint,
         install_hint,
     })
@@ -152,13 +291,34 @@ fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
         return Err("The local Launcher port must be between 1024 and 65535.".to_string());
     }
     let endpoint = local_endpoint(port);
-    if local_dashboard_ready(port) {
+    if local_runtime_ready(port) {
         return Ok(RuntimeStart {
             endpoint,
             reused: true,
         });
     }
+    #[cfg(target_os = "windows")]
+    if local_dashboard_ready(port) {
+        return Err(format!(
+            "Port {port} is occupied by a non-native or older StarAgent runtime. Stop it before starting the bundled Windows Launcher."
+        ));
+    }
 
+    #[cfg(target_os = "windows")]
+    return start_bundled_runtime(app, port, endpoint);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        start_system_runtime(app, port, endpoint)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_system_runtime(
+    app: &AppHandle,
+    port: u16,
+    endpoint: String,
+) -> Result<RuntimeStart, String> {
     clear_finished_child(app)?;
     let state = app.state::<RuntimeState>();
     if state
@@ -170,7 +330,7 @@ fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
         return wait_for_runtime(port, endpoint, true);
     }
 
-    let mut command = runtime_command(port)?;
+    let mut command = system_runtime_command(port)?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -182,7 +342,59 @@ fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
     *state
         .child
         .lock()
-        .map_err(|_| "The runtime process lock is unavailable.".to_string())? = Some(child);
+        .map_err(|_| "The runtime process lock is unavailable.".to_string())? =
+        Some(ManagedRuntime::System(child));
+
+    let result = wait_for_runtime(port, endpoint, false);
+    if result.is_err() {
+        stop_managed_runtime(app);
+    }
+    result
+}
+
+#[cfg(target_os = "windows")]
+fn start_bundled_runtime(
+    app: &AppHandle,
+    port: u16,
+    endpoint: String,
+) -> Result<RuntimeStart, String> {
+    let state = app.state::<RuntimeState>();
+    if state
+        .child
+        .lock()
+        .map_err(|_| "The runtime process lock is unavailable.".to_string())?
+        .is_some()
+    {
+        return wait_for_runtime(port, endpoint, true);
+    }
+
+    let command = app
+        .shell()
+        .sidecar("staragent-runtime")
+        .map_err(|error| format!("Bundled StarAgent runtime is unavailable: {error}"))?
+        .args([
+            "--host",
+            DEFAULT_HOST,
+            "--port",
+            &port.to_string(),
+            "--mode",
+            "launcher",
+        ]);
+    let (mut events, child) = command
+        .spawn()
+        .map_err(|error| format!("Could not start the bundled StarAgent runtime: {error}"))?;
+    let pid = child.pid();
+    *state
+        .child
+        .lock()
+        .map_err(|_| "The runtime process lock is unavailable.".to_string())? =
+        Some(ManagedRuntime::Bundled(child));
+
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while events.recv().await.is_some() {}
+        clear_runtime_if_pid(&handle, pid);
+    });
 
     let result = wait_for_runtime(port, endpoint, false);
     if result.is_err() {
@@ -194,36 +406,23 @@ fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
 fn wait_for_runtime(port: u16, endpoint: String, reused: bool) -> Result<RuntimeStart, String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
-        if local_dashboard_ready(port) {
+        if local_runtime_ready(port) {
             return Ok(RuntimeStart { endpoint, reused });
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+    let hint = if cfg!(target_os = "windows") {
+        "Check that the port is free. If this repeats, reinstall the Windows desktop package."
+    } else {
+        "Check that the port is free and run `staragent` in a terminal for details."
+    };
     Err(format!(
-        "StarAgent did not become ready at {endpoint} within 20 seconds. Check that the port is free and run `staragent` in a terminal for details."
+        "StarAgent did not become ready at {endpoint} within 20 seconds. {hint}"
     ))
 }
 
-fn runtime_command(port: u16) -> Result<Command, String> {
-    if cfg!(target_os = "windows") {
-        if wsl_status("true").is_none() {
-            return Err(
-                "WSL2 with a Linux distribution is required for local mode on Windows.".to_string(),
-            );
-        }
-        if wsl_status("command -v staragent").is_none() {
-            return Err("StarAgent is not installed in the default WSL2 distribution.".to_string());
-        }
-        if wsl_status("command -v tmux").is_none() {
-            return Err("tmux is not installed in the default WSL2 distribution.".to_string());
-        }
-        let script =
-            format!("exec staragent dashboard --host {DEFAULT_HOST} --port {port} --mode launcher");
-        let mut command = Command::new("wsl.exe");
-        command.args(["--exec", "sh", "-lc", &script]);
-        return Ok(command);
-    }
-
+#[cfg(not(target_os = "windows"))]
+fn system_runtime_command(port: u16) -> Result<Command, String> {
     let native = native_environment();
     let staragent = native
         .staragent
@@ -300,13 +499,6 @@ fn login_shell_output(script: &str) -> Option<String> {
     successful_output(&mut command)
 }
 
-fn wsl_status(script: &str) -> Option<String> {
-    let mut command = Command::new("wsl.exe");
-    command.args(["--exec", "sh", "-lc", script]);
-    suppress_console_window(&mut command);
-    successful_output(&mut command)
-}
-
 fn command_output(program: Option<&OsString>, args: &[&str], path: Option<&OsString>) -> String {
     let Some(program) = program else {
         return String::new();
@@ -344,6 +536,20 @@ fn local_endpoint(port: u16) -> String {
 }
 
 fn local_dashboard_ready(port: u16) -> bool {
+    local_http_response_contains(port, "/login", "StarAgent")
+}
+
+fn local_runtime_ready(port: u16) -> bool {
+    #[cfg(target_os = "windows")]
+    return local_http_response_contains(port, "/api/runtime", "\"session_backend\":\"conpty\"");
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        local_dashboard_ready(port)
+    }
+}
+
+fn local_http_response_contains(port: u16, path: &str, marker: &str) -> bool {
     let address = (DEFAULT_HOST, port)
         .to_socket_addrs()
         .ok()
@@ -357,7 +563,7 @@ fn local_dashboard_ready(port: u16) -> bool {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(350)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(350)));
     let request =
-        format!("GET /login HTTP/1.1\r\nHost: {DEFAULT_HOST}:{port}\r\nConnection: close\r\n\r\n");
+        format!("GET {path} HTTP/1.1\r\nHost: {DEFAULT_HOST}:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
         return false;
     }
@@ -365,20 +571,20 @@ fn local_dashboard_ready(port: u16) -> bool {
     if stream.take(32 * 1024).read_to_end(&mut response).is_err() {
         return false;
     }
-    String::from_utf8_lossy(&response).contains("StarAgent")
+    String::from_utf8_lossy(&response).contains(marker)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn clear_finished_child(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<RuntimeState>();
     let mut guard = state
         .child
         .lock()
         .map_err(|_| "The runtime process lock is unavailable.".to_string())?;
-    if let Some(child) = guard.as_mut() {
+    if let Some(ManagedRuntime::System(child)) = guard.as_mut() {
         match child.try_wait() {
-            Ok(Some(_)) => *guard = None,
+            Ok(Some(_)) | Err(_) => *guard = None,
             Ok(None) => {}
-            Err(_) => *guard = None,
         }
     }
     Ok(())
@@ -389,11 +595,39 @@ fn stop_managed_runtime(app: &AppHandle) {
     let Ok(mut guard) = state.child.lock() else {
         return;
     };
-    if let Some(child) = guard.as_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(child) = guard.take() {
+        match child {
+            #[cfg(not(target_os = "windows"))]
+            ManagedRuntime::System(mut child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            #[cfg(target_os = "windows")]
+            ManagedRuntime::Bundled(child) => {
+                terminate_windows_process_tree(child.pid());
+                let _ = child.kill();
+            }
+        }
     }
-    *guard = None;
+}
+
+#[cfg(target_os = "windows")]
+fn clear_runtime_if_pid(app: &AppHandle, pid: u32) {
+    let state = app.state::<RuntimeState>();
+    let Ok(mut guard) = state.child.lock() else {
+        return;
+    };
+    if guard.as_ref().is_some_and(|child| child.pid() == pid) {
+        *guard = None;
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn terminate_windows_process_tree(pid: u32) {
+    let mut command = Command::new("taskkill.exe");
+    command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    suppress_console_window(&mut command);
+    let _ = command.output();
 }
 
 fn normalize_endpoint(input: &str) -> Result<Url, String> {
@@ -485,11 +719,16 @@ fn install_dashboard_close_handler(app: &AppHandle, dashboard: &tauri::WebviewWi
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(RuntimeState::default())
+        .manage(DesktopUpdateState::default())
         .invoke_handler(tauri::generate_handler![
             environment_info,
             start_local_runtime,
-            open_dashboard
+            open_dashboard,
+            check_desktop_update,
+            install_desktop_update
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -512,7 +751,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_endpoint, same_origin};
+    use super::{compact_update_notes, normalize_endpoint, same_origin, DesktopUpdateEvent};
     use url::Url;
 
     #[test]
@@ -542,5 +781,30 @@ mod tests {
             &Url::parse("http://hub.example.com/").unwrap(),
             &expected,
         ));
+    }
+
+    #[test]
+    fn update_notes_are_trimmed_and_bounded() {
+        assert_eq!(
+            compact_update_notes(Some("  Fixes and polish.  ")).as_deref(),
+            Some("Fixes and polish.")
+        );
+        assert_eq!(compact_update_notes(Some("  ")), None);
+        let long = "a".repeat(4_001);
+        let compact = compact_update_notes(Some(&long)).unwrap();
+        assert_eq!(compact.chars().count(), 4_001);
+        assert!(compact.ends_with('…'));
+    }
+
+    #[test]
+    fn update_progress_event_matches_frontend_contract() {
+        let event = serde_json::to_value(DesktopUpdateEvent::Progress {
+            chunk_length: 512,
+            content_length: Some(1_024),
+        })
+        .unwrap();
+        assert_eq!(event["event"], "progress");
+        assert_eq!(event["chunkLength"], 512);
+        assert_eq!(event["contentLength"], 1_024);
     }
 }

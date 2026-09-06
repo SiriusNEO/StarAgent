@@ -1,13 +1,14 @@
 {
   "name": "staragent-desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.3-dev.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "vite build",
     "check": "vite build",
     "tauri": "tauri",
+    "runtime:build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-runtime.ps1",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build"
   },
