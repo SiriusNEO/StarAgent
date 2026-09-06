@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ selected_agent.label }} · {{ current_node.name }} · StarAgent{% endblock %}
+{% block head_extra %}
+  <link rel="stylesheet" href="{{ url_for('static', path='vendor/xterm/xterm.css') }}?v={{ static_version('vendor/xterm/xterm.css') }}">
+{% endblock %}
 {% block node_sidebar_extra %}
   {% include "_agent_sidebar.html" %}
 {% endblock %}
@@ -168,7 +171,278 @@
         </footer>
       </form>
     </dialog>
+    <dialog class="agent-update-dialog agent-install-dialog" data-agent="{{ tool.name }}" aria-labelledby="agent-install-title" aria-describedby="agent-install-description">
+      <form method="dialog">
+        <header class="agent-update-dialog-head">
+          <div class="agent-update-dialog-icon" aria-hidden="true">
+            <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="52" height="52">
+          </div>
+          <div>
+            <span>{{ t("agents.install_harness") }}</span>
+            <h2 id="agent-install-title">{{ t("agents.install", agent=tool.label) }}</h2>
+          </div>
+          <button type="submit" class="agent-update-dialog-close" value="cancel" aria-label="{{ t('agents.cancel_install') }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+          </button>
+        </header>
+        <div class="agent-update-dialog-body">
+          <p id="agent-install-description">{{ t("agents.install_description") }}</p>
+          <dl class="agent-update-dialog-facts">
+            <div>
+              <dt>{{ t("agents.target_node") }}</dt>
+              <dd class="agent-install-dialog-node">—</dd>
+            </div>
+            <div>
+              <dt>{{ t("agents.install_source") }}</dt>
+              <dd class="agent-install-dialog-source">—</dd>
+            </div>
+          </dl>
+          <div class="agent-update-dialog-command">
+            <span>{{ t("agents.allowlisted_command") }}</span>
+            <code>—</code>
+          </div>
+          <div class="agent-update-dialog-safety">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            <span>{{ t("agents.install_safety") }}</span>
+          </div>
+        </div>
+        <footer class="agent-update-dialog-actions">
+          <button type="submit" class="agent-update-dialog-cancel" value="cancel">{{ t("agents.not_now") }}</button>
+          <button type="submit" class="agent-update-dialog-confirm agent-install-dialog-confirm" value="confirm">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"/></svg>
+            {{ t("agents.install_now") }}
+          </button>
+        </footer>
+      </form>
+    </dialog>
     <p class="form-hint agent-market-note">{{ t("agents.ready_note") }}</p>
+  </section>
+
+  <section
+    class="band harness-config-band deferred-render"
+    data-harness-configuration
+    data-node="{{ current_node.name }}"
+    data-agent="{{ tool.name }}"
+    data-agent-label="{{ tool.label }}"
+    style="--agent-brand: {{ tool.accent }}"
+  >
+    <header class="harness-config-head">
+      <div>
+        <span class="agent-market-kicker">{{ t("agents.configuration_kicker") }}</span>
+        <h2>{{ t("agents.configuration_title") }}</h2>
+        <p>{{ t("agents.configuration_description", agent=tool.label, node=current_node.name) }}</p>
+      </div>
+      <button type="button" class="harness-config-reload">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 4v5h5M4 13a8.1 8.1 0 0 0 14.9 4M20 20v-5h-5"/></svg>
+        <span>{{ t("common.reload") }}</span>
+      </button>
+    </header>
+    <div class="harness-config-status" aria-live="polite">{{ t("agents.configuration_loading") }}</div>
+    <div class="harness-config-layout">
+      <section class="harness-config-file-pane">
+        <header class="harness-config-pane-head">
+          <div>
+            <span>{{ t("agents.configuration_file") }}</span>
+            <strong>{{ t("agents.global_settings") }}</strong>
+          </div>
+          <span class="harness-config-format">—</span>
+        </header>
+        <div class="harness-config-path-row">
+          <code class="harness-config-path">{{ t("agents.configuration_loading") }}</code>
+          <a class="harness-config-docs" href="#" target="_blank" rel="noreferrer" hidden>{{ t("agents.config_reference") }}</a>
+        </div>
+        <dl class="harness-config-facts" aria-live="polite">
+          <div>
+            <dt>{{ t("agents.configuration_source") }}</dt>
+            <dd class="harness-config-source">—</dd>
+          </div>
+          <div>
+            <dt>{{ t("agents.file_status") }}</dt>
+            <dd class="harness-config-exists">—</dd>
+          </div>
+          <div>
+            <dt>{{ t("agents.last_modified") }}</dt>
+            <dd class="harness-config-modified">—</dd>
+          </div>
+        </dl>
+        <textarea
+          class="harness-config-editor"
+          spellcheck="false"
+          autocomplete="off"
+          aria-label="{{ t('agents.configuration_file') }}"
+          disabled
+        ></textarea>
+        <footer class="harness-config-pane-actions">
+          <span class="harness-config-file-state">{{ t("agents.configuration_loading") }}</span>
+          <button type="button" class="harness-config-save" disabled>{{ t("common.save") }}</button>
+        </footer>
+      </section>
+
+      <section class="harness-env-pane">
+        <header class="harness-config-pane-head">
+          <div>
+            <span>{{ t("agents.environment") }}</span>
+            <strong>{{ t("agents.runtime_variables") }}</strong>
+          </div>
+          <button type="button" class="harness-env-add" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            {{ t("agents.add_variable") }}
+          </button>
+        </header>
+        <p class="harness-env-help">{{ t("agents.environment_help") }}</p>
+        <div class="harness-env-inherited" hidden>
+          <div class="harness-env-inherited-head">
+            <strong>{{ t("agents.inherited_environment") }}</strong>
+            <small>{{ t("agents.inherited_environment_help", agent=tool.label) }}</small>
+          </div>
+          <div class="harness-env-inherited-list"></div>
+        </div>
+        <div class="harness-env-list"></div>
+        <div class="harness-env-empty">{{ t("agents.no_environment") }}</div>
+        <datalist class="harness-env-suggestions" id="harness-env-suggestions-{{ tool.name }}">
+          {% if tool.name == "codex" %}
+            <option value="OPENAI_API_KEY"></option>
+            <option value="OPENAI_BASE_URL"></option>
+            <option value="CODEX_HOME"></option>
+            <option value="DEEPSEEK_API_KEY"></option>
+          {% elif tool.name == "claude" %}
+            <option value="ANTHROPIC_API_KEY"></option>
+            <option value="ANTHROPIC_BASE_URL"></option>
+            <option value="CLAUDE_CONFIG_DIR"></option>
+          {% else %}
+            <option value="OPENAI_API_KEY"></option>
+            <option value="ANTHROPIC_API_KEY"></option>
+            <option value="OPENCODE_CONFIG"></option>
+            <option value="OPENCODE_CONFIG_DIR"></option>
+          {% endif %}
+        </datalist>
+        <div class="harness-env-path-row">
+          <span>{{ t("agents.managed_environment_path") }}</span>
+          <code class="harness-env-path">{{ t("agents.configuration_loading") }}</code>
+        </div>
+        <footer class="harness-config-pane-actions">
+          <span class="harness-env-state">{{ t("agents.configuration_loading") }}</span>
+          <button type="button" class="harness-env-save" disabled>{{ t("common.save") }}</button>
+        </footer>
+      </section>
+    </div>
+    <p class="harness-config-safety">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>{{ t("agents.configuration_safety") }}</span>
+    </p>
+  </section>
+
+  {% if tool.name == "codex" %}
+    <dialog
+      class="codex-auth-dialog"
+      data-codex-auth-terminal
+      data-node="{{ current_node.name }}"
+      data-xterm-js="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}?v={{ static_version('vendor/xterm/xterm.min.js') }}"
+      data-xterm-fit-js="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}?v={{ static_version('vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"
+      data-xterm-web-links-js="{{ url_for('static', path='vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}?v={{ static_version('vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}"
+      aria-labelledby="codex-auth-title"
+    >
+      <div class="codex-auth-dialog-shell">
+        <header class="codex-auth-dialog-head">
+          <div class="codex-auth-dialog-mark" aria-hidden="true">
+            <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="44" height="44">
+          </div>
+          <div>
+            <span>{{ t("agents.codex_account") }}</span>
+            <h2 id="codex-auth-title">{{ t("agents.codex_device_login") }}</h2>
+          </div>
+          <button type="button" class="codex-auth-dialog-close" aria-label="{{ t('common.close') }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+          </button>
+        </header>
+        <p class="codex-auth-dialog-intro">{{ t("agents.codex_login_help") }}</p>
+        <div class="web-terminal codex-auth-terminal">
+          <div class="terminal-screen">
+            <div class="codex-auth-terminal-placeholder">{{ t("agents.codex_login_starting") }}</div>
+          </div>
+          <div class="terminal-status">
+            <span class="terminal-connection-meta">
+              <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
+              <strong class="terminal-connection-value">PTY</strong>
+              <span class="terminal-connection-divider" aria-hidden="true">·</span>
+              <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
+              <strong class="terminal-connection-value">WebSocket</strong>
+            </span>
+            <span class="terminal-connection-state" aria-live="polite">{{ t("agents.codex_login_not_started") }}</span>
+          </div>
+        </div>
+        <footer class="codex-auth-dialog-actions">
+          <span>{{ t("agents.codex_login_refresh_hint") }}</span>
+          <button type="button" class="codex-auth-dialog-done">{{ t("agents.done") }}</button>
+        </footer>
+      </div>
+    </dialog>
+  {% endif %}
+
+  <section
+    class="band agent-test-band deferred-render"
+    data-harness-test-terminal
+    data-node="{{ current_node.name }}"
+    data-agent="{{ tool.name }}"
+    data-agent-label="{{ tool.label }}"
+    data-xterm-js="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}?v={{ static_version('vendor/xterm/xterm.min.js') }}"
+    data-xterm-fit-js="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}?v={{ static_version('vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"
+    data-xterm-web-links-js="{{ url_for('static', path='vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}?v={{ static_version('vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}"
+    style="--agent-brand: {{ tool.accent }}"
+  >
+    <header class="agent-test-head">
+      <div>
+        <span class="agent-market-kicker">{{ t("agents.test_kicker") }}</span>
+        <h2>{{ t("agents.test_title") }}</h2>
+        <p>{{ t("agents.test_description", agent=tool.label, node=current_node.name) }}</p>
+      </div>
+      <div class="agent-test-head-actions">
+        <span class="agent-test-node">
+          <i class="node-status-dot node-status-dot-{{ current_node.status }}" aria-hidden="true"></i>
+          {{ t("agents.test_on", node=current_node.name) }}
+        </span>
+        <button
+          type="button"
+          class="terminal-input-lock is-locked agent-test-input-lock"
+          aria-label="{{ t('detail.unlock_terminal') }}"
+          aria-pressed="false"
+          title="{{ t('detail.terminal_locked_title') }}"
+          disabled
+        >
+          <span class="terminal-lock-icon" aria-hidden="true"></span>
+          <span class="terminal-lock-label">{{ t("detail.locked") }}</span>
+        </button>
+        <button type="button" class="agent-test-terminal-start">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7V5Z"/></svg>
+          <span>{{ t("agents.test_start") }}</span>
+        </button>
+      </div>
+    </header>
+    <div class="web-terminal agent-test-terminal is-input-locked">
+      <div class="terminal-screen">
+        <div class="agent-test-terminal-placeholder">
+          <span aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m7 8 4 4-4 4M13 16h4"/></svg>
+          </span>
+          <strong>{{ t("agents.test_start") }}</strong>
+          <small>{{ t("agents.test_placeholder") }}</small>
+        </div>
+      </div>
+      <div class="terminal-status">
+        <span class="terminal-connection-meta" aria-label="{{ t('detail.connection_method') }}">
+          <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
+          <strong class="terminal-connection-value">PTY</strong>
+          <span class="terminal-connection-divider" aria-hidden="true">·</span>
+          <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
+          <strong class="terminal-connection-value">WebSocket</strong>
+        </span>
+        <span class="terminal-connection-state" aria-live="polite">{{ t("agents.test_not_started") }}</span>
+      </div>
+    </div>
+    <p class="agent-test-safety">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span>{{ t("agents.test_safety") }}</span>
+    </p>
   </section>
 
   {% if tool.history_supported %}
@@ -211,4 +485,5 @@
   {% endif %}
 
   <script src="{{ url_for('static', path='agents.js') }}?v={{ static_version('agents.js') }}"></script>
+  <script src="{{ url_for('static', path='harness-terminal.js') }}?v={{ static_version('harness-terminal.js') }}"></script>
 {% endblock %}

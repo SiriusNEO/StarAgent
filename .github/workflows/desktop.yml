@@ -1,0 +1,137 @@
+name: Desktop
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+  push:
+    branches: [main, dev]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-22.04
+            artifact: staragent-linux-x64
+            args: ""
+            rust_targets: ""
+          - name: Windows x64
+            os: windows-latest
+            artifact: staragent-windows-x64
+            args: ""
+            rust_targets: ""
+          - name: macOS Universal
+            os: macos-latest
+            artifact: staragent-macos-universal
+            args: "--target universal-apple-darwin"
+            rust_targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Check desktop frontend
+        working-directory: desktop
+        run: npm run check
+
+      - name: Test desktop core
+        if: matrix.os == 'ubuntu-22.04'
+        working-directory: desktop/src-tauri
+        run: cargo test
+
+      - name: Build native bundles
+        uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: desktop
+          args: ${{ matrix.args }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/**/release/bundle/**/*.deb
+            desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            desktop/src-tauri/target/**/release/bundle/**/*.app.tar.gz
+            desktop/src-tauri/target/**/release/bundle/**/*-setup.exe
+            desktop/src-tauri/target/**/release/bundle/**/*.msi
+
+  publish:
+    name: Attach installers to release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: staragent-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload installer assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          mapfile -d '' assets < <(
+            find release-assets -type f \( \
+              -name '*.AppImage' -o \
+              -name '*.deb' -o \
+              -name '*.dmg' -o \
+              -name '*.app.tar.gz' -o \
+              -name '*-setup.exe' -o \
+              -name '*.msi' \
+            \) -print0
+          )
+          if (( ${#assets[@]} == 0 )); then
+            echo "No installer assets were produced." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

@@ -7,3 +7,5 @@ dist/
 .staragent/
 .pytest_cache/
 test-results/
+node_modules/
+target/

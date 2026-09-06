@@ -215,12 +215,12 @@
       applyTheme(option.dataset.theme, true);
       return;
     }
-    const modeButton = event.target.closest("[data-bg-mode]");
+    const modeButton = event.target.closest(".background-mode-group [data-bg-mode]");
     if (modeButton) {
       applyBackgroundMode(modeButton.dataset.bgMode, true);
       return;
     }
-    const surfaceButton = event.target.closest("[data-surface-mode]");
+    const surfaceButton = event.target.closest(".surface-mode-group [data-surface-mode]");
     if (surfaceButton) {
       applySurfaceMode(surfaceButton.dataset.surfaceMode, true);
       return;

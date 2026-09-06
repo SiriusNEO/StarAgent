@@ -1,7 +1,7 @@
 [project]
 name = "staragent"
 dynamic = ["version"]
-description = "StarAgent dashboard and CLI for coding-agent sessions."
+description = "Local-first launcher and Hub for coding-agent harness sessions."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

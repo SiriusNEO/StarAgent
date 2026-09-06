@@ -58,7 +58,10 @@ if (agentToolsBand) {
   const catalogByName = new Map(agentCatalog.map((tool) => [tool.name, tool]));
   const refreshButton = agentToolsBand.querySelector(".agent-tools-refresh");
   const status = agentToolsBand.querySelector(".agent-tools-status");
-  const updateDialog = agentToolsBand.querySelector(".agent-update-dialog");
+  const updateDialog = agentToolsBand.querySelector(
+    ".agent-update-dialog:not(.agent-install-dialog)",
+  );
+  const installDialog = agentToolsBand.querySelector(".agent-install-dialog");
 
   const toolState = (value) => ({
     available: {label: t("agents.state.ready"), style: "connected"},
@@ -148,7 +151,26 @@ if (agentToolsBand) {
     unknown: {label: t("agents.auth.unknown"), style: "optional"},
   }[value] || {label: t("agents.auth.unknown"), style: "optional"});
 
-  const renderAgentAuth = (container, auth) => {
+  const credentialDescription = (auth) => {
+    const credentialType = auth?.credential_type || "unknown";
+    if (credentialType === "environment") {
+      const name = auth?.credential_name || t("agents.unknown");
+      return auth?.status === "not_configured"
+        ? t("agents.credential.environment_missing", {name})
+        : t("agents.credential.environment", {name});
+    }
+    const key = ({
+      api_key: "agents.credential.api_key",
+      bearer_token: "agents.credential.bearer_token",
+      chatgpt: "agents.credential.chatgpt",
+      command: "agents.credential.command",
+      external: "agents.credential.external",
+      none: "agents.credential.none",
+    })[credentialType];
+    return key ? t(key) : "";
+  };
+
+  const renderAgentAuth = (container, auth, tool, row) => {
     container.replaceChildren();
     const state = authState(auth?.status || "unknown");
     container.className = `agent-cli-auth is-${auth?.status || "unknown"}`;
@@ -156,7 +178,7 @@ if (agentToolsBand) {
     const head = document.createElement("div");
     head.className = "agent-auth-head";
     const title = document.createElement("strong");
-    title.textContent = t("agents.login");
+    title.textContent = t("agents.access");
     const statusPill = document.createElement("span");
     statusPill.className = `pill node-status-${state.style}`;
     statusPill.textContent = state.label;
@@ -164,7 +186,13 @@ if (agentToolsBand) {
     container.appendChild(head);
 
     const details = [];
-    if (auth?.method) {
+    if (auth?.provider) {
+      details.push(t("agents.provider_name", {provider: auth.provider}));
+    }
+    const credential = credentialDescription(auth);
+    if (credential) {
+      details.push(credential);
+    } else if (auth?.method) {
       details.push(auth.method);
     }
     if (Number(auth?.provider_count || 0) > 0) {
@@ -181,7 +209,7 @@ if (agentToolsBand) {
       container.appendChild(detail);
     }
 
-    if (auth?.action) {
+    if (auth?.action && tool?.name !== "codex") {
       const action = document.createElement("div");
       action.className = "agent-auth-action";
       const command = document.createElement("code");
@@ -193,6 +221,82 @@ if (agentToolsBand) {
       copy.textContent = t("agents.copy_login");
       action.append(command, copy);
       container.appendChild(action);
+    }
+
+    if (tool?.name === "codex" && tool?.status === "available") {
+      const controls = document.createElement("div");
+      controls.className = "agent-auth-controls";
+
+      const refresh = document.createElement("button");
+      refresh.type = "button";
+      refresh.className = "agent-auth-button is-secondary";
+      refresh.textContent = t("agents.refresh_access");
+      refresh.addEventListener("click", async () => {
+        refresh.disabled = true;
+        await loadAgentNode(row.dataset.node || "", true);
+        updateCardSummaries();
+      });
+      controls.appendChild(refresh);
+
+      if (auth?.status === "not_authenticated") {
+        const login = document.createElement("button");
+        login.type = "button";
+        login.className = "agent-auth-button is-primary";
+        login.textContent = t("agents.login_codex");
+        login.addEventListener("click", () => {
+          window.dispatchEvent(new CustomEvent("staragent:codex-login", {
+            detail: {node: row.dataset.node || ""},
+          }));
+        });
+        controls.appendChild(login);
+      } else if (auth?.status === "authenticated") {
+        const logout = document.createElement("button");
+        logout.type = "button";
+        logout.className = "agent-auth-button is-danger";
+        logout.textContent = t("agents.logout_codex");
+        let confirmationTimer = 0;
+        logout.addEventListener("click", async () => {
+          if (logout.dataset.confirming !== "true") {
+            logout.dataset.confirming = "true";
+            logout.textContent = t("agents.confirm_logout");
+            window.clearTimeout(confirmationTimer);
+            confirmationTimer = window.setTimeout(() => {
+              logout.dataset.confirming = "false";
+              logout.textContent = t("agents.logout_codex");
+            }, 5000);
+            return;
+          }
+          window.clearTimeout(confirmationTimer);
+          controls.querySelectorAll("button").forEach((button) => {
+            button.disabled = true;
+          });
+          logout.textContent = t("agents.logging_out");
+          const node = row.dataset.node || "";
+          try {
+            const response = await fetch(
+              `/api/nodes/${encodeURIComponent(node)}/agent-tools/codex/auth/logout`,
+              {method: "POST", cache: "no-store"},
+            );
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok || !body.ok) {
+              throw new Error(body.detail || t("agents.auth.error"));
+            }
+            await loadAgentNode(node, true);
+            updateCardSummaries();
+          } catch (error) {
+            status.textContent = t("agents.logout_failed", {
+              message: error?.message || t("agents.auth.error"),
+            });
+            controls.querySelectorAll("button").forEach((button) => {
+              button.disabled = false;
+            });
+            logout.dataset.confirming = "false";
+            logout.textContent = t("agents.logout_codex");
+          }
+        });
+        controls.appendChild(logout);
+      }
+      container.appendChild(controls);
     }
   };
 
@@ -302,7 +406,9 @@ if (agentToolsBand) {
     if (usage.message) {
       const message = document.createElement("div");
       message.className = "agent-usage-message";
-      message.textContent = usage.message;
+      message.textContent = usage.message_code === "provider_rate_limits_unavailable"
+        ? t("agents.usage.provider_unavailable_message")
+        : usage.message;
       container.appendChild(message);
     }
     if (usage.action) {
@@ -325,6 +431,58 @@ if (agentToolsBand) {
     result.textContent = message || "";
     result.hidden = !message;
     result.classList.toggle("is-error", isError);
+  };
+
+  const installMethodLabel = (method) => method === "native"
+    ? t("agents.install_native")
+    : t("agents.install_npm");
+
+  const installSourceLabel = (option) => option.source === "official"
+    ? t("agents.install_official")
+    : t("agents.install_china_mirror");
+
+  const confirmAgentInstall = (row, tool, option) => {
+    const node = row.dataset.node || t("agents.this_node");
+    const label = tool.label || tool.name || t("sessions.agent_cli");
+    const source = `${option.provider} · ${installMethodLabel(option.method)}`;
+    if (!installDialog || typeof installDialog.showModal !== "function") {
+      return Promise.resolve(window.confirm(t("agents.install_confirm", {
+        agent: label,
+        node,
+        source,
+      })));
+    }
+
+    const card = row.closest(".agent-cli-card");
+    const sourceIcon = sidebarItems
+      .find((item) => item.dataset.agent === tool.name)
+      ?.querySelector("img");
+    const dialogIcon = installDialog.querySelector(".agent-update-dialog-icon img");
+    const accent = card ? getComputedStyle(card).getPropertyValue("--agent-brand").trim() : "";
+    installDialog.dataset.agent = tool.name || "";
+    installDialog.style.setProperty("--agent-brand", accent || "var(--accent)");
+    installDialog.querySelector("#agent-install-title").textContent = t("agents.install", {
+      agent: label,
+    });
+    installDialog.querySelector(".agent-install-dialog-node").textContent = node;
+    installDialog.querySelector(".agent-install-dialog-source").textContent = source;
+    installDialog.querySelector(".agent-update-dialog-command code").textContent = option.command;
+    if (sourceIcon && dialogIcon) {
+      dialogIcon.src = sourceIcon.src;
+    }
+
+    installDialog.returnValue = "cancel";
+    return new Promise((resolve) => {
+      installDialog.addEventListener(
+        "close",
+        () => resolve(installDialog.returnValue === "confirm"),
+        {once: true},
+      );
+      installDialog.showModal();
+      requestAnimationFrame(() => {
+        installDialog.querySelector(".agent-update-dialog-cancel")?.focus({preventScroll: true});
+      });
+    });
   };
 
   const confirmAgentUpdate = (row, tool) => {
@@ -373,6 +531,12 @@ if (agentToolsBand) {
     }
   });
 
+  installDialog?.addEventListener("click", (event) => {
+    if (event.target === installDialog) {
+      installDialog.close("cancel");
+    }
+  });
+
   const runAgentUpdate = async (row, tool, button) => {
     const node = row.dataset.node || "";
     const label = tool.label || tool.name || t("sessions.agent_cli");
@@ -412,6 +576,169 @@ if (agentToolsBand) {
     }
   };
 
+  const runAgentInstall = async (row, tool, option, button) => {
+    const node = row.dataset.node || "";
+    const label = tool.label || tool.name || t("sessions.agent_cli");
+    if (!await confirmAgentInstall(row, tool, option)) {
+      return;
+    }
+    row.classList.add("is-installing");
+    row.querySelectorAll(".agent-install-button").forEach((installButton) => {
+      installButton.disabled = true;
+    });
+    button.textContent = t("agents.installing");
+    setAgentUpdateResult(row, t("agents.installing_on", {
+      agent: label,
+      node,
+      source: option.provider,
+    }));
+    try {
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(tool.name)}/install/${encodeURIComponent(option.id)}`,
+        {method: "POST"},
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        throw new Error(body.detail || body.error || body.output || t("agents.install_failed"));
+      }
+      await loadAgentNode(node, true);
+      updateCardSummaries();
+      const version = body.after_version || t("sessions.current_version");
+      const message = body.changed
+        ? t("agents.installed", {agent: label, version})
+        : t("agents.install_already", {agent: label, version});
+      setAgentUpdateResult(row, message);
+      status.textContent = message;
+    } catch (error) {
+      const message = error.message || t("agents.install_failed");
+      setAgentUpdateResult(row, message, true);
+      status.textContent = t("agents.install_failed_on", {agent: label, node, message});
+    } finally {
+      row.classList.remove("is-installing");
+      row.querySelectorAll(".agent-install-button").forEach((installButton) => {
+        installButton.disabled = installButton.dataset.enabled !== "true";
+        installButton.textContent = t("agents.install_now");
+      });
+    }
+  };
+
+  const renderAgentInstallOptions = (row, tool, payload, actions) => {
+    const options = Array.isArray(tool.install_options) ? tool.install_options : [];
+    const panel = document.createElement("section");
+    panel.className = "agent-install-panel";
+
+    const head = document.createElement("div");
+    head.className = "agent-install-panel-head";
+    const headCopy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = t("agents.install_choose");
+    const hint = document.createElement("span");
+    hint.textContent = t("agents.install_choose_hint");
+    headCopy.append(title, hint);
+    const mirrorNote = document.createElement("small");
+    mirrorNote.textContent = t("agents.install_mirror_note");
+    head.append(headCopy, mirrorNote);
+    panel.appendChild(head);
+
+    const list = document.createElement("div");
+    list.className = "agent-install-options";
+    for (const option of options) {
+      const item = document.createElement("article");
+      item.className = "agent-install-option";
+      item.classList.toggle("is-recommended", Boolean(option.recommended));
+      item.classList.toggle("is-china", Boolean(option.china));
+      item.classList.toggle("is-unavailable", !option.available);
+
+      const information = document.createElement("div");
+      information.className = "agent-install-option-information";
+      const sourceLine = document.createElement("div");
+      sourceLine.className = "agent-install-option-source";
+      const provider = document.createElement(option.source_url ? "a" : "strong");
+      provider.textContent = option.provider || installSourceLabel(option);
+      if (option.source_url) {
+        provider.href = option.source_url;
+        provider.target = "_blank";
+        provider.rel = "noopener noreferrer";
+      }
+      sourceLine.appendChild(provider);
+
+      const sourceBadge = document.createElement("span");
+      sourceBadge.className = option.china
+        ? "agent-install-badge is-china"
+        : "agent-install-badge";
+      sourceBadge.textContent = installSourceLabel(option);
+      sourceLine.appendChild(sourceBadge);
+      if (option.recommended) {
+        const recommended = document.createElement("span");
+        recommended.className = "agent-install-badge is-recommended";
+        recommended.textContent = t("agents.install_recommended");
+        sourceLine.appendChild(recommended);
+      }
+
+      const method = document.createElement("span");
+      method.className = "agent-install-option-method";
+      method.textContent = installMethodLabel(option.method);
+      const command = document.createElement("code");
+      command.textContent = option.command || "";
+      information.append(sourceLine, method, command);
+      const missingRequirements = Array.isArray(option.missing_requirements)
+        ? option.missing_requirements.join(", ")
+        : "";
+      if (!option.available) {
+        const requirement = document.createElement("small");
+        requirement.className = "agent-install-option-requirement";
+        requirement.textContent = t("agents.install_missing_requirement", {
+          commands: missingRequirements,
+        });
+        information.appendChild(requirement);
+      }
+
+      const controls = document.createElement("div");
+      controls.className = "agent-install-option-controls";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "copy-button inline-copy";
+      copy.dataset.copy = option.command || "";
+      copy.textContent = t("agents.copy_install");
+      controls.appendChild(copy);
+
+      const install = document.createElement("button");
+      install.type = "button";
+      install.className = "agent-cli-update-button agent-install-button";
+      install.textContent = t("agents.install_now");
+      const oneClickAvailable = Boolean(
+        payload.installs_supported && !payload.stale && option.available,
+      );
+      install.dataset.enabled = oneClickAvailable ? "true" : "false";
+      install.disabled = !oneClickAvailable;
+      if (!option.available) {
+        install.title = t("agents.install_missing_requirement", {
+          commands: missingRequirements,
+        });
+      } else if (!payload.installs_supported || payload.stale) {
+        install.title = t("agents.install_node_update_required");
+      }
+      install.addEventListener("click", () => runAgentInstall(row, tool, option, install));
+      controls.appendChild(install);
+      item.append(information, controls);
+      list.appendChild(item);
+    }
+    panel.appendChild(list);
+
+    if (!options.length) {
+      const empty = document.createElement("p");
+      empty.className = "agent-install-empty";
+      empty.textContent = t("agents.install_options_unavailable");
+      panel.appendChild(empty);
+    } else if (!payload.installs_supported || payload.stale) {
+      const compatibility = document.createElement("p");
+      compatibility.className = "agent-install-compatibility";
+      compatibility.textContent = t("agents.install_node_update_required");
+      panel.appendChild(compatibility);
+    }
+    actions.appendChild(panel);
+  };
+
   const renderAgentNode = (row, tool, payload) => {
     const state = toolState(tool.status);
     const version = row.querySelector(".agent-cli-version");
@@ -432,11 +759,40 @@ if (agentToolsBand) {
     pill.textContent = state.label;
     install.textContent = installDescription(tool);
     install.title = tool.update_note || "";
-    renderAgentAuth(auth, tool.auth || {});
-    renderAgentUsage(usage, tool.usage || {});
+    const isMissing = tool.status === "missing";
+    row.classList.toggle("is-missing", isMissing);
+    if (isMissing) {
+      auth.replaceChildren();
+      usage.replaceChildren();
+      auth.hidden = true;
+      usage.hidden = true;
+    } else {
+      auth.hidden = false;
+      renderAgentAuth(auth, tool.auth || {}, tool, row);
+      renderAgentUsage(usage, tool.usage || {});
+    }
 
     actions.replaceChildren();
-    if (tool.update_command) {
+    const updateStatus = tool.update?.status || "unknown";
+    if (isMissing) {
+      renderAgentInstallOptions(row, tool, payload, actions);
+    } else if (updateStatus === "up_to_date") {
+      const current = document.createElement("span");
+      current.className = "agent-cli-update-state is-current";
+      current.textContent = tool.update.latest_version
+        ? t("agents.up_to_date_version", {version: tool.update.latest_version})
+        : t("agents.up_to_date");
+      current.title = tool.update.checked_at ? checkedTime(tool.update.checked_at) : "";
+      actions.appendChild(current);
+    } else if (tool.update_command) {
+      if (updateStatus === "update_available" && tool.update.latest_version) {
+        const available = document.createElement("span");
+        available.className = "agent-cli-update-state is-available";
+        available.textContent = t("agents.update_available_version", {
+          version: tool.update.latest_version,
+        });
+        actions.appendChild(available);
+      }
       const command = document.createElement("code");
       command.textContent = tool.update_command;
       const copy = document.createElement("button");
@@ -473,6 +829,7 @@ if (agentToolsBand) {
     error.hidden = !errorMessage;
     row.dataset.toolStatus = tool.status || "unknown";
     row.dataset.authStatus = tool.auth?.status || "unknown";
+    row.dataset.updateStatus = updateStatus;
     row.dataset.stale = payload.stale ? "true" : "false";
     row.classList.toggle("is-stale", Boolean(payload.stale));
   };
@@ -615,7 +972,398 @@ if (agentToolsBand) {
   };
 
   refreshButton.addEventListener("click", () => loadAgentTools(true));
+  window.addEventListener("staragent:agent-auth-finished", async (event) => {
+    const node = event.detail?.node || "";
+    if (!nodeNames.includes(node)) {
+      return;
+    }
+    await loadAgentNode(node, true);
+    updateCardSummaries();
+  });
   window.StarAgentAfterPaint(() => loadAgentTools(false));
+}
+
+const harnessConfiguration = document.querySelector("[data-harness-configuration]");
+if (harnessConfiguration) {
+  const node = harnessConfiguration.dataset.node || "";
+  const agent = harnessConfiguration.dataset.agent || "";
+  const status = harnessConfiguration.querySelector(".harness-config-status");
+  const reloadButton = harnessConfiguration.querySelector(".harness-config-reload");
+  const editor = harnessConfiguration.querySelector(".harness-config-editor");
+  const configPath = harnessConfiguration.querySelector(".harness-config-path");
+  const configFormat = harnessConfiguration.querySelector(".harness-config-format");
+  const configDocs = harnessConfiguration.querySelector(".harness-config-docs");
+  const configSource = harnessConfiguration.querySelector(".harness-config-source");
+  const configExists = harnessConfiguration.querySelector(".harness-config-exists");
+  const configModified = harnessConfiguration.querySelector(".harness-config-modified");
+  const configState = harnessConfiguration.querySelector(".harness-config-file-state");
+  const configSave = harnessConfiguration.querySelector(".harness-config-save");
+  const inheritedEnvironment = harnessConfiguration.querySelector(".harness-env-inherited");
+  const inheritedEnvironmentList = harnessConfiguration.querySelector(
+    ".harness-env-inherited-list",
+  );
+  const environmentList = harnessConfiguration.querySelector(".harness-env-list");
+  const environmentEmpty = harnessConfiguration.querySelector(".harness-env-empty");
+  const environmentState = harnessConfiguration.querySelector(".harness-env-state");
+  const environmentPath = harnessConfiguration.querySelector(".harness-env-path");
+  const environmentAdd = harnessConfiguration.querySelector(".harness-env-add");
+  const environmentSave = harnessConfiguration.querySelector(".harness-env-save");
+  const suggestions = harnessConfiguration.querySelector(".harness-env-suggestions");
+
+  let supported = false;
+  let configEditable = false;
+  let initialConfig = "";
+  let initialEnvironment = "[]";
+  let reloadArmed = false;
+  let reloadTimer = 0;
+
+  const responseDetail = (body, fallback) => {
+    if (typeof body?.detail === "string") {
+      return body.detail;
+    }
+    if (typeof body?.error === "string") {
+      return body.error;
+    }
+    return fallback;
+  };
+
+  const requestConfiguration = async (path, options = {}) => {
+    const response = await fetch(path, {
+      cache: "no-store",
+      ...options,
+      headers: options.body
+        ? {"Content-Type": "application/json", ...(options.headers || {})}
+        : options.headers,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(responseDetail(body, `${response.status} ${response.statusText}`));
+    }
+    return body;
+  };
+
+  const environmentRows = () => Array.from(environmentList.querySelectorAll(".harness-env-row"));
+
+  const environmentData = ({validate = false} = {}) => {
+    const variables = [];
+    const seen = new Set();
+    for (const row of environmentRows()) {
+      const name = row.querySelector(".harness-env-name").value.trim();
+      const value = row.querySelector(".harness-env-value").value;
+      if (validate && !name) {
+        throw new Error(t("agents.empty_variable_name"));
+      }
+      if (!name && !value) {
+        continue;
+      }
+      if (validate && seen.has(name)) {
+        throw new Error(t("agents.duplicate_variable", {name}));
+      }
+      seen.add(name);
+      variables.push([name, value]);
+    }
+    return variables.sort(([left], [right]) => left.localeCompare(right));
+  };
+
+  const environmentCountText = (count) => (
+    count === 1
+      ? t("agents.environment_saved_one")
+      : t("agents.environment_saved", {count})
+  );
+
+  const formatConfigurationTime = (value) => {
+    const date = new Date(value || "");
+    return Number.isNaN(date.getTime())
+      ? "—"
+      : date.toLocaleString(window.StarAgentI18n?.language || []);
+  };
+
+  const configIsDirty = () => editor.value !== initialConfig;
+  const environmentIsDirty = () => JSON.stringify(environmentData()) !== initialEnvironment;
+
+  const updateDirtyState = () => {
+    const configDirty = configIsDirty();
+    const environmentDirty = environmentIsDirty();
+    configSave.disabled = !supported || !configEditable || !configDirty;
+    environmentSave.disabled = !supported || !environmentDirty;
+    if (configDirty) {
+      configState.textContent = t("agents.file_modified");
+      configState.classList.add("is-dirty");
+    } else {
+      configState.classList.remove("is-dirty");
+    }
+    if (environmentDirty) {
+      environmentState.textContent = t("agents.environment_modified");
+      environmentState.classList.add("is-dirty");
+    } else {
+      environmentState.classList.remove("is-dirty");
+    }
+    environmentEmpty.hidden = environmentRows().length > 0;
+  };
+
+  const variableLooksSecret = (name) => (
+    /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSCODE|CREDENTIAL|AUTH)/i.test(name)
+  );
+
+  const addEnvironmentRow = (variable = {}, {focus = false} = {}) => {
+    const row = document.createElement("div");
+    row.className = "harness-env-row";
+
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "harness-env-name";
+    name.value = variable.name || "";
+    name.placeholder = t("agents.variable_name");
+    name.autocomplete = "off";
+    name.spellcheck = false;
+    if (suggestions?.id) {
+      name.setAttribute("list", suggestions.id);
+    }
+
+    const valueWrap = document.createElement("div");
+    valueWrap.className = "harness-env-value-wrap";
+    const value = document.createElement("input");
+    const secret = Boolean(variable.secret || variableLooksSecret(name.value));
+    value.type = secret ? "password" : "text";
+    value.className = "harness-env-value";
+    value.value = variable.value || "";
+    value.placeholder = t("agents.variable_value");
+    value.autocomplete = "new-password";
+    value.spellcheck = false;
+
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "harness-env-reveal";
+    reveal.setAttribute("aria-label", t("agents.reveal_value"));
+    reveal.title = t("agents.reveal_value");
+    reveal.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>';
+    reveal.addEventListener("click", () => {
+      const revealing = value.type === "password";
+      value.type = revealing ? "text" : "password";
+      reveal.classList.toggle("is-revealing", revealing);
+      reveal.setAttribute(
+        "aria-label",
+        revealing ? t("agents.hide_value") : t("agents.reveal_value"),
+      );
+      reveal.title = revealing ? t("agents.hide_value") : t("agents.reveal_value");
+      value.focus({preventScroll: true});
+    });
+    reveal.hidden = !secret;
+    valueWrap.append(value, reveal);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "harness-env-remove";
+    remove.setAttribute("aria-label", t("agents.remove_variable"));
+    remove.title = t("agents.remove_variable");
+    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>';
+    remove.addEventListener("click", () => {
+      row.remove();
+      updateDirtyState();
+    });
+
+    name.addEventListener("input", () => {
+      const nowSecret = variableLooksSecret(name.value);
+      reveal.hidden = !nowSecret;
+      if (nowSecret && !reveal.classList.contains("is-revealing")) {
+        value.type = "password";
+      } else if (!nowSecret) {
+        value.type = "text";
+        reveal.classList.remove("is-revealing");
+      }
+      updateDirtyState();
+    });
+    value.addEventListener("input", updateDirtyState);
+    row.append(name, valueWrap, remove);
+    environmentList.appendChild(row);
+    updateDirtyState();
+    if (focus) {
+      name.focus({preventScroll: true});
+    }
+  };
+
+  const applyConfig = (config) => {
+    configEditable = supported && Boolean(config?.editable);
+    initialConfig = typeof config?.content === "string" ? config.content : "";
+    editor.value = initialConfig;
+    editor.disabled = !configEditable;
+    configPath.textContent = config?.path || "—";
+    configPath.title = config?.path || "";
+    configFormat.textContent = String(config?.format || "").toUpperCase() || "—";
+    configSource.textContent = config?.source === "default"
+      ? t("agents.configuration_default_source")
+      : (config?.source ? `$${config.source}` : "—");
+    configExists.textContent = config?.exists
+      ? t("agents.file_exists")
+      : t("agents.file_missing");
+    configExists.classList.toggle("is-present", Boolean(config?.exists));
+    configModified.textContent = formatConfigurationTime(config?.modified_at);
+    configDocs.href = config?.docs_url || "#";
+    configDocs.hidden = !config?.docs_url;
+    if (config?.error) {
+      configState.textContent = config.error;
+      configState.classList.add("is-error");
+    } else if (config?.exists) {
+      configState.textContent = t("agents.file_loaded", {size: Number(config.size || 0)});
+      configState.classList.remove("is-error");
+    } else {
+      configState.textContent = t("agents.file_not_created");
+      configState.classList.remove("is-error");
+    }
+    configState.classList.remove("is-dirty");
+    configSave.disabled = true;
+  };
+
+  const applyEnvironment = (environment, {saved = false} = {}) => {
+    environmentList.replaceChildren();
+    const variables = Array.isArray(environment?.variables) ? environment.variables : [];
+    const inherited = Array.isArray(environment?.inherited) ? environment.inherited : [];
+    for (const variable of variables) {
+      addEnvironmentRow(variable);
+    }
+    inheritedEnvironmentList.replaceChildren();
+    for (const variable of inherited) {
+      const item = document.createElement("span");
+      item.className = "harness-env-inherited-item";
+      item.classList.toggle("is-empty", !variable.configured);
+      item.classList.toggle("is-overridden", Boolean(variable.overridden));
+      const name = document.createElement("code");
+      name.textContent = variable.name || "";
+      const state = document.createElement("small");
+      state.textContent = variable.overridden
+        ? t("agents.environment_overridden")
+        : (variable.configured ? t("agents.environment_set") : t("agents.environment_empty"));
+      item.append(name, state);
+      inheritedEnvironmentList.appendChild(item);
+    }
+    inheritedEnvironment.hidden = inherited.length === 0;
+    environmentPath.textContent = environment?.path || "—";
+    environmentPath.title = environment?.path || "";
+    initialEnvironment = JSON.stringify(environmentData());
+    environmentState.textContent = saved
+      ? environmentCountText(variables.length)
+      : t("agents.environment_summary", {
+        managed: variables.length,
+        inherited: inherited.length,
+      });
+    environmentState.classList.remove("is-dirty", "is-error");
+    environmentAdd.disabled = !supported;
+    environmentSave.disabled = true;
+    environmentEmpty.hidden = variables.length > 0;
+  };
+
+  const loadConfiguration = async () => {
+    reloadButton.disabled = true;
+    status.textContent = t("agents.configuration_loading");
+    try {
+      const payload = await requestConfiguration(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/configuration`,
+      );
+      supported = Boolean(payload.supported);
+      applyConfig(payload.config || {});
+      applyEnvironment(payload.environment || {});
+      status.textContent = supported
+        ? (payload.checked_at
+          ? t("agents.configuration_loaded_at", {
+            node,
+            time: formatConfigurationTime(payload.checked_at),
+          })
+          : t("agents.configuration_loaded", {node}))
+        : (payload.error || t("agents.configuration_unsupported"));
+      harnessConfiguration.classList.toggle("is-unsupported", !supported);
+    } catch (error) {
+      supported = false;
+      configEditable = false;
+      editor.disabled = true;
+      environmentAdd.disabled = true;
+      configSave.disabled = true;
+      environmentSave.disabled = true;
+      status.textContent = t("agents.configuration_failed", {
+        message: error?.message || t("common.unknown"),
+      });
+      harnessConfiguration.classList.add("is-unsupported");
+    } finally {
+      reloadButton.disabled = false;
+    }
+  };
+
+  editor.addEventListener("input", updateDirtyState);
+  environmentAdd.addEventListener("click", () => addEnvironmentRow({}, {focus: true}));
+
+  configSave.addEventListener("click", async () => {
+    configSave.disabled = true;
+    configState.textContent = t("agents.saving");
+    try {
+      const payload = await requestConfiguration(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/configuration/file`,
+        {method: "PUT", body: JSON.stringify({content: editor.value})},
+      );
+      supported = Boolean(payload.supported);
+      applyConfig(payload.config || {});
+      configState.textContent = t("agents.file_saved", {
+        size: Number(payload.config?.size || 0),
+      });
+      window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {detail: {node}}));
+    } catch (error) {
+      configState.textContent = t("agents.save_failed", {
+        message: error?.message || t("common.unknown"),
+      });
+      configState.classList.add("is-error");
+      configSave.disabled = !configIsDirty();
+    }
+  });
+
+  environmentSave.addEventListener("click", async () => {
+    let variables;
+    try {
+      variables = Object.fromEntries(environmentData({validate: true}));
+    } catch (error) {
+      environmentState.textContent = error.message;
+      environmentState.classList.add("is-error");
+      return;
+    }
+    environmentSave.disabled = true;
+    environmentState.textContent = t("agents.saving");
+    try {
+      const payload = await requestConfiguration(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/configuration/environment`,
+        {method: "PUT", body: JSON.stringify({variables})},
+      );
+      supported = Boolean(payload.supported);
+      applyEnvironment(payload.environment || {}, {saved: true});
+      if (!configIsDirty()) {
+        applyConfig(payload.config || {});
+      }
+      window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {detail: {node}}));
+    } catch (error) {
+      environmentState.textContent = t("agents.save_failed", {
+        message: error?.message || t("common.unknown"),
+      });
+      environmentState.classList.add("is-error");
+      environmentSave.disabled = !environmentIsDirty();
+    }
+  });
+
+  reloadButton.addEventListener("click", () => {
+    if ((configIsDirty() || environmentIsDirty()) && !reloadArmed) {
+      reloadArmed = true;
+      reloadButton.classList.add("is-warning");
+      reloadButton.querySelector("span").textContent = t("agents.reload_discard");
+      window.clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(() => {
+        reloadArmed = false;
+        reloadButton.classList.remove("is-warning");
+        reloadButton.querySelector("span").textContent = t("common.reload");
+      }, 5000);
+      return;
+    }
+    reloadArmed = false;
+    reloadButton.classList.remove("is-warning");
+    reloadButton.querySelector("span").textContent = t("common.reload");
+    loadConfiguration();
+  });
+
+  window.StarAgentAfterPaint(loadConfiguration);
 }
 
 const historyBand = document.querySelector(".agent-history-band");

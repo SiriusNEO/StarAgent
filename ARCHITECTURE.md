@@ -4,6 +4,22 @@ StarAgent is a tmux-first control plane for coding CLI sessions. The system trea
 
 ## Components
 
+### Launcher
+
+Launcher is the default, single-Node StarAgent surface.
+
+- Runs by invoking `staragent` with no subcommand.
+- Opens the local Harness catalog by default.
+- Reuses Hub's Node Workspace for the local Node, including Current Node details, Agents, Sessions,
+  and Logs.
+- Does not render the Nodes inventory or run Remote Node heartbeats.
+- Opens a browser only for an attended local desktop launch; SSH and `--no-open` launches only print
+  the URL.
+
+Launcher and Hub are modes of one Dashboard application, not separate frontend implementations.
+`create_app(mode="launcher")` is also the stable host boundary for a future desktop shell: a native
+app can own window lifecycle while continuing to use the same local ASGI runtime and web assets.
+
 ### Hub
 
 The Hub is the web dashboard and coordinator.
@@ -34,42 +50,50 @@ The word `agent` is reserved for coding CLIs such as Codex, Claude, and OpenCode
 StarAgent has two kinds of sessions:
 
 - `agent` sessions: interactive coding CLI sessions, such as Codex or Claude.
-- `system` sessions: infrastructure sessions, such as `staragent-hub`, `staragent-node`, and `staragent-tailscaled`.
+- `system` sessions: infrastructure sessions, such as `staragent-launcher`, `staragent-hub`,
+  `staragent-node`, and `staragent-tailscaled`.
 
 Agent sessions can be created from the Dashboard or adopted from existing tmux sessions. System sessions are visible for observability but are read-only from Chat.
 
-The Dashboard starts with the Nodes connection inventory. Selecting a Node scopes the Agents,
+Hub starts with the Nodes connection inventory. Selecting a Node scopes the Agents,
 Sessions, and Logs pages to that machine; the browser never mixes multiple Nodes in one operational
-view. The selected Node's Agents page is the inventory and maintenance control plane for coding CLIs.
+view. Launcher skips the inventory and binds that same scope to the local Node. The selected Node's
+Agents page is the inventory and maintenance control plane for coding CLIs.
 A single preset registry feeds both its read-only catalog and **Sessions → Create Session**. General
 session creation remains on the Sessions page. Both surfaces can explicitly request an installed CLI
 update before a Session starts; no update runs during inventory probing or page load. The same bounded
 conversation history API feeds Agents discovery and the Create Session resume picker. The Agents page
-hands a selected conversation to Create Session by URL; only Create Session owns the launch flow.
+hands a selected conversation to Create Session by URL; only Create Session owns the launch flow. A
+Harness detail page can also launch that Harness directly in a real interactive PTY on the selected
+Node. It uses the same xterm.js and WebSocket path as a Session terminal. When the Harness exits it
+falls back to a login Shell, but the process remains tied to the browser connection rather than a
+persistent tmux Session.
+
+Missing Harnesses expose a normalized catalog of reviewed install options: official native and npm
+routes plus npmmirror and Tencent Cloud npm routes for China. The browser sends only an option ID.
+Each Node resolves that ID back to fixed argv or a fixed official HTTPS installer before execution;
+per-command registry arguments do not mutate npm's global configuration.
 
 ## Data Flow
 
 ```text
-Browser
+Browser / future desktop shell
   |
   | HTTP / WebSocket
   v
-StarAgent Hub :8080
-  |
-  | local tmux calls for local sessions
-  | HTTP / WebSocket proxy for remote sessions
-  v
-StarAgent Node :8081
-  |
-  | tmux list/capture/send/attach
-  v
-tmux sessions
-  |
-  v
-Codex / Claude / OpenCode / shell
+Shared StarAgent Dashboard :8080
+  |                                |
+  | Launcher: local tmux calls     | Hub: authenticated HTTP / WebSocket proxy
+  v                                v
+local tmux sessions          Remote Node :8081
+                                   |
+                                   | tmux list/capture/send/attach
+                                   v
+                              remote tmux sessions
 ```
 
-The browser only talks to the Hub. For remote sessions, the Hub talks to the node endpoint that was added in the Nodes page.
+Launcher terminates every operation on the local machine. In Hub mode, the browser still talks only
+to Hub; Hub either operates on its local tmux server or proxies to the Node selected in the inventory.
 
 ## APIs
 
@@ -80,10 +104,18 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/logs` (Remote Node outbox on Nodes; centralized archive query on the Hub)
 - `GET /api/agent-tools` (Remote Node executable probe)
 - `GET /api/nodes/{node}/agent-tools` (Hub view of a local or remote Node probe)
+- `POST /api/agent-tools/{agent}/install/{option}` (Remote Node allowlisted CLI install)
+- `POST /api/nodes/{node}/agent-tools/{agent}/install/{option}` (Hub install proxy)
 - `POST /api/agent-tools/{agent}/update` (Remote Node allowlisted CLI update)
 - `POST /api/nodes/{node}/agent-tools/{agent}/update` (Hub update proxy)
+- `WS /ws/agent-tools/{agent}/terminal` (Remote Node interactive Shell PTY)
+- `WS /ws/nodes/{node}/agent-tools/{agent}/terminal` (Hub Shell proxy for the selected Node)
 - `GET /api/agent-history` (bounded, read-only Remote Node history scan)
 - `GET /api/nodes/{node}/agent-history` (Hub proxy for an explicitly requested scan)
+- `GET /api/staragent-update` (Node-local official checkout status)
+- `POST /api/staragent-update/check` and `POST /api/staragent-update/apply`
+- `GET /api/nodes/{node}/staragent-update` (Hub view of the selected Node updater)
+- `POST /api/nodes/{node}/staragent-update/check` and `POST /api/nodes/{node}/staragent-update/apply`
 - `POST /api/workers`
 - `POST /api/adopt`
 - `DELETE /api/sessions/{name}`
@@ -92,7 +124,11 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/sessions/{name}/transcript-state`
 - `WS /ws/sessions/{name}/terminal`
 
-The Hub adds node management and browser authentication.
+The Hub adds node management, browser authentication, and checkout maintenance:
+
+- `GET /api/settings/update` (local cached Git state)
+- `POST /api/settings/update/check` (fetch the matching official branch)
+- `POST /api/settings/update/apply` (verified fast-forward plus supervised Dashboard restart)
 
 ## Chat and Terminal
 
@@ -112,12 +148,13 @@ File browsing and preview are served from the machine that owns the session:
 Changed Files are derived from the session workspace Git status.
 
 CLI inventory probes execute version commands and disable nonessential updater traffic. They cache
-results on the Node and expose suggested update commands without executing them. An update begins
-only after a separate authenticated POST and user confirmation. The Node re-probes the executable,
-derives an argv list from the detected install source and an internal allowlist, and executes it
-without a shell or interactive stdin. Per-Agent locks reject duplicate updates; output is bounded and
-redacted, results are normalized at the Hub boundary, and success or failure is written to the
-centralized log without command output. Login probes use
+results on the Node and expose reviewed install or update options without executing them. An install
+or update begins only after a separate authenticated POST and user confirmation. The Node resolves a
+fixed install option or derives an update argv from the detected installation source, then executes it
+without a shell or interactive stdin. Official native installers are bounded downloads from fixed
+HTTPS hosts and run from temporary files. Per-Agent locks reject duplicate maintenance operations;
+output is bounded and redacted, results are normalized at the Hub boundary, and success or failure is
+written to the centralized log without command output. Login probes use
 `codex login status`, `claude auth status --json`, and `opencode auth list`. The same cached probe uses Codex's local read-only
 `account/rateLimits/read` app-server method for quota windows; Claude remaining usage is intentionally
 left to its interactive `/status` command. No identity or credential values are returned, and all
@@ -127,6 +164,18 @@ returns an allowlisted metadata shape with a short prompt preview. It never modi
 files or returns their paths. Resume creation sends a structured Agent/session ID to the Hub. The Hub
 combines it with the selected preset before forwarding a normal worker command, so preset permissions
 are retained and older Remote Nodes remain protocol-compatible.
+
+Each service reports process-cached StarAgent version, branch, and commit metadata in the
+authenticated Node heartbeat; public health checks do not expose versions, and heartbeats do not
+run Git or contact GitHub. Numeric capabilities, rather than exact package-version equality, gate
+optional behavior so older Nodes remain usable.
+
+The shared updater accepts only `main` or `dev` checkouts whose `origin` resolves to the official
+GitHub repository. It fetches a fixed branch ref, rejects local changes and diverged history, and
+uses `git merge --ff-only` against the verified commit hash. It never accepts a remote, branch,
+commit, or command from the browser. A successful local-Node update terminates only the supervised
+Dashboard child; a Remote-Node update terminates only the supervised Node child. tmux Agent Sessions
+are unaffected.
 
 ## Logging and Supervision
 

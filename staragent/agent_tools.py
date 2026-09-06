@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from staragent.agent_auth import (
@@ -25,13 +32,20 @@ from staragent.agent_usage import (
     unknown_agent_usage,
 )
 from staragent.event_log import redact_log_text
+from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
 
 AGENT_TOOL_CACHE_TTL_SECONDS = 60.0
 AGENT_TOOL_PROBE_TIMEOUT_SECONDS = 3.0
 AGENT_TOOL_UPDATE_TIMEOUT_SECONDS = 180.0
+AGENT_TOOL_INSTALL_TIMEOUT_SECONDS = 300.0
 AGENT_TOOL_UPDATE_OUTPUT_MAX_CHARS = 4_000
+AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES = 1024 * 1024
 AGENT_TOOL_STATUSES = {"available", "missing", "error", "unknown"}
+AGENT_UPDATE_STATUSES = {"up_to_date", "update_available", "unknown"}
+CODEX_UPDATE_CACHE_MAX_AGE_SECONDS = 48 * 60 * 60
+CODEX_UPDATE_CACHE_MAX_BYTES = 16 * 1024
+CLI_VERSION_PATTERN = re.compile(r"(?:^|[^A-Za-z0-9_.-])v?(\d+)\.(\d+)\.(\d+)(?![A-Za-z0-9_.-])")
 
 
 @dataclass(frozen=True)
@@ -48,6 +62,29 @@ class AgentToolSpec:
     accent: str
     history_supported: bool = False
     version_args: tuple[str, ...] = ("--version",)
+
+
+@dataclass(frozen=True)
+class AgentInstallOption:
+    id: str
+    method: str
+    source: str
+    provider: str
+    command: str
+    argv: tuple[str, ...] = ()
+    script_url: str = ""
+    interpreter: str = ""
+    recommended: bool = False
+    china: bool = False
+    source_url: str = ""
+
+    @property
+    def requirements(self) -> tuple[str, ...]:
+        if self.argv:
+            return (self.argv[0],)
+        if self.interpreter:
+            return (self.interpreter,)
+        return ()
 
 
 AGENT_TOOL_SPECS = (
@@ -70,7 +107,7 @@ AGENT_TOOL_SPECS = (
         command="claude",
         npm_package="@anthropic-ai/claude-code",
         install_command="npm install -g @anthropic-ai/claude-code@latest",
-        docs_url="https://docs.anthropic.com/en/docs/claude-code/getting-started",
+        docs_url="https://code.claude.com/docs/en/setup",
         vendor="Anthropic",
         description="An agentic coding tool that understands your codebase and workflow.",
         icon="agent-icons/claude.svg",
@@ -91,6 +128,16 @@ AGENT_TOOL_SPECS = (
     ),
 )
 
+NATIVE_INSTALLERS = {
+    "codex": ("https://chatgpt.com/codex/install.sh", "sh"),
+    "claude": ("https://claude.ai/install.sh", "bash"),
+    "opencode": ("https://opencode.ai/install", "bash"),
+}
+INSTALL_SOURCE_URLS = {
+    "npmmirror": "https://npmmirror.com/",
+    "tencent": "https://cloud.tencent.com/document/product/213/8623",
+}
+
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, tuple[float, dict[str, object]]] = {}
 _UPDATE_LOCKS = {spec.name: threading.Lock() for spec in AGENT_TOOL_SPECS}
@@ -100,8 +147,128 @@ class AgentToolUpdateBusyError(RuntimeError):
     pass
 
 
+def agent_install_options(spec: AgentToolSpec) -> tuple[AgentInstallOption, ...]:
+    script_url, interpreter = NATIVE_INSTALLERS[spec.name]
+    script_command = f"curl -fsSL {script_url} | {interpreter}"
+    package = f"{spec.npm_package}@latest"
+    return (
+        AgentInstallOption(
+            id="official-native",
+            method="native",
+            source="official",
+            provider=spec.vendor,
+            command=script_command,
+            script_url=script_url,
+            interpreter=interpreter,
+            recommended=True,
+            source_url=spec.docs_url,
+        ),
+        AgentInstallOption(
+            id="official-npm",
+            method="npm",
+            source="official",
+            provider="npmjs",
+            command=(f"npm install -g {package} --registry=https://registry.npmjs.org"),
+            argv=(
+                "npm",
+                "install",
+                "-g",
+                package,
+                "--registry=https://registry.npmjs.org",
+            ),
+            source_url=f"https://www.npmjs.com/package/{spec.npm_package}",
+        ),
+        AgentInstallOption(
+            id="npmmirror",
+            method="npm",
+            source="mirror",
+            provider="npmmirror",
+            command=(f"npm install -g {package} --registry=https://registry.npmmirror.com"),
+            argv=(
+                "npm",
+                "install",
+                "-g",
+                package,
+                "--registry=https://registry.npmmirror.com",
+            ),
+            china=True,
+            source_url=INSTALL_SOURCE_URLS["npmmirror"],
+        ),
+        AgentInstallOption(
+            id="tencent-mirror",
+            method="npm",
+            source="mirror",
+            provider="Tencent Cloud",
+            command=(f"npm install -g {package} --registry=https://mirrors.cloud.tencent.com/npm/"),
+            argv=(
+                "npm",
+                "install",
+                "-g",
+                package,
+                "--registry=https://mirrors.cloud.tencent.com/npm/",
+            ),
+            china=True,
+            source_url=INSTALL_SOURCE_URLS["tencent"],
+        ),
+    )
+
+
+def agent_install_option(spec: AgentToolSpec, option_id: str) -> AgentInstallOption:
+    normalized = str(option_id or "").strip().lower()
+    option = next((item for item in agent_install_options(spec) if item.id == normalized), None)
+    if option is None:
+        raise ValueError(f"Unsupported install option for {spec.label}: {option_id}")
+    return option
+
+
+def install_option_payload(
+    option: AgentInstallOption,
+    reported: object = None,
+) -> dict[str, object]:
+    raw = reported if isinstance(reported, dict) else None
+    if raw is None:
+        missing = [name for name in option.requirements if not shutil.which(name)]
+        available = not missing
+    else:
+        allowed_requirements = set(option.requirements)
+        raw_missing = raw.get("missing_requirements")
+        missing = (
+            [str(name) for name in raw_missing if str(name) in allowed_requirements]
+            if isinstance(raw_missing, list)
+            else list(option.requirements)
+        )
+        available = bool(raw.get("available")) and not missing
+    return {
+        "id": option.id,
+        "method": option.method,
+        "source": option.source,
+        "provider": option.provider,
+        "command": option.command,
+        "recommended": option.recommended,
+        "china": option.china,
+        "source_url": option.source_url,
+        "available": available,
+        "missing_requirements": missing,
+    }
+
+
+def install_options_payload(
+    spec: AgentToolSpec,
+    reported: object = None,
+) -> list[dict[str, object]]:
+    by_id = (
+        {str(item.get("id") or ""): item for item in reported if isinstance(item, dict)}
+        if isinstance(reported, list)
+        else None
+    )
+    return [
+        install_option_payload(option, None if by_id is None else by_id.get(option.id, {}))
+        for option in agent_install_options(spec)
+    ]
+
+
 def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
-    cache_key = os.environ.get("PATH", "")
+    cache_key = "\0".join(os.environ.get(name, "") for name in ("PATH", "HOME", "CODEX_HOME"))
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _CACHE.get(cache_key)
@@ -112,6 +279,7 @@ def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
         payload: dict[str, object] = {
             "supported": True,
             "updates_supported": True,
+            "installs_supported": True,
             "scope": "executable",
             "checked_at": utc_timestamp(),
             "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -123,7 +291,8 @@ def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
 
 
 def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
-    executable = shutil.which(spec.command)
+    environment = probe_environment(spec.name)
+    executable = shutil.which(spec.command, path=environment.get("PATH"))
     if not executable:
         return tool_status(
             spec,
@@ -139,7 +308,7 @@ def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
             text=True,
             capture_output=True,
             timeout=AGENT_TOOL_PROBE_TIMEOUT_SECONDS,
-            env=probe_environment(),
+            env=environment,
         )
     except subprocess.TimeoutExpired:
         return tool_status(
@@ -178,6 +347,7 @@ def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
         executable=executable,
         resolved_executable=resolved_executable,
         version=output or "installed",
+        update=probe_agent_update_status(spec, output),
         auth=auth,
         usage=usage,
     )
@@ -192,8 +362,10 @@ def tool_status(
     install_method: str = "",
     version: str = "",
     error: str = "",
+    update: object = None,
     auth: object = None,
     usage: object = None,
+    install_options: object = None,
 ) -> dict[str, object]:
     normalized_status = status if status in AGENT_TOOL_STATUSES else "unknown"
     resolved = resolved_executable or executable
@@ -207,7 +379,7 @@ def tool_status(
     elif normalized_status in {"missing", "error"}:
         normalized_auth = unavailable_agent_auth(
             spec.name,
-            "Login state is unavailable until this CLI installation is ready.",
+            "Access state is unavailable until this CLI installation is ready.",
         )
     else:
         normalized_auth = unknown_agent_auth(spec.name)
@@ -220,6 +392,19 @@ def tool_status(
         )
     else:
         normalized_usage = unknown_agent_usage(spec.name)
+    normalized_update = normalize_agent_update_status(update)
+    update_is_current = (
+        normalized_status == "available" and normalized_update["status"] == "up_to_date"
+    )
+    managed_update_command = (
+        "" if update_is_current else update_command(spec, normalized_status, method)
+    )
+    if update_is_current:
+        update_action = "current"
+    elif normalized_status == "unknown":
+        update_action = ""
+    else:
+        update_action = "install" if normalized_status == "missing" else "update"
     return {
         "name": spec.name,
         "label": spec.label,
@@ -231,11 +416,11 @@ def tool_status(
         "executable": clean_tool_text(executable, max_chars=500),
         "resolved_executable": clean_tool_text(resolved, max_chars=500),
         "install_method": method,
-        "update_command": update_command(spec, normalized_status, method),
-        "update_action": ""
-        if normalized_status == "unknown"
-        else ("install" if normalized_status == "missing" else "update"),
+        "update_command": managed_update_command,
+        "update_action": update_action,
         "update_note": update_note(normalized_status, method),
+        "update": normalized_update,
+        "install_options": install_options_payload(spec, install_options),
         "docs_url": spec.docs_url,
         "history_supported": spec.history_supported,
         "auth": normalized_auth,
@@ -253,6 +438,7 @@ def unknown_agent_tools_payload(
     return {
         "supported": supported,
         "updates_supported": False,
+        "installs_supported": False,
         "scope": "executable",
         "checked_at": "",
         "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -287,13 +473,16 @@ def normalize_agent_tools_payload(payload: object) -> dict[str, object]:
                 install_method=str(raw.get("install_method") or ""),
                 version=str(raw.get("version") or ""),
                 error=str(raw.get("error") or ""),
+                update=raw.get("update"),
                 auth=raw.get("auth"),
                 usage=raw.get("usage"),
+                install_options=raw.get("install_options", []),
             )
         )
     return {
         "supported": bool(payload.get("supported", True)),
         "updates_supported": bool(payload.get("updates_supported", False)),
+        "installs_supported": bool(payload.get("installs_supported", False)),
         "scope": "executable",
         "checked_at": clean_tool_text(payload.get("checked_at"), max_chars=80),
         "cache_ttl_seconds": int(AGENT_TOOL_CACHE_TTL_SECONDS),
@@ -323,6 +512,117 @@ def clear_agent_tools_cache() -> None:
         _CACHE.clear()
 
 
+def install_agent_tool(name: str, option_id: str) -> dict[str, object]:
+    spec = agent_tool_spec(name)
+    if spec is None:
+        raise ValueError(f"Unsupported Agent CLI: {name}")
+    option = agent_install_option(spec, option_id)
+    lock = _UPDATE_LOCKS[spec.name]
+    if not lock.acquire(blocking=False):
+        raise AgentToolUpdateBusyError(f"{spec.label} is already being maintained.")
+    try:
+        before = probe_agent_tool(spec)
+        result: dict[str, object] = {
+            "ok": False,
+            "agent": spec.name,
+            "label": spec.label,
+            "option": option.id,
+            "source": option.source,
+            "provider": option.provider,
+            "command": option.command,
+            "before_status": str(before.get("status") or "unknown"),
+            "after_status": str(before.get("status") or "unknown"),
+            "after_version": str(before.get("version") or ""),
+            "changed": False,
+            "output": "",
+            "error": "",
+            "checked_at": utc_timestamp(),
+        }
+        if before.get("status") == "available":
+            result["ok"] = True
+            return normalize_agent_install_result(spec.name, result)
+
+        missing = [name for name in option.requirements if not shutil.which(name)]
+        if missing:
+            result["error"] = f"Required command not found: {', '.join(missing)}"
+            return normalize_agent_install_result(spec.name, result)
+
+        returncode, output = run_agent_install_option(option)
+        result["output"] = output
+        if returncode != 0:
+            result["error"] = output or f"Install command exited with code {returncode}."
+            return normalize_agent_install_result(spec.name, result)
+
+        clear_agent_tools_cache()
+        after = probe_agent_tool(spec)
+        installed = after.get("status") == "available"
+        result.update(
+            {
+                "ok": installed,
+                "after_status": str(after.get("status") or "unknown"),
+                "after_version": str(after.get("version") or ""),
+                "changed": installed,
+                "error": ""
+                if installed
+                else (
+                    "The installer completed, but the CLI is still missing from the "
+                    "Node service PATH. Reload the service or review the install output."
+                ),
+                "checked_at": utc_timestamp(),
+            }
+        )
+        return normalize_agent_install_result(spec.name, result)
+    finally:
+        lock.release()
+
+
+def run_agent_install_option(option: AgentInstallOption) -> tuple[int, str]:
+    if option.argv:
+        return run_agent_command(option.argv, timeout=AGENT_TOOL_INSTALL_TIMEOUT_SECONDS)
+    if not option.script_url or not option.interpreter:
+        return 2, "Install option is not executable."
+    try:
+        script = download_install_script(option.script_url)
+    except (OSError, RuntimeError, ValueError, urllib.error.URLError) as exc:
+        return 1, clean_update_output(exc)
+    try:
+        with tempfile.TemporaryDirectory(prefix="staragent-install-") as directory:
+            path = Path(directory) / "install.sh"
+            path.write_bytes(script)
+            path.chmod(0o700)
+            return run_agent_command(
+                (option.interpreter, str(path)),
+                timeout=AGENT_TOOL_INSTALL_TIMEOUT_SECONDS,
+            )
+    except OSError as exc:
+        return 1, clean_update_output(exc)
+
+
+def download_install_script(url: str) -> bytes:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "chatgpt.com",
+        "claude.ai",
+        "opencode.ai",
+    }:
+        raise ValueError("Installer URL is not allowlisted.")
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "StarAgent harness installer"},
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        content_length = safe_int(response.headers.get("Content-Length"))
+        if content_length > AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES:
+            raise RuntimeError("Installer script is too large.")
+        script = response.read(AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES + 1)
+    if len(script) > AGENT_TOOL_INSTALL_SCRIPT_MAX_BYTES:
+        raise RuntimeError("Installer script is too large.")
+    stripped = script.lstrip()
+    if not stripped or stripped[:16].lower().startswith((b"<!doctype", b"<html")):
+        raise RuntimeError("Installer endpoint did not return a shell script.")
+    return script
+
+
 def update_agent_tool(name: str) -> dict[str, object]:
     spec = agent_tool_spec(name)
     if spec is None:
@@ -350,6 +650,10 @@ def update_agent_tool(name: str) -> dict[str, object]:
                 f"{spec.label} is not ready in the Node service environment; "
                 "install or repair it before updating."
             )
+            return normalize_agent_update_result(spec.name, base_result)
+        update = before.get("update")
+        if isinstance(update, dict) and update.get("status") == "up_to_date":
+            base_result["ok"] = True
             return normalize_agent_update_result(spec.name, base_result)
         if not command or before.get("update_action") != "update":
             base_result["error"] = f"No supported update command is available for {spec.label}."
@@ -393,19 +697,28 @@ def update_argv(spec: AgentToolSpec, tool: dict[str, object], command: str) -> l
 
 
 def run_agent_update_command(argv: list[str]) -> tuple[int, str]:
+    return run_agent_command(argv, timeout=AGENT_TOOL_UPDATE_TIMEOUT_SECONDS)
+
+
+def run_agent_command(
+    argv: tuple[str, ...] | list[str],
+    *,
+    timeout: float,
+) -> tuple[int, str]:
+    command = list(argv)
     try:
         result = subprocess.run(
-            argv,
+            command,
             check=False,
             stdin=subprocess.DEVNULL,
             text=True,
             capture_output=True,
-            timeout=AGENT_TOOL_UPDATE_TIMEOUT_SECONDS,
+            timeout=timeout,
             env=update_environment(),
         )
     except subprocess.TimeoutExpired as exc:
         output = clean_update_output(exc.stdout, exc.stderr)
-        detail = f"Update timed out after {AGENT_TOOL_UPDATE_TIMEOUT_SECONDS:g}s."
+        detail = f"Command timed out after {timeout:g}s."
         return 124, f"{output}\n{detail}".strip()
     except OSError as exc:
         return 127, clean_update_output(exc)
@@ -452,6 +765,43 @@ def normalize_agent_update_result(name: str, value: object) -> dict[str, object]
     }
 
 
+def normalize_agent_install_result(name: str, value: object) -> dict[str, object]:
+    spec = agent_tool_spec(name)
+    if spec is None:
+        raise ValueError(f"Unsupported Agent CLI: {name}")
+    payload = value if isinstance(value, dict) else {}
+    options = {option.id: option for option in agent_install_options(spec)}
+    option = options.get(str(payload.get("option") or ""))
+    command = clean_tool_text(payload.get("command"), max_chars=300)
+    valid_option = option is not None and command == option.command
+    if not valid_option:
+        command = ""
+    error = clean_update_output(payload.get("error"))
+    if payload.get("ok") and not valid_option and not error:
+        error = "Node returned an invalid installation result."
+    return {
+        "ok": bool(payload.get("ok")) and valid_option,
+        "agent": spec.name,
+        "label": spec.label,
+        "option": option.id if option else "",
+        "source": option.source if option else "",
+        "provider": option.provider if option else "",
+        "command": command,
+        "before_status": normalize_tool_status(payload.get("before_status")),
+        "after_status": normalize_tool_status(payload.get("after_status")),
+        "after_version": clean_tool_text(payload.get("after_version"), max_chars=120),
+        "changed": bool(payload.get("changed")),
+        "output": clean_update_output(payload.get("output")),
+        "error": error,
+        "checked_at": clean_tool_text(payload.get("checked_at"), max_chars=80),
+    }
+
+
+def normalize_tool_status(value: object) -> str:
+    status = str(value or "unknown").lower()
+    return status if status in AGENT_TOOL_STATUSES else "unknown"
+
+
 def first_output_line(*values: str) -> str:
     for value in values:
         for line in strip_ansi(value or "").splitlines():
@@ -465,13 +815,114 @@ def clean_tool_text(value: Any, *, max_chars: int = 240) -> str:
     return f"{text[:max_chars]}…" if len(text) > max_chars else text
 
 
+def safe_int(value: object) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def normalize_agent_update_status(value: object) -> dict[str, str]:
+    payload = value if isinstance(value, dict) else {}
+    status = str(payload.get("status") or "unknown")
+    if status not in AGENT_UPDATE_STATUSES:
+        status = "unknown"
+    return {
+        "status": status,
+        "current_version": clean_tool_text(payload.get("current_version"), max_chars=80),
+        "latest_version": clean_tool_text(payload.get("latest_version"), max_chars=80),
+        "checked_at": clean_tool_text(payload.get("checked_at"), max_chars=80),
+        "source": "codex_version_cache" if payload.get("source") == "codex_version_cache" else "",
+    }
+
+
+def probe_agent_update_status(spec: AgentToolSpec, installed_version: str) -> dict[str, str]:
+    if spec.name == "codex":
+        return probe_codex_update_status(installed_version)
+    return normalize_agent_update_status(None)
+
+
+def probe_codex_update_status(
+    installed_version: str,
+    *,
+    cache_path: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    path = cache_path or codex_update_cache_path()
+    try:
+        if path.stat().st_size > CODEX_UPDATE_CACHE_MAX_BYTES:
+            return normalize_agent_update_status(None)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        return normalize_agent_update_status(None)
+    if not isinstance(payload, dict):
+        return normalize_agent_update_status(None)
+
+    latest_text = clean_tool_text(payload.get("latest_version"), max_chars=80)
+    checked_at = clean_tool_text(payload.get("last_checked_at"), max_chars=80)
+    current = numeric_cli_version(installed_version)
+    latest = numeric_cli_version(latest_text)
+    status = "unknown"
+    if current and latest and update_cache_is_fresh(checked_at, now=now):
+        status = "update_available" if latest > current else "up_to_date"
+    return normalize_agent_update_status(
+        {
+            "status": status,
+            "current_version": version_text(current),
+            "latest_version": version_text(latest) or latest_text,
+            "checked_at": checked_at,
+            "source": "codex_version_cache",
+        }
+    )
+
+
+def codex_update_cache_path() -> Path:
+    codex_home = os.environ.get("CODEX_HOME", "").strip()
+    return (
+        Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    ) / "version.json"
+
+
+def numeric_cli_version(value: object) -> tuple[int, int, int] | None:
+    match = CLI_VERSION_PATTERN.search(str(value or ""))
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def version_text(value: tuple[int, int, int] | None) -> str:
+    return ".".join(str(part) for part in value) if value else ""
+
+
+def update_cache_is_fresh(value: str, *, now: datetime | None = None) -> bool:
+    try:
+        checked_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    age = ((now or datetime.now(UTC)) - checked_at.astimezone(UTC)).total_seconds()
+    return -300 <= age <= CODEX_UPDATE_CACHE_MAX_AGE_SECONDS
+
+
 def utc_timestamp() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def probe_environment() -> dict[str, str]:
+def probe_environment(agent: str = "") -> dict[str, str]:
+    environment = harness_process_environment(agent) if agent else os.environ.copy()
+    home = Path(environment.get("HOME") or Path.home()).expanduser()
+    search_path = environment.get("PATH", "")
+    path_entries = [entry for entry in search_path.split(os.pathsep) if entry]
+    for directory in (
+        home / ".local" / "bin",
+        home / ".opencode" / "bin",
+        home / ".claude" / "local",
+    ):
+        value = str(directory)
+        if value not in path_entries:
+            path_entries.append(value)
     return {
-        **os.environ,
+        **environment,
+        "PATH": os.pathsep.join(path_entries),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "NO_COLOR": "1",

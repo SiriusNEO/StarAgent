@@ -7,14 +7,17 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
+from staragent.agent_auth import logout_codex
 from staragent.agent_history import agent_history_payload
 from staragent.agent_tools import (
     AgentToolUpdateBusyError,
     agent_tools_payload,
+    clear_agent_tools_cache,
+    install_agent_tool,
     update_agent_tool,
 )
 from staragent.auth import node_auth_token
@@ -26,6 +29,12 @@ from staragent.files import (
     file_raw_info_payload,
     file_raw_payload,
 )
+from staragent.harness_config import (
+    harness_configuration_payload,
+    save_harness_config,
+    save_harness_environment,
+)
+from staragent.harness_terminal import open_codex_login_terminal, open_harness_terminal
 from staragent.pty_terminal import PtyTerminal, parse_client_message
 from staragent.runtime import (
     capture_tmux_pane_ansi,
@@ -35,10 +44,26 @@ from staragent.runtime import (
     start_tmux_worker,
     tmux_session_exists,
 )
-from staragent.schemas import CreateDirectory, CreateWorker, SendMessage, TerminalInput
+from staragent.schemas import (
+    CreateDirectory,
+    CreateWorker,
+    HarnessConfigRequest,
+    HarnessEnvironmentRequest,
+    SendMessage,
+    TerminalInput,
+)
+from staragent.self_update import (
+    STARAGENT_UPDATE_CONFLICTS,
+    StarAgentUpdateBusyError,
+    StarAgentUpdateError,
+    apply_official_update,
+    current_installation_info,
+    official_update_status,
+    schedule_node_restart,
+)
 from staragent.session_parser import tmux_transcript_state, transcript_state_payload
 from staragent.status import collect_session_view, collect_session_views
-from staragent.web_terminal import stream_pty_to_websocket
+from staragent.web_terminal import interact_with_pty_websocket, stream_pty_to_websocket
 
 
 @contextlib.asynccontextmanager
@@ -62,8 +87,17 @@ async def node_lifespan(_app: FastAPI):
         )
 
 
+def staragent_update_error_response(error: StarAgentUpdateError) -> JSONResponse:
+    status_code = 409 if error.code in STARAGENT_UPDATE_CONFLICTS else 502
+    return JSONResponse(
+        {"ok": False, "error": error.code, "detail": str(error)},
+        status_code=status_code,
+    )
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="StarAgent Node", lifespan=node_lifespan)
+    node_info = current_installation_info()
 
     @app.middleware("http")
     async def require_node_auth(request: Request, call_next):
@@ -86,16 +120,84 @@ def create_app() -> FastAPI:
     def sessions() -> dict[str, object]:
         return {
             "sessions": [session_payload(view) for view in collect_session_views()],
+            "node": node_info,
             "capabilities": {
                 "logs": 1,
-                "agent_tools": 4,
+                "agent_tools": 6,
                 "agent_auth": 1,
+                "agent_auth_management": 1,
+                "agent_configuration": 1,
+                "agent_install": 1,
                 "agent_update": 1,
                 "agent_usage": 1,
                 "agent_history": 1,
+                "agent_terminal": 1,
                 "session_status": 2,
+                "staragent_update": 1,
             },
         }
+
+    @app.get("/api/staragent-update")
+    def staragent_update_status() -> JSONResponse:
+        try:
+            return JSONResponse({"ok": True, **official_update_status(service="node")})
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc)
+        except StarAgentUpdateError as exc:
+            return staragent_update_error_response(exc)
+
+    @app.post("/api/staragent-update/check")
+    def check_staragent_update() -> JSONResponse:
+        try:
+            return JSONResponse(
+                {"ok": True, **official_update_status(refresh=True, service="node")}
+            )
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc)
+        except StarAgentUpdateError as exc:
+            append_node_outbox_event(
+                "warning",
+                "node.update_check_failed",
+                "Could not check the official StarAgent update channel.",
+                source="node.update",
+                details={"reason": exc.code},
+            )
+            return staragent_update_error_response(exc)
+
+    @app.post("/api/staragent-update/apply")
+    def install_staragent_update() -> JSONResponse:
+        try:
+            result = apply_official_update(service="node")
+        except StarAgentUpdateBusyError as exc:
+            return staragent_update_error_response(exc)
+        except StarAgentUpdateError as exc:
+            append_node_outbox_event(
+                "warning",
+                "node.update_failed",
+                "StarAgent refused or failed an official update.",
+                source="node.update",
+                details={"reason": exc.code},
+            )
+            return staragent_update_error_response(exc)
+
+        after = result.get("after") if isinstance(result.get("after"), dict) else {}
+        before = result.get("before") if isinstance(result.get("before"), dict) else {}
+        updated = bool(result.get("updated"))
+        restart_scheduled = schedule_node_restart() if updated else False
+        if updated:
+            append_node_outbox_event(
+                "info",
+                "node.updated",
+                "StarAgent fast-forwarded to the latest official commit.",
+                source="node.update",
+                details={
+                    "branch": after.get("branch", ""),
+                    "before_commit": before.get("current_short_commit", ""),
+                    "after_commit": after.get("current_short_commit", ""),
+                    "restart_scheduled": restart_scheduled,
+                },
+            )
+        return JSONResponse({**result, "restart_scheduled": restart_scheduled})
 
     @app.get("/api/logs")
     def logs(after: str = "", limit: int = 250) -> dict[str, object]:
@@ -104,6 +206,70 @@ def create_app() -> FastAPI:
     @app.get("/api/agent-tools")
     def agent_tools(refresh: bool = False) -> dict[str, object]:
         return agent_tools_payload(force=refresh)
+
+    @app.get("/api/agent-tools/{agent}/configuration")
+    def harness_configuration(agent: str) -> JSONResponse:
+        try:
+            payload = harness_configuration_payload(agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_json(payload)
+
+    @app.put("/api/agent-tools/{agent}/configuration/file")
+    def update_harness_config(agent: str, request: HarnessConfigRequest) -> JSONResponse:
+        try:
+            payload = save_harness_config(agent, request.content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        clear_agent_tools_cache()
+        config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        append_node_outbox_event(
+            "info",
+            "agent.config_saved",
+            f"{agent} configuration was saved.",
+            source="node.agents",
+            details={"agent": agent, "path": config.get("path") or ""},
+        )
+        return no_store_json(payload)
+
+    @app.put("/api/agent-tools/{agent}/configuration/environment")
+    def update_harness_environment(
+        agent: str,
+        request: HarnessEnvironmentRequest,
+    ) -> JSONResponse:
+        try:
+            payload = save_harness_environment(agent, request.variables)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        clear_agent_tools_cache()
+        append_node_outbox_event(
+            "info",
+            "agent.environment_saved",
+            f"{agent} environment was saved.",
+            source="node.agents",
+            details={"agent": agent, "variables": sorted(request.variables)},
+        )
+        return no_store_json(payload)
+
+    @app.post("/api/agent-tools/codex/auth/logout")
+    def codex_logout() -> JSONResponse:
+        try:
+            result = logout_codex()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        clear_agent_tools_cache()
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "agent.auth_logout" if result.get("ok") else "agent.auth_logout_failed",
+            "Codex logged out." if result.get("ok") else "Codex logout failed.",
+            source="node.agents",
+            details={"agent": "codex"},
+        )
+        return no_store_json(result)
 
     @app.post("/api/agent-tools/{agent}/update")
     def update_agent_cli(agent: str) -> dict[str, object]:
@@ -124,6 +290,31 @@ def create_app() -> FastAPI:
                 "before_version": result.get("before_version") or "",
                 "after_version": result.get("after_version") or "",
                 "changed": bool(result.get("changed")),
+                "error": result.get("error") or "",
+            },
+        )
+        return result
+
+    @app.post("/api/agent-tools/{agent}/install/{option_id}")
+    def install_agent_cli(agent: str, option_id: str) -> dict[str, object]:
+        try:
+            result = install_agent_tool(agent, option_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AgentToolUpdateBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "agent.install_succeeded" if result.get("ok") else "agent.install_failed",
+            f"{result.get('label') or agent} installation "
+            f"{'completed' if result.get('ok') else 'failed'}.",
+            source="node.agents",
+            details={
+                "agent": result.get("agent") or agent,
+                "option": result.get("option") or "",
+                "source": result.get("source") or "",
+                "after_status": result.get("after_status") or "",
+                "after_version": result.get("after_version") or "",
                 "error": result.get("error") or "",
             },
         )
@@ -299,6 +490,73 @@ def create_app() -> FastAPI:
             reader.cancel()
             terminal.close()
 
+    @app.websocket("/ws/agent-tools/{agent}/terminal")
+    async def agent_terminal_socket(websocket: WebSocket, agent: str) -> None:
+        await websocket.accept()
+        if not websocket_is_authenticated(websocket):
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        opened = False
+        try:
+            with open_harness_terminal(agent) as terminal:
+                opened = True
+                append_node_outbox_event(
+                    "info",
+                    "agent.terminal_opened",
+                    f"{agent} interactive shell opened.",
+                    source="node.agents",
+                    details={"agent": agent},
+                )
+                await interact_with_pty_websocket(terminal, websocket)
+        except ValueError as exc:
+            await websocket.close(code=4404, reason=str(exc)[:120])
+        except OSError:
+            await websocket.close(code=1011, reason="could not start interactive shell")
+        finally:
+            if opened:
+                append_node_outbox_event(
+                    "info",
+                    "agent.terminal_closed",
+                    f"{agent} interactive shell closed.",
+                    source="node.agents",
+                    details={"agent": agent},
+                )
+
+    @app.websocket("/ws/agent-tools/codex/auth/login")
+    async def codex_login_socket(websocket: WebSocket) -> None:
+        await websocket.accept()
+        if not websocket_is_authenticated(websocket):
+            await websocket.close(code=4401, reason="unauthorized")
+            return
+        opened = False
+        try:
+            with open_codex_login_terminal() as terminal:
+                opened = True
+                append_node_outbox_event(
+                    "info",
+                    "agent.auth_login_started",
+                    "Codex device login started.",
+                    source="node.agents",
+                    details={"agent": "codex"},
+                )
+                await interact_with_pty_websocket(
+                    terminal,
+                    websocket,
+                    max_age_seconds=15 * 60,
+                )
+        except OSError:
+            await websocket.close(code=1011, reason="could not start Codex login")
+        finally:
+            clear_agent_tools_cache()
+            if opened:
+                append_node_outbox_event(
+                    "info",
+                    "agent.auth_login_finished",
+                    "Codex device login terminal closed.",
+                    source="node.agents",
+                    details={"agent": "codex"},
+                )
+
     return app
 
 
@@ -328,6 +586,10 @@ def websocket_is_authenticated(websocket: WebSocket) -> bool:
 
 class AdoptRequest(BaseModel):
     name: str
+
+
+def no_store_json(payload: object) -> JSONResponse:
+    return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
 
 def session_payload(view) -> dict[str, object]:

@@ -12,7 +12,7 @@
 
 > ⚠️ This project was primarily built with vibe coding and may contain potential bugs. Please keep this in mind before using it.
 
-StarAgent is an **agent multiplexer** for managing coding agent sessions across machines in a unified dashboard. It reflects my own best practices for using multiple agents:
+StarAgent is a local-first **Agent Harness Launcher** and an optional multi-Node Hub for managing coding agent sessions. It reflects my own best practices for using multiple agents:
 
 > **We just need a lightweight tmux wrapper for Codex / Claude Code that supports cross-machine connections and can be accessed from any of my devices.**
 
@@ -32,7 +32,7 @@ Based on hands-on experience, StarAgent uses the simplest effective stack for th
 
 - **Unified management through a web dashboard**. The web dashboard lets you control agents from any device with a browser, including phones and laptops, without installing extra software.
 
-StarAgent uses a centralized architecture: the `StarAgent Hub` runs the web dashboard and also acts as a local node, while other machines connect as `StarAgent Nodes` over the same Tailscale network. Every node can launch agent sessions, all managed from one dashboard.
+Running `staragent` opens the single-Node `StarAgent Launcher`, scoped directly to the current machine. When cross-machine management is needed, `staragent hub` keeps the existing Hub experience: choose a Node, then enter the same Node workspace used by Launcher.
 For the technical architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Preview
@@ -56,12 +56,68 @@ Inspect Agent CLI availability, login state, update paths, and launch presets on
 
 **NOTICE:** None of this gets in the way of manually SSHing into the server and attaching to the corresponding tmux session for development. The web interface is implemented entirely as a parser — the tmux CLI sessions on the server are always the ground truth.
 
+## Launcher
+
+Install from a checkout, then start StarAgent with no subcommand:
+
+```bash
+pip install -e .
+staragent
+```
+
+Launcher starts in the supervised `staragent-launcher` tmux system session and opens the local
+Harness workspace at `http://127.0.0.1:8080`. Under SSH it prints the URL without trying to open a
+browser. Use `staragent --no-open` to explicitly disable browser handoff.
+
+Launcher is the normal single-machine experience. It opens directly on the local Agents catalog;
+Sessions, Logs, Settings, and Current Node details use the same views as a Node selected in Hub.
+
+## Desktop
+
+A Tauri desktop gateway is available for Windows, Linux, and macOS. It can start the local Launcher or
+connect to an existing Hub; Windows local mode uses WSL2 so the existing tmux/PTY session model remains
+unchanged.
+
+### Download a prebuilt package
+
+Open the [latest GitHub Release](https://github.com/SiriusNEO/StarAgent/releases/latest), expand
+**Assets**, and download the package for your system:
+
+| System | Release asset | Install |
+| --- | --- | --- |
+| Windows x64 | `*-setup.exe` | Run the per-user installer |
+| Linux x64 | `*.AppImage` | Make it executable and run it |
+| Debian / Ubuntu x64 | `*.deb` | Run `sudo apt install ./<downloaded-file>.deb` |
+| macOS Intel / Apple Silicon | `*.dmg` | Open the universal DMG and drag StarAgent to Applications |
+
+Do not confuse GitHub's automatically generated **Source code** archives with desktop installers. If
+a release contains only those archives, it predates desktop packaging; use a newer release, a CI
+artifact, or the source installation above. `v0.1.1` and earlier do not contain desktop installers.
+
+The same files can be downloaded with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+# Linux AppImage example; use '*.deb' or '*.dmg' on the corresponding system.
+gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
+```
+
+For an unreleased development build, open the
+[Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml), select a
+successful run, and download `staragent-windows-x64`, `staragent-linux-x64`, or
+`staragent-macos-universal` under **Artifacts**. GitHub requires sign-in to download workflow
+artifacts.
+
+These packages are currently unsigned preview builds. They provide the desktop gateway, not a bundled
+tmux/Python runtime: connecting to an existing Hub works directly, while local Launcher mode still
+needs the platform prerequisites in [DESKTOP.md](DESKTOP.md). That document also covers native builds
+and signing status.
+
 ## Hub
 
 Run this on the machine that runs the dashboard:
 
 ```bash
-pip install -e '.[dev]'
+pip install -e .
 staragent hub --host 0.0.0.0 --port 8080
 ```
 
@@ -69,7 +125,8 @@ staragent hub --host 0.0.0.0 --port 8080
 Open `http://<hub-node>:8080` and log in with the token printed by `staragent hub`.
 
 See [HUB.md](HUB.md) for authentication and state settings, Dashboard surfaces, centralized logs,
-Agent CLI checks and updates, usage reporting, presets, and conversation resume behavior.
+Agent CLI checks, China-friendly install sources, updates, usage reporting, presets, and conversation
+resume behavior.
 
 ## Remote Node
 
@@ -104,7 +161,7 @@ If the Node uses a non-default port, enter that port explicitly, for example `80
 
 ## Acknowledgements
 
-StarAgent's CLI transcript parsing is adapted from ideas and code in [botmux](https://github.com/deepcoldy/botmux). The dashboard visual style is inspired by the [Tailscale admin console](https://tailscale.com/). Markdown preview follows [GitHub Flavored Markdown](https://github.github.com/gfm/) conventions. The web terminal uses [xterm.js](https://xtermjs.org/), and file preview highlighting uses [highlight.js](https://highlightjs.org/).
+StarAgent's CLI transcript parsing is adapted from ideas and code in [botmux](https://github.com/deepcoldy/botmux). The Launcher's local-browser, SSH, and `--no-open` startup behavior is inspired by [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The dashboard visual style is inspired by the [Tailscale admin console](https://tailscale.com/). Markdown preview follows [GitHub Flavored Markdown](https://github.github.com/gfm/) conventions. The web terminal uses [xterm.js](https://xtermjs.org/), and file preview highlighting uses [highlight.js](https://highlightjs.org/).
 
 ## License
 

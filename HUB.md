@@ -4,6 +4,10 @@ The StarAgent Hub is the browser-facing control plane and also acts as the local
 talk only to the Hub; local tmux operations run on the Hub machine, while remote operations are
 proxied to the Node that owns the Session.
 
+For the default single-machine experience, run `staragent` instead. Launcher goes directly to the
+local Agents catalog and reuses the exact Node workspace rendered by Hub after selecting a Node.
+It does not poll or expose configured Remote Nodes.
+
 ## Run the Hub
 
 ```bash
@@ -27,6 +31,8 @@ small runtime records; tmux remains the source of truth for live Sessions.
 
 - **Nodes** is the Dashboard landing page. It configures the machines reachable from the Hub,
   reports each connection state, and opens that Node's workspace.
+- **Current Node** opens that machine's details, reported StarAgent version, and official update
+  controls.
 - **Sessions**, after selecting a Node, exposes only that Node's lifecycle status and owns Create
   Session, conversation resume, tmux adoption, Chat, Terminal, and workspace browsing.
 - **Agents**, after selecting a Node, inventories its coding CLIs, reports login and usage support,
@@ -34,6 +40,25 @@ small runtime records; tmux remains the source of truth for live Sessions.
 - **Logs**, after selecting a Node, queries that Node's centralized service-event archive. The local
   Node also provides the Hub service log as a separate source.
 - **Lark** configures the optional notification and command integration described in [LARK.md](LARK.md).
+- **Settings** owns language, appearance, and Gallery.
+
+## Official Updates
+
+Open a Node and select its **Current Node** card to check that machine's checkout against the matching
+branch on `https://github.com/SiriusNEO/StarAgent`. The card also shows the version and commit reported
+by the Node heartbeat. `main` follows the Stable channel and `dev` follows the Preview channel. Checks
+run after the details page has rendered and never switch branches.
+
+**Update now** asks the selected Node to fetch its own official branch and advance its checkout with
+`git merge --ff-only`. The Hub cannot submit a remote, branch, commit, or shell command. Each Node
+refuses to update a dirty working tree, a detached or unsupported branch, a diverged history, or an
+`origin` that is not the official GitHub repository. It never resets or overwrites local work.
+
+The local Node restarts only the supervised Hub Dashboard child; a Remote Node restarts only its
+supervised `staragent-node` child. Existing tmux Agent Sessions keep running. An unsupervised service
+reports that a manual restart is required. Older Nodes that do not report the `staragent_update`
+capability remain usable and show a one-time terminal-upgrade instruction; after that bootstrap,
+their future updates can be managed from the Hub.
 
 ## Logs and Supervision
 
@@ -67,6 +92,23 @@ Login is checked separately without sending a model request:
 Remote results are normalized before display. Account identity, raw credentials, and tokens are
 not returned to the Hub.
 
+For Codex, StarAgent also reads Codex's own bounded `version.json` update cache. A fresh cached
+`latest_version` is compared with the installed CLI version: an exact or newer local version is
+shown as up to date, its update button is suppressed, and the update API becomes a no-op. Missing or
+stale cache data remains **unknown** rather than being presented as proof that an update exists.
+
+### Harness Terminal
+
+Each Harness detail page can launch the selected Harness directly in a real interactive terminal on
+the selected Node. It uses the same xterm.js, WebSocket, and PTY stack as a Session terminal,
+including terminal control sequences, resizing, Ctrl+C, copy, and safe web links. When the Harness
+exits, StarAgent drops into the service user's login Shell so diagnostics and updates remain possible.
+
+This terminal is not a sandbox: commands have the same environment and operating-system permissions
+as the StarAgent service user. The Shell starts in that user's home directory. Closing or leaving the
+page terminates the Shell process group, and no persistent tmux Session is created. Hub proxies the
+PTY only to the Node selected in the current workspace.
+
 ### Usage
 
 For Codex, each machine can show live rate-limit windows, reset times, plan, available credits,
@@ -79,10 +121,16 @@ estimating a percentage.
 
 ### Managed Updates
 
-StarAgent identifies common installation sources and offers copyable official install or update
-commands. **Update now** always requires an explicit confirmation and runs only an internal
-allowlisted argv derived from a freshly detected installation source. The browser cannot submit
-arbitrary command text, and inventory checks never install or update software automatically.
+When a Harness is missing, StarAgent offers its official native installer, the npmjs registry, and
+China-friendly npm routes through npmmirror and Tencent Cloud. Every route can be copied; supported
+Nodes can also run it after an explicit confirmation. Registry overrides apply only to that install
+command and never rewrite the user's global npm configuration. Native scripts are downloaded only
+from fixed official HTTPS endpoints and executed from a temporary file.
+
+For installed Harnesses, **Update now** also requires an explicit confirmation and runs only an
+internal allowlisted argv derived from a freshly detected installation source. Both install and
+update endpoints accept fixed action identifiers rather than browser-provided shell text. Inventory
+checks never install or update software automatically.
 
 The same optional update action is available in **Sessions → Create Session** before launch.
 
