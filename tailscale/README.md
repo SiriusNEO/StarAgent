@@ -1,6 +1,8 @@
 # Tailscale Networking
 
-StarAgent does not manage Tailscale. Set up the network first, then add the reachable StarAgent node endpoint in the Hub dashboard.
+StarAgent's **Current Node** page can detect and install the Tailscale CLI through reviewed platform
+installers. It does not sign in, join a tailnet, manage routes, or own the Tailscale service lifecycle.
+Complete the network setup below, then add the reachable StarAgent Node endpoint in the Hub dashboard.
 
 The Hub only needs this to work:
 

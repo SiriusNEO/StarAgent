@@ -32,8 +32,8 @@ runtime records; tmux remains the source of truth for live Sessions. Windows Des
 
 - **Nodes** is the Dashboard landing page. It configures the machines reachable from the Hub,
   reports each connection state, and opens that Node's workspace.
-- **Current Node** opens that machine's details, reported StarAgent version, and official update
-  controls.
+- **Current Node** opens that machine's details, reported StarAgent version, official update controls,
+  and runtime dependency manager.
 - **Sessions**, after selecting a Node, exposes only that Node's lifecycle status and owns Create
   Session, conversation resume, tmux adoption, Chat, Terminal, and workspace browsing.
 - **Agents**, after selecting a Node, inventories its coding CLIs, reports login and usage support,
@@ -60,6 +60,24 @@ supervised `staragent-node` child. Existing tmux Agent Sessions keep running. An
 reports that a manual restart is required. Older Nodes that do not report the `staragent_update`
 capability remain usable and show a one-time terminal-upgrade instruction; after that bootstrap,
 their future updates can be managed from the Hub.
+
+## Runtime Dependencies
+
+**Current Node** checks the selected machine rather than the Hub browser for StarAgent's supporting
+tools. Linux and macOS report tmux; Windows reports the bundled ConPTY backend. Every platform also
+reports the optional Tailscale CLI and the optional Node.js/npm runtime used by npm-based Harness
+installation paths. Results are cached on the Node for 60 seconds and can be refreshed explicitly.
+
+For a missing tool, the page shows only installation methods backed by a package manager detected on
+that Node, plus official documentation. Node.js also links to an npmmirror download for users in
+China. The browser submits a dependency and option ID—not shell text—and the selected Node rebuilds
+the reviewed argv before execution. Privileged background installs are non-interactive; if the
+operating system needs an administrator password, copy the displayed command into the interactive
+Terminal instead.
+
+Installing the Tailscale package does not sign in, join a tailnet, enable SSH, or configure
+`tailscale serve`; those network lifecycle steps remain user-owned. Merely opening Current Node never
+installs or changes software.
 
 ## Logs and Supervision
 
@@ -98,6 +116,31 @@ For Codex, StarAgent also reads Codex's own bounded `version.json` update cache.
 shown as up to date, its update button is suppressed, and the update API becomes a no-op. Missing or
 stale cache data remains **unknown** rather than being presented as proof that an update exists.
 
+### Skills Discovery
+
+Each Harness detail page includes a read-only inventory of globally installed and preinstalled
+Skills on the selected Node. StarAgent scans only directories derived from the Harness's effective
+managed environment:
+
+- Codex: `$CODEX_HOME/skills/.system`, `$CODEX_HOME/skills`, the global Agent Skills compatibility
+  directory, and manifest-declared Skills from installed Codex plugins.
+- Claude Code: `$CLAUDE_CONFIG_DIR/skills` plus enabled, user-scoped plugin installs recorded by
+  Claude Code under its versioned plugin cache. This follows Claude Code's documented
+  [Skills](https://code.claude.com/docs/en/slash-commands) and
+  [plugin cache](https://code.claude.com/docs/en/plugins-reference) layout.
+- OpenCode: `$OPENCODE_CONFIG_DIR/skills` plus its documented global `.claude/skills` and
+  `.agents/skills` [compatibility locations](https://opencode.ai/docs/skills).
+
+The Agents page is Node-scoped rather than project-scoped, so repository-local Skills are not mixed
+into this inventory. A future Session-scoped view can add its known working directory without
+opening an arbitrary-path scan API.
+
+The walker skips nested symlinks and applies fixed root, entry, depth, file-count, and file-size
+limits. It reads only YAML frontmatter and returns the Skill name, description, source class, and
+modification time. `SKILL.md` instructions, body text, credentials, and resolved absolute paths are
+never sent to Hub. The browser can request a cache refresh but cannot provide a path. Hub applies the
+same allowlists and output bounds again to Remote Node payloads.
+
 ### Harness Terminal
 
 Each Harness detail page can launch the selected Harness directly in a real interactive terminal on
@@ -127,6 +170,11 @@ China-friendly npm routes through npmmirror and Tencent Cloud. Command-based rou
 supported Nodes can also run them after an explicit confirmation. Registry overrides apply only to
 that install command and never rewrite the user's global npm configuration. npm routes require npm
 to be present and never trigger a hidden Node.js installation.
+
+The installation UI uses one selected source and one primary action. Alternative sources remain
+visible, while reviewed command text stays collapsed until requested. Runtime dependency installers
+use the same source-picker and confirmation flow, keeping installation progress and errors in the
+page instead of browser alerts.
 
 On Windows, Codex and Claude Code default to their official native PowerShell installers. OpenCode
 defaults to its official Windows Release binary: StarAgent validates the GitHub release metadata,

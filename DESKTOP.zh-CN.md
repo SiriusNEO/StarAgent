@@ -50,6 +50,10 @@ OpenCode 只下载官方 Windows 可执行文件，按 GitHub 发布的 SHA-256 
 `.opencode\bin` 目录。这些推荐路线不会安装 Node.js 或 npm。npmjs、npmmirror 与腾讯云仅作为
 已有 npm 用户的显式备用项，registry 参数只对当次命令生效。
 
+Launcher 启动后，**Current Node** 会显示内置 ConPTY、Tailscale 与 Node.js/npm 的实际状态。
+当系统提供 `winget` 时，可以通过经过审核的 Windows Package Manager 入口安装缺少的可选工具；
+Node.js 同时提供明确的 npmmirror 国内下载入口。
+
 Linux（以 Debian/Ubuntu 为例）：
 
 ```bash

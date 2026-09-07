@@ -35,7 +35,11 @@ from staragent.event_log import redact_log_text
 from staragent.harness_config import harness_process_environment
 from staragent.opencode_install import OpenCodeInstallError, install_opencode_windows
 from staragent.text import strip_ansi
-from staragent.windows import augmented_windows_path, windows_process_argv
+from staragent.windows import (
+    augmented_windows_path,
+    background_process_kwargs,
+    windows_process_argv,
+)
 
 AGENT_TOOL_CACHE_TTL_SECONDS = 60.0
 AGENT_TOOL_PROBE_TIMEOUT_SECONDS = 3.0
@@ -399,6 +403,7 @@ def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
             capture_output=True,
             timeout=AGENT_TOOL_PROBE_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return tool_status(
@@ -851,6 +856,7 @@ def run_agent_command(
             capture_output=True,
             timeout=timeout,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired as exc:
         output = clean_update_output(exc.stdout, exc.stderr)

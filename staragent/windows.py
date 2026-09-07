@@ -6,6 +6,14 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x0800_0000)
+_IS_WINDOWS = os.name == "nt"
+
+
+def background_process_kwargs() -> dict[str, int]:
+    """Keep captured background commands from flashing a Windows console."""
+    return {"creationflags": _CREATE_NO_WINDOW} if _IS_WINDOWS else {}
+
 
 def augmented_windows_path(environment: Mapping[str, str] | None = None) -> str:
     source = dict(os.environ if environment is None else environment)
@@ -21,6 +29,7 @@ def augmented_windows_path(environment: Mapping[str, str] | None = None) -> str:
         Path(local_app_data) / "Microsoft" / "WindowsApps" if local_app_data else None,
         Path(local_app_data) / "Microsoft" / "WinGet" / "Links" if local_app_data else None,
         Path(program_files) / "nodejs" if program_files else None,
+        Path(program_files) / "Tailscale" if program_files else None,
         home / ".local" / "bin",
         home / ".claude" / "local",
         home / ".opencode" / "bin",

@@ -18,6 +18,11 @@ from staragent.agent_history import (
     history_payload_with_node,
     unavailable_agent_history_payload,
 )
+from staragent.agent_skills import (
+    agent_skills_payload,
+    normalize_agent_skills_payload,
+    unavailable_agent_skills,
+)
 from staragent.agent_tools import (
     AGENT_TOOL_INSTALL_TIMEOUT_SECONDS,
     AGENT_TOOL_UPDATE_TIMEOUT_SECONDS,
@@ -35,6 +40,17 @@ from staragent.agent_tools import (
     update_agent_tool,
 )
 from staragent.auth import node_auth_token
+from staragent.dependencies import (
+    DEPENDENCY_INSTALL_TIMEOUT_SECONDS,
+    DependencyInstallBusyError,
+    dependencies_status,
+    install_dependency,
+    known_dependency_install_option,
+    known_dependency_names,
+    normalize_dependencies_payload,
+    normalize_dependency_install_result,
+    unknown_dependencies_payload,
+)
 from staragent.event_log import (
     append_node_event,
     ingest_node_events,
@@ -80,8 +96,11 @@ NODE_HEALTH_REQUEST_TIMEOUT_SECONDS = 2.0
 NODE_AGENT_TOOL_REQUEST_TIMEOUT_SECONDS = 5.0
 NODE_AGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = AGENT_TOOL_UPDATE_TIMEOUT_SECONDS + 15.0
 NODE_AGENT_INSTALL_REQUEST_TIMEOUT_SECONDS = AGENT_TOOL_INSTALL_TIMEOUT_SECONDS + 15.0
+NODE_DEPENDENCY_REQUEST_TIMEOUT_SECONDS = 8.0
+NODE_DEPENDENCY_INSTALL_REQUEST_TIMEOUT_SECONDS = DEPENDENCY_INSTALL_TIMEOUT_SECONDS + 15.0
 NODE_AGENT_TOOL_HUB_CACHE_SECONDS = 90.0
 NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS = 8.0
+NODE_AGENT_SKILLS_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS = 10.0
 NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = GIT_TIMEOUT_SECONDS + 15.0
 
@@ -763,6 +782,93 @@ def node_agent_tool_install_payload(
     return result
 
 
+def node_dependencies_payload(
+    node: NodeEntry,
+    *,
+    refresh: bool = False,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = dependencies_status(force=refresh)
+    else:
+        query = urllib.parse.urlencode({"refresh": str(refresh).lower()})
+        try:
+            payload = request_json(
+                node,
+                "GET",
+                f"/api/dependencies?{query}",
+                timeout=NODE_DEPENDENCY_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            message = (
+                "Update StarAgent on this Node to manage runtime dependencies."
+                if exc.code in {404, 405}
+                else f"Node rejected the dependency request: HTTP {exc.code}."
+            )
+            return {**unknown_dependencies_payload(message), "node": node.name}
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            return {
+                **unknown_dependencies_payload(f"Node is unavailable: {exc}", stale=True),
+                "node": node.name,
+            }
+    return {**normalize_dependencies_payload(payload), "node": node.name}
+
+
+def node_dependency_install_payload(
+    node: NodeEntry,
+    dependency: str,
+    option_id: str,
+) -> dict[str, object]:
+    dependency = str(dependency or "").strip().lower()
+    option_id = str(option_id or "").strip().lower()
+    if dependency not in known_dependency_names():
+        raise ValueError(f"Unsupported dependency: {dependency}")
+    if not known_dependency_install_option(dependency, option_id):
+        raise ValueError(f"Unsupported install option for {dependency}: {option_id}")
+
+    if node.is_local:
+        result = install_dependency(dependency, option_id)
+    else:
+        path = (
+            f"/api/dependencies/{urllib.parse.quote(dependency, safe='')}/install/"
+            f"{urllib.parse.quote(option_id, safe='')}"
+        )
+        try:
+            payload = request_json(
+                node,
+                "POST",
+                path,
+                timeout=NODE_DEPENDENCY_INSTALL_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            if exc.code in {404, 405}:
+                error = "Update StarAgent on this Node before installing dependencies."
+            elif exc.code == 409:
+                raise DependencyInstallBusyError(
+                    f"{dependency} is already being installed on {node.name}."
+                ) from exc
+            else:
+                error = f"Node rejected the dependency installation: HTTP {exc.code}."
+            payload = {
+                "ok": False,
+                "dependency": dependency,
+                "option": option_id,
+                "error": error,
+            }
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = {
+                "ok": False,
+                "dependency": dependency,
+                "option": option_id,
+                "error": f"Node dependency installation failed: {exc}",
+            }
+        result = normalize_dependency_install_result(dependency, payload)
+        if result.get("ok") and result.get("option") != option_id:
+            result["ok"] = False
+            result["error"] = "Node returned a mismatched dependency installation result."
+    result["node"] = node.name
+    return result
+
+
 def node_harness_configuration_payload(
     node: NodeEntry,
     agent: str,
@@ -788,6 +894,38 @@ def node_harness_configuration_payload(
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             payload = unavailable_harness_configuration(agent, f"Node is unavailable: {exc}")
     normalized = normalize_harness_configuration(agent, payload)
+    normalized["node"] = node.name
+    return normalized
+
+
+def node_agent_skills_payload(
+    node: NodeEntry,
+    agent: str,
+    *,
+    refresh: bool = False,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = agent_skills_payload(agent, force=refresh)
+    else:
+        query = urllib.parse.urlencode({"refresh": str(refresh).lower()})
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/skills?{query}"
+        try:
+            payload = request_json(
+                node,
+                "GET",
+                path,
+                timeout=NODE_AGENT_SKILLS_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            detail = (
+                "Update StarAgent on this Node to discover Harness Skills."
+                if exc.code in {404, 405}
+                else f"Node rejected the Skills request: HTTP {exc.code}."
+            )
+            payload = unavailable_agent_skills(agent, detail)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = unavailable_agent_skills(agent, f"Node is unavailable: {exc}")
+    normalized = normalize_agent_skills_payload(agent, payload)
     normalized["node"] = node.name
     return normalized
 

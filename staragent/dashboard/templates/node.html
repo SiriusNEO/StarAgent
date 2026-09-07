@@ -59,6 +59,74 @@
     </a>
   </section>
 
+  <section
+    class="band node-dependencies-band deferred-render"
+    data-node-dependencies
+    data-node="{{ current_node.name }}"
+    data-node-available="{{ 'true' if current_node.status != 'disconnected' else 'false' }}"
+  >
+    <div class="node-dependencies-heading">
+      <div class="section-title">
+        <h2>{{ t("dependencies.title") }}</h2>
+        <span>{{ t("dependencies.subtitle", node=current_node.name) }}</span>
+      </div>
+      <button type="button" class="node-dependencies-refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 11a8 8 0 0 0-14.8-4.2M4 4v5h5M4 13a8 8 0 0 0 14.8 4.2M20 20v-5h-5"></path>
+        </svg>
+        <span>{{ t("common.refresh") }}</span>
+      </button>
+    </div>
+    <div class="node-dependencies-summary" aria-live="polite">
+      <span class="node-dependencies-summary-mark" aria-hidden="true"></span>
+      <span data-dependency-summary>{{ t("dependencies.checking") }}</span>
+    </div>
+    <div class="node-dependencies-list" data-dependency-list aria-live="polite" aria-busy="true"></div>
+
+    <dialog class="agent-update-dialog dependency-install-dialog" aria-labelledby="dependency-install-title" aria-describedby="dependency-install-description">
+      <form method="dialog">
+        <header class="agent-update-dialog-head">
+          <span class="dependency-dialog-icon" aria-hidden="true"></span>
+          <div>
+            <span>{{ t("dependencies.runtime_dependency") }}</span>
+            <h2 id="dependency-install-title">{{ t("dependencies.install_title") }}</h2>
+          </div>
+          <button type="submit" class="agent-update-dialog-close" value="cancel" aria-label="{{ t('dependencies.cancel') }}">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"></path></svg>
+          </button>
+        </header>
+        <div class="agent-update-dialog-body">
+          <p id="dependency-install-description">{{ t("dependencies.install_description") }}</p>
+          <dl class="agent-update-dialog-facts">
+            <div>
+              <dt>{{ t("agents.target_node") }}</dt>
+              <dd data-dependency-dialog-node>—</dd>
+            </div>
+            <div>
+              <dt>{{ t("dependencies.install_source") }}</dt>
+              <dd data-dependency-dialog-source>—</dd>
+            </div>
+          </dl>
+          <div class="agent-update-dialog-command">
+            <span>{{ t("dependencies.reviewed_command") }}</span>
+            <code data-dependency-dialog-command>—</code>
+          </div>
+          <div class="agent-update-dialog-safety">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+            <span data-dependency-dialog-note>{{ t("dependencies.install_safety") }}</span>
+          </div>
+        </div>
+        <footer class="agent-update-dialog-actions">
+          <button type="submit" class="agent-update-dialog-cancel" value="cancel">{{ t("dependencies.cancel") }}</button>
+          <button type="submit" class="agent-update-dialog-confirm" value="confirm">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 20h14"></path></svg>
+            {{ t("dependencies.install_now") }}
+          </button>
+        </footer>
+      </form>
+    </dialog>
+  </section>
+
   <section class="band node-connection-band">
     <div class="section-title">
       <h2>{{ t("overview.connection") }}</h2>
@@ -86,4 +154,5 @@
 {% endblock %}
 {% block head_extra %}
   <script src="{{ url_for('static', path='settings.js') }}?v={{ static_version('settings.js') }}" defer></script>
+  <script src="{{ url_for('static', path='dependencies.js') }}?v={{ static_version('dependencies.js') }}" defer></script>
 {% endblock %}
