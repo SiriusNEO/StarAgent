@@ -365,10 +365,17 @@ def register_auth_routes(app: FastAPI) -> None:
 
     @app.get("/api/runtime")
     def runtime_info() -> dict[str, object]:
+        from staragent.native_sessions import (
+            native_session_backend_name,
+            native_session_mode_enabled,
+        )
+
         return {
             "status": "ok",
             "mode": getattr(app.state, "dashboard_mode", "hub"),
-            "session_backend": "conpty" if os.name == "nt" else "tmux",
+            "session_backend": (
+                native_session_backend_name() if native_session_mode_enabled() else "tmux"
+            ),
             "desktop_bundled": os.environ.get("STARAGENT_DESKTOP_BUNDLED") == "1",
         }
 
@@ -3203,9 +3210,10 @@ def pending_chat_user_messages(
 
 
 def session_quick_commands(view) -> list[dict[str, str]]:
-    if view.backend == "ConPTY":
+    if view.backend != "tmux":
+        backend_label = "Windows ConPTY" if view.backend == "ConPTY" else view.backend
         return [
-            {"label": "Backend", "command": "Windows ConPTY"},
+            {"label": "Backend", "command": backend_label},
             {"label": "Attach", "command": "Open the Terminal panel below"},
             {"label": "Detach", "command": "Close this view; the Session keeps running"},
             {"label": "Stop", "command": "Use the Stop button above"},

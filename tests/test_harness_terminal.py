@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,7 +109,7 @@ def test_generic_pty_spawn_uses_argv_without_a_shell(monkeypatch) -> None:
     assert argv == ["/bin/bash", "-l"]
     assert "shell" not in kwargs
     assert kwargs["cwd"] == "/tmp/test"
-    assert kwargs["preexec_fn"] is os.setsid
+    assert kwargs["start_new_session"] is True
     assert kwargs["env"]["SAFE"] == "yes"
     assert kwargs["env"]["TERM"] == "xterm-256color"
     assert "TMUX" not in kwargs["env"]

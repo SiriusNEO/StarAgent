@@ -33,13 +33,26 @@ def test_remote_dashboard_has_no_desktop_capability() -> None:
     assert "dangerousRemoteDomainIpcAccess" not in config["app"]["security"]
 
 
+def test_native_bundles_include_runtime_without_blocking_cargo_unit_tests() -> None:
+    config = load_json(DESKTOP / "src-tauri" / "tauri.conf.json")
+    sidecar = load_json(DESKTOP / "src-tauri" / "tauri.sidecar.conf.json")
+    updater = load_json(DESKTOP / "src-tauri" / "tauri.updater.conf.json")
+
+    assert "externalBin" not in config["bundle"]
+    assert sidecar["bundle"]["externalBin"] == ["binaries/staragent-runtime"]
+    assert updater["bundle"]["externalBin"] == ["binaries/staragent-runtime"]
+
+
 def test_desktop_workflow_covers_three_operating_systems() -> None:
     workflow = (ROOT / ".github" / "workflows" / "desktop.yml").read_text(encoding="utf-8")
 
     assert "ubuntu-22.04" in workflow
     assert "windows-latest" in workflow
-    assert "macos-latest" in workflow
-    assert "universal-apple-darwin" in workflow
+    assert "macos-15" in workflow
+    assert "macos-15-intel" in workflow
+    assert "aarch64-apple-darwin" in workflow
+    assert "x86_64-apple-darwin" in workflow
+    assert "build_runtime.py" in workflow
     assert "release:" in workflow
     assert "types: [published]" in workflow
     assert "gh release upload" in workflow

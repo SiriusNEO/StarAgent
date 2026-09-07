@@ -1,6 +1,5 @@
 {
   "bundle": {
-    "externalBin": ["binaries/staragent-runtime"],
     "targets": ["nsis"],
     "windows": {
       "nsis": {

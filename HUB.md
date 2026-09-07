@@ -64,9 +64,10 @@ their future updates can be managed from the Hub.
 ## Runtime Dependencies
 
 **Current Node** checks the selected machine rather than the Hub browser for StarAgent's supporting
-tools. Linux and macOS report tmux; Windows reports the bundled ConPTY backend. Every platform also
-reports the optional Tailscale CLI and the optional Node.js/npm runtime used by npm-based Harness
-installation paths. Results are cached on the Node for 60 seconds and can be refreshed explicitly.
+tools. Source-installed Linux/macOS Nodes report tmux; self-contained Desktop Nodes report bundled
+Native PTY (ConPTY on Windows). Every platform also reports the optional Tailscale CLI and the
+optional Node.js/npm runtime used by npm-based Harness installation paths. Results are cached on the
+Node for 60 seconds and can be refreshed explicitly.
 
 For a missing tool, the page shows only installation methods backed by a package manager detected on
 that Node, plus official documentation. Node.js also links to an npmmirror download for users in

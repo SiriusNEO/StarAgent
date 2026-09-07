@@ -55,7 +55,9 @@ launch presets on the selected Node:
 
 ![StarAgent Agents dashboard with Codex, Claude Code, and OpenCode](assets/demo-agents-anime.webp)
 
-**NOTICE:** On Linux/macOS Nodes, none of this gets in the way of SSHing into the server and attaching to the corresponding tmux session. On Windows Desktop, the bundled runtime owns the native ConPTY session. In both cases, closing a browser or workspace view only detaches the view; it does not stop the Agent session.
+**NOTICE:** Source-installed Linux/macOS Nodes keep their SSH-friendly tmux backend. Self-contained
+Desktop packages instead own native PTY Sessions (ConPTY on Windows). In both cases, closing a browser
+or workspace view only detaches the view; it does not stop the Agent Session.
 
 ## Launcher
 
@@ -78,9 +80,9 @@ and offers reviewed platform-native installation paths where available.
 ## Desktop
 
 A Tauri desktop app is available for Windows, Linux, and macOS. It can start the local Launcher or
-connect to an existing Hub. The Windows package includes the StarAgent Python runtime and uses the
-native Windows ConPTY backend for terminals and persistent Sessions—WSL, Python, and tmux are not
-required.
+connect to an existing Hub. Every desktop package includes the StarAgent Python runtime and a native
+terminal backend: Windows uses ConPTY, while Linux and macOS use the operating system PTY API. WSL,
+Python, StarAgent, and tmux do not need to be installed separately.
 
 ### Download a prebuilt package
 
@@ -92,7 +94,8 @@ Open the [latest GitHub Release](https://github.com/SiriusNEO/StarAgent/releases
 | Windows x64 | `*-setup.exe` | Run the per-user installer |
 | Linux x64 | `*.AppImage` | Make it executable and run it |
 | Debian / Ubuntu x64 | `*.deb` | Run `sudo apt install ./<downloaded-file>.deb` |
-| macOS Intel / Apple Silicon | `*.dmg` | Open the universal DMG and drag StarAgent to Applications |
+| macOS Apple Silicon | `*_aarch64.dmg` | Open the DMG and drag StarAgent to Applications |
+| macOS Intel | `*_x64.dmg` | Open the DMG and drag StarAgent to Applications |
 
 Do not confuse GitHub's automatically generated **Source code** archives with desktop installers. If
 a release contains only those archives, it predates desktop packaging; use a newer release, a CI
@@ -107,21 +110,19 @@ updater-enabled release manually once.
 The same files can be downloaded with the [GitHub CLI](https://cli.github.com/):
 
 ```bash
-# Linux AppImage example; use '*.deb' or '*.dmg' on the corresponding system.
+# Linux example; use '*.deb', '*_aarch64.dmg', or '*_x64.dmg' as appropriate.
 gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
 ```
 
 For an unreleased development build, select Nightly in the app. Individual build artifacts remain in
 the [Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml) as
-`staragent-windows-x64`, `staragent-linux-x64`, and `staragent-macos-universal`; GitHub requires
-sign-in to download workflow artifacts directly.
+`staragent-windows-x64`, `staragent-linux-x64`, `staragent-macos-arm64`, and
+`staragent-macos-x64`; GitHub requires sign-in to download workflow artifacts directly.
 
 Release updater payloads carry a Tauri update signature, while operating-system publisher signing is
-still pending and may show an unknown-publisher warning. Windows local mode is self-contained; Agent
-Harness CLIs remain optional and can be installed from the Agents page through their native Windows
-install paths without adding Node.js/npm. npm and China-friendly mirrors remain explicit fallbacks
-for systems that already provide npm.
-Linux and macOS local mode still use the system StarAgent CLI and tmux. See
+still pending and may show an unknown-publisher warning. Local mode is self-contained on all three
+platforms. Agent Harness CLIs remain optional and can be installed from the Agents page; npm and
+China-friendly mirrors remain explicit fallbacks for systems that already provide npm. See
 [DESKTOP.md](DESKTOP.md) for runtime details, updates, native builds, and signing status.
 
 ## Hub
