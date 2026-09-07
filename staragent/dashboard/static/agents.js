@@ -209,21 +209,7 @@ if (agentToolsBand) {
       container.appendChild(detail);
     }
 
-    if (auth?.action && tool?.name !== "codex") {
-      const action = document.createElement("div");
-      action.className = "agent-auth-action";
-      const command = document.createElement("code");
-      command.textContent = auth.action;
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "copy-button inline-copy";
-      copy.dataset.copy = auth.action;
-      copy.textContent = t("agents.copy_login");
-      action.append(command, copy);
-      container.appendChild(action);
-    }
-
-    if (tool?.name === "codex" && tool?.status === "available") {
+    if (tool?.status === "available") {
       const controls = document.createElement("div");
       controls.className = "agent-auth-controls";
 
@@ -238,31 +224,36 @@ if (agentToolsBand) {
       });
       controls.appendChild(refresh);
 
-      if (auth?.status === "not_authenticated") {
-        const login = document.createElement("button");
-        login.type = "button";
-        login.className = "agent-auth-button is-primary";
-        login.textContent = t("agents.login_codex");
-        login.addEventListener("click", () => {
-          window.dispatchEvent(new CustomEvent("staragent:codex-login", {
-            detail: {node: row.dataset.node || ""},
-          }));
-        });
-        controls.appendChild(login);
-      } else if (auth?.status === "authenticated") {
+      const needsSetup = !["authenticated", "configured"].includes(auth?.status);
+      const login = document.createElement("button");
+      login.type = "button";
+      login.className = "agent-auth-button is-primary";
+      login.textContent = needsSetup
+        ? t("agents.setup_access")
+        : (tool?.name === "opencode"
+          ? t("agents.manage_providers")
+          : t("agents.manage_access"));
+      login.addEventListener("click", () => {
+        window.dispatchEvent(new CustomEvent("staragent:harness-auth", {
+          detail: {node: row.dataset.node || "", agent: tool.name},
+        }));
+      });
+      controls.appendChild(login);
+
+      if (auth?.status === "authenticated" && ["codex", "claude"].includes(tool?.name)) {
         const logout = document.createElement("button");
         logout.type = "button";
         logout.className = "agent-auth-button is-danger";
-        logout.textContent = t("agents.logout_codex");
+        logout.textContent = t("agents.sign_out");
         let confirmationTimer = 0;
         logout.addEventListener("click", async () => {
           if (logout.dataset.confirming !== "true") {
             logout.dataset.confirming = "true";
-            logout.textContent = t("agents.confirm_logout");
+            logout.textContent = t("agents.confirm_sign_out");
             window.clearTimeout(confirmationTimer);
             confirmationTimer = window.setTimeout(() => {
               logout.dataset.confirming = "false";
-              logout.textContent = t("agents.logout_codex");
+              logout.textContent = t("agents.sign_out");
             }, 5000);
             return;
           }
@@ -270,19 +261,21 @@ if (agentToolsBand) {
           controls.querySelectorAll("button").forEach((button) => {
             button.disabled = true;
           });
-          logout.textContent = t("agents.logging_out");
+          logout.textContent = t("agents.signing_out");
           const node = row.dataset.node || "";
           try {
             const response = await fetch(
-              `/api/nodes/${encodeURIComponent(node)}/agent-tools/codex/auth/logout`,
+              `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(tool.name)}`
+                + "/auth/logout",
               {method: "POST", cache: "no-store"},
             );
             const body = await response.json().catch(() => ({}));
             if (!response.ok || !body.ok) {
               throw new Error(body.detail || t("agents.auth.error"));
             }
-            await loadAgentNode(node, true);
-            updateCardSummaries();
+            window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {
+              detail: {node, agent: tool.name},
+            }));
           } catch (error) {
             status.textContent = t("agents.logout_failed", {
               message: error?.message || t("agents.auth.error"),
@@ -291,7 +284,7 @@ if (agentToolsBand) {
               button.disabled = false;
             });
             logout.dataset.confirming = "false";
-            logout.textContent = t("agents.logout_codex");
+            logout.textContent = t("agents.sign_out");
           }
         });
         controls.appendChild(logout);
@@ -836,6 +829,7 @@ if (agentToolsBand) {
     const pill = row.querySelector(".agent-cli-status");
     const install = row.querySelector(".agent-cli-install");
     const auth = row.querySelector(".agent-cli-auth");
+    const model = row.querySelector(".agent-cli-model");
     const usage = row.querySelector(".agent-cli-usage");
     const actions = row.querySelector(".agent-cli-actions");
     const meta = row.querySelector(".agent-cli-meta");
@@ -856,9 +850,11 @@ if (agentToolsBand) {
       auth.replaceChildren();
       usage.replaceChildren();
       auth.hidden = true;
+      model.hidden = true;
       usage.hidden = true;
     } else {
       auth.hidden = false;
+      model.hidden = false;
       renderAgentAuth(auth, tool.auth || {}, tool, row);
       renderAgentUsage(usage, tool.usage || {});
     }
@@ -923,6 +919,13 @@ if (agentToolsBand) {
     row.dataset.updateStatus = updateStatus;
     row.dataset.stale = payload.stale ? "true" : "false";
     row.classList.toggle("is-stale", Boolean(payload.stale));
+    window.dispatchEvent(new CustomEvent("staragent:agent-tool-state", {
+      detail: {
+        node: row.dataset.node || "",
+        agent: tool.name || "",
+        status: tool.status || "unknown",
+      },
+    }));
   };
 
   const renderNodePayload = (node, payload) => {
@@ -1072,6 +1075,455 @@ if (agentToolsBand) {
     updateCardSummaries();
   });
   window.StarAgentAfterPaint(() => loadAgentTools(false));
+}
+
+const agentModelControl = document.querySelector("[data-agent-model]");
+const agentModelDialog = document.querySelector("[data-harness-model-dialog]");
+if (agentModelControl && agentModelDialog) {
+  const node = agentModelControl.dataset.node || "";
+  const agent = agentModelControl.dataset.agent || "";
+  const agentLabel = agentModelControl.dataset.agentLabel || agent;
+  const state = agentModelControl.querySelector(".agent-model-state");
+  const current = agentModelControl.querySelector(".agent-model-current strong");
+  const detail = agentModelControl.querySelector(".agent-model-current small");
+  const error = agentModelControl.querySelector(".agent-model-error");
+  const changeButton = agentModelControl.querySelector(".agent-model-change");
+  const refreshButton = agentModelControl.querySelector(".agent-model-refresh");
+  const closeButton = agentModelDialog.querySelector(".harness-model-dialog-close");
+  const cancelButton = agentModelDialog.querySelector(".harness-model-cancel");
+  const inheritButton = agentModelDialog.querySelector(".harness-model-inherit");
+  const saveButton = agentModelDialog.querySelector(".harness-model-save");
+  const authButton = agentModelDialog.querySelector(".harness-model-auth");
+  const searchInput = agentModelDialog.querySelector(".harness-model-search input");
+  const customInput = agentModelDialog.querySelector(".harness-model-custom input");
+  const list = agentModelDialog.querySelector(".harness-model-list");
+  const empty = agentModelDialog.querySelector(".harness-model-empty");
+  const reasoningControl = agentModelDialog.querySelector("[data-reasoning-control]");
+  const reasoningTitle = reasoningControl.querySelector(".harness-reasoning-title");
+  const reasoningHelp = reasoningControl.querySelector(".harness-reasoning-help");
+  const reasoningOptions = reasoningControl.querySelector(".harness-reasoning-options");
+  const reasoningUnavailable = reasoningControl.querySelector(".harness-reasoning-unavailable");
+  const reasoningCurrent = reasoningControl.querySelector(".harness-reasoning-current");
+  const dialogStatus = agentModelDialog.querySelector(".harness-model-dialog-status");
+  const docsLink = agentModelDialog.querySelector("[data-model-docs]");
+
+  let modelPayload = null;
+  let selectedModel = "";
+  let selectedReasoningEffort = "";
+  let requestId = 0;
+  const validCustomModel = (value) => (
+    value.length <= 512 && /^[A-Za-z0-9][A-Za-z0-9._:\/@+\[\]-]*$/.test(value)
+  );
+
+  const modelSourceLabel = (source) => ({
+    staragent: t("agents.model_source.staragent"),
+    environment: t("agents.model_source.environment"),
+    environment_default: t("agents.model_source.environment"),
+    harness_config: t("agents.model_source.configuration"),
+    harness_default: t("agents.model_source.harness"),
+    automatic: t("agents.model_source.automatic"),
+  }[source] || t("agents.model_source.automatic"));
+
+  const reasoningEffortLabel = (effort) => ({
+    none: t("agents.reasoning_level.none"),
+    minimal: t("agents.reasoning_level.minimal"),
+    low: t("agents.reasoning_level.low"),
+    medium: t("agents.reasoning_level.medium"),
+    high: t("agents.reasoning_level.high"),
+    xhigh: t("agents.reasoning_level.xhigh"),
+    max: t("agents.reasoning_level.max"),
+    ultra: t("agents.reasoning_level.ultra"),
+    ultracode: t("agents.reasoning_level.ultracode"),
+  }[effort] || effort);
+
+  const renderModelSummary = (payload) => {
+    modelPayload = payload;
+    const supported = Boolean(payload?.supported);
+    const model = payload?.effective_model || "";
+    const managed = Boolean(payload?.selected_model || payload?.selected_reasoning_effort);
+    current.textContent = model || t("agents.model_automatic");
+    current.title = model;
+    const parts = [modelSourceLabel(payload?.effective_source)];
+    if (payload?.provider) {
+      parts.push(t("agents.provider_name", {provider: payload.provider}));
+    }
+    if (payload?.effective_reasoning_effort) {
+      const effort = reasoningEffortLabel(payload.effective_reasoning_effort);
+      parts.push(payload?.reasoning_effort_kind === "variant"
+        ? t("agents.variant_summary", {effort})
+        : t("agents.reasoning_summary", {effort}));
+    }
+    const count = Array.isArray(payload?.models) ? payload.models.length : 0;
+    if (count) {
+      parts.push(t("agents.model_count", {count}));
+    }
+    detail.textContent = parts.join(" · ");
+    state.className = `pill agent-model-state node-status-${supported ? "connected" : "error"}`;
+    state.textContent = !supported
+      ? t("common.unavailable")
+      : (managed ? t("agents.model_override") : t("agents.model_inherited"));
+    error.textContent = payload?.error || "";
+    error.hidden = !payload?.error;
+    changeButton.disabled = !supported;
+    refreshButton.disabled = !supported;
+    refreshButton.hidden = !supported;
+    if (payload?.docs_url) {
+      docsLink.href = payload.docs_url;
+    }
+  };
+
+  const loadModels = async (refresh = false) => {
+    const activeRequest = ++requestId;
+    agentModelControl.classList.add("is-loading");
+    changeButton.disabled = true;
+    refreshButton.disabled = true;
+    state.className = "pill agent-model-state node-status-optional";
+    state.textContent = refresh ? t("agents.models_refreshing") : t("common.checking");
+    if (!modelPayload) {
+      current.textContent = t("agents.model_loading");
+      detail.textContent = t("agents.model_loading_hint");
+    }
+    try {
+      const query = refresh ? "?refresh=true" : "";
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/models${query}`,
+        {cache: "no-store"},
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.detail || t("agents.model_load_failed"));
+      }
+      if (activeRequest === requestId) {
+        renderModelSummary(body);
+      }
+    } catch (loadError) {
+      if (activeRequest !== requestId) {
+        return;
+      }
+      renderModelSummary({
+        supported: false,
+        effective_source: "automatic",
+        models: [],
+        error: loadError?.message || t("agents.model_load_failed"),
+      });
+    } finally {
+      if (activeRequest === requestId) {
+        agentModelControl.classList.remove("is-loading");
+      }
+    }
+  };
+
+  const optionMatches = (model, query) => {
+    if (!query) {
+      return true;
+    }
+    return [model.id, model.label, model.provider, model.description]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(query);
+  };
+
+  const selectModel = (model) => {
+    selectedModel = model;
+    const modelEntry = (Array.isArray(modelPayload?.models) ? modelPayload.models : [])
+      .find((entry) => entry.id === model);
+    if (
+      selectedReasoningEffort
+      && Array.isArray(modelEntry?.reasoning_efforts)
+      && modelEntry.reasoning_efforts.length
+      && !modelEntry.reasoning_efforts.some((choice) => choice.id === selectedReasoningEffort)
+    ) {
+      selectedReasoningEffort = "";
+    }
+    customInput.value = Array.from(list.querySelectorAll("[data-model-id]"))
+      .some((button) => button.dataset.modelId === model) ? "" : model;
+    customInput.setAttribute("aria-invalid", "false");
+    for (const button of list.querySelectorAll("[data-model-id]")) {
+      const selected = button.dataset.modelId === model;
+      button.classList.toggle("is-selected", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    }
+    renderReasoningOptions();
+    updateSelectionState();
+  };
+
+  const reasoningChoicesForModel = () => {
+    const models = Array.isArray(modelPayload?.models) ? modelPayload.models : [];
+    const selected = models.find((model) => model.id === selectedModel);
+    const choices = Array.isArray(selected?.reasoning_efforts) && selected.reasoning_efforts.length
+      ? selected.reasoning_efforts
+      : (Array.isArray(modelPayload?.reasoning_efforts) ? modelPayload.reasoning_efforts : []);
+    const normalized = choices.filter((choice) => choice?.id);
+    if (selectedReasoningEffort && !normalized.some((choice) => choice.id === selectedReasoningEffort)) {
+      normalized.push({id: selectedReasoningEffort, description: ""});
+    }
+    return normalized;
+  };
+
+  const updateSelectionState = () => {
+    const baselineModel = modelPayload?.selected_model || "";
+    const baselineEffort = modelPayload?.selected_reasoning_effort || "";
+    const customValue = customInput.value.trim();
+    const valid = !customValue || validCustomModel(customValue);
+    const changed = selectedModel !== baselineModel
+      || selectedReasoningEffort !== baselineEffort;
+    saveButton.disabled = !changed || !valid;
+    inheritButton.disabled = !baselineModel && !baselineEffort;
+    const selected = [];
+    if (selectedModel) {
+      selected.push(t("agents.model_selected", {model: selectedModel}));
+    }
+    if (selectedReasoningEffort) {
+      selected.push(t("agents.reasoning_selected", {
+        effort: reasoningEffortLabel(selectedReasoningEffort),
+      }));
+    }
+    dialogStatus.textContent = selected.join(" · ");
+  };
+
+  const selectReasoningEffort = (effort) => {
+    selectedReasoningEffort = effort;
+    for (const button of reasoningOptions.querySelectorAll("[data-effort-id]")) {
+      const selected = button.dataset.effortId === effort;
+      button.classList.toggle("is-selected", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    }
+    updateSelectionState();
+  };
+
+  const renderReasoningOptions = () => {
+    const supported = Boolean(modelPayload?.reasoning_effort_supported);
+    const kind = modelPayload?.reasoning_effort_kind === "variant" ? "variant" : "effort";
+    reasoningTitle.textContent = kind === "variant"
+      ? t("agents.reasoning_variant")
+      : t("agents.reasoning_effort");
+    reasoningHelp.textContent = kind === "variant"
+      ? t("agents.reasoning_variant_help")
+      : t("agents.reasoning_effort_help");
+    reasoningOptions.replaceChildren();
+    const choices = supported ? reasoningChoicesForModel() : [];
+    if (supported) {
+      choices.unshift({id: "", description: t("agents.reasoning_automatic_help")});
+    }
+    for (const choice of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.effortId = choice.id;
+      button.setAttribute("role", "option");
+      const isSelected = selectedReasoningEffort === choice.id;
+      button.className = "harness-reasoning-option";
+      button.classList.toggle("is-selected", isSelected);
+      button.setAttribute("aria-selected", isSelected ? "true" : "false");
+      const label = document.createElement("strong");
+      label.textContent = choice.id
+        ? reasoningEffortLabel(choice.id)
+        : t("agents.model_automatic");
+      const description = document.createElement("small");
+      description.textContent = choice.description || t("agents.reasoning_level_hint", {
+        effort: reasoningEffortLabel(choice.id),
+      });
+      button.append(label, description);
+      button.addEventListener("click", () => selectReasoningEffort(choice.id));
+      reasoningOptions.appendChild(button);
+    }
+    reasoningUnavailable.hidden = supported && choices.length > 1;
+    reasoningOptions.hidden = !supported;
+    const effective = modelPayload?.effective_reasoning_effort || "";
+    reasoningCurrent.hidden = !effective;
+    reasoningCurrent.textContent = effective
+      ? t("agents.reasoning_current", {effort: reasoningEffortLabel(effective)})
+      : "";
+  };
+
+  const renderModelOptions = () => {
+    const query = searchInput.value.trim().toLocaleLowerCase();
+    const models = (Array.isArray(modelPayload?.models) ? modelPayload.models : [])
+      .filter((model) => model?.id && optionMatches(model, query));
+    list.replaceChildren();
+    const groups = new Map();
+    for (const model of models) {
+      const provider = model.provider || modelPayload?.provider || agentLabel;
+      if (!groups.has(provider)) {
+        groups.set(provider, []);
+      }
+      groups.get(provider).push(model);
+    }
+    for (const [provider, entries] of groups) {
+      const group = document.createElement("section");
+      group.className = "harness-model-group";
+      group.setAttribute("role", "group");
+      group.setAttribute("aria-label", provider);
+      const heading = document.createElement("div");
+      heading.className = "harness-model-group-title";
+      const providerName = document.createElement("strong");
+      providerName.textContent = provider;
+      const providerCount = document.createElement("span");
+      providerCount.textContent = String(entries.length);
+      heading.append(providerName, providerCount);
+      group.appendChild(heading);
+      for (const model of entries) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "harness-model-option";
+        button.dataset.modelId = model.id;
+        button.setAttribute("role", "option");
+        const isSelected = selectedModel === model.id;
+        button.setAttribute("aria-selected", isSelected ? "true" : "false");
+        button.classList.toggle("is-selected", isSelected);
+        const indicator = document.createElement("span");
+        indicator.className = "harness-model-option-indicator";
+        indicator.setAttribute("aria-hidden", "true");
+        const copy = document.createElement("span");
+        copy.className = "harness-model-option-copy";
+        const title = document.createElement("strong");
+        title.textContent = model.label || model.id;
+        const identifier = document.createElement("code");
+        identifier.textContent = model.id;
+        copy.append(title, identifier);
+        if (model.description) {
+          const description = document.createElement("small");
+          description.textContent = model.description;
+          copy.appendChild(description);
+        }
+        const badges = document.createElement("span");
+        badges.className = "harness-model-option-badges";
+        if (model.default) {
+          const badge = document.createElement("em");
+          badge.textContent = t("agents.model_recommended");
+          badges.appendChild(badge);
+        }
+        if (modelPayload?.effective_model === model.id) {
+          const active = document.createElement("em");
+          active.textContent = t("agents.model_active");
+          badges.appendChild(active);
+        }
+        button.append(indicator, copy, badges);
+        button.addEventListener("click", () => selectModel(model.id));
+        group.appendChild(button);
+      }
+      list.appendChild(group);
+    }
+    empty.hidden = models.length > 0;
+  };
+
+  const openModelDialog = () => {
+    if (!modelPayload?.supported) {
+      return;
+    }
+    selectedModel = modelPayload.selected_model || "";
+    selectedReasoningEffort = modelPayload.selected_reasoning_effort || "";
+    searchInput.value = "";
+    customInput.value = selectedModel && !(modelPayload.models || [])
+      .some((model) => model.id === selectedModel) ? selectedModel : "";
+    customInput.setAttribute("aria-invalid", "false");
+    renderModelOptions();
+    renderReasoningOptions();
+    updateSelectionState();
+    if (modelPayload.error) {
+      dialogStatus.textContent = modelPayload.error;
+    }
+    if (typeof agentModelDialog.showModal === "function") {
+      agentModelDialog.showModal();
+      requestAnimationFrame(() => searchInput.focus({preventScroll: true}));
+    }
+  };
+
+  const savePreference = async (model, reasoningEffort) => {
+    saveButton.disabled = true;
+    inheritButton.disabled = true;
+    dialogStatus.textContent = t("agents.model_saving");
+    try {
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools/${encodeURIComponent(agent)}/models/preference`,
+        {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model, reasoning_effort: reasoningEffort}),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.detail || t("agents.model_save_failed"));
+      }
+      renderModelSummary(body);
+      dialogStatus.textContent = model || reasoningEffort
+        ? t("agents.launch_preferences_saved")
+        : t("agents.model_inherit_saved");
+      window.dispatchEvent(new CustomEvent("staragent:model-preference-changed", {
+        detail: {node, agent, model, reasoningEffort},
+      }));
+      setTimeout(() => agentModelDialog.close(), 300);
+    } catch (saveError) {
+      updateSelectionState();
+      dialogStatus.textContent = saveError?.message || t("agents.model_save_failed");
+    }
+  };
+
+  changeButton.addEventListener("click", openModelDialog);
+  refreshButton.addEventListener("click", () => loadModels(true));
+  closeButton.addEventListener("click", () => agentModelDialog.close());
+  cancelButton.addEventListener("click", () => agentModelDialog.close());
+  saveButton.addEventListener("click", () => (
+    savePreference(selectedModel, selectedReasoningEffort)
+  ));
+  inheritButton.addEventListener("click", () => savePreference("", ""));
+  authButton.addEventListener("click", () => {
+    agentModelDialog.close();
+    window.dispatchEvent(new CustomEvent("staragent:harness-auth", {
+      detail: {node, agent},
+    }));
+  });
+  searchInput.addEventListener("input", renderModelOptions);
+  customInput.addEventListener("input", () => {
+    const value = customInput.value.trim();
+    const valid = !value || validCustomModel(value);
+    selectedModel = valid ? value : "";
+    customInput.setAttribute("aria-invalid", valid ? "false" : "true");
+    for (const button of list.querySelectorAll("[data-model-id]")) {
+      button.classList.remove("is-selected");
+      button.setAttribute("aria-selected", "false");
+    }
+    renderReasoningOptions();
+    updateSelectionState();
+    if (!valid) {
+      dialogStatus.textContent = t("agents.model_invalid");
+    } else if (value) {
+      dialogStatus.textContent = t("agents.model_custom_selected", {model: value});
+    }
+  });
+  agentModelDialog.addEventListener("click", (event) => {
+    if (event.target === agentModelDialog) {
+      agentModelDialog.close();
+    }
+  });
+  agentModelDialog.addEventListener("keydown", (event) => {
+    if (event.key === "/" && event.target !== searchInput && event.target !== customInput) {
+      event.preventDefault();
+      searchInput.focus();
+    }
+  });
+  window.addEventListener("staragent:agent-auth-finished", (event) => {
+    if (event.detail?.node === node && event.detail?.agent === agent) {
+      loadModels(true);
+    }
+  });
+  window.addEventListener("staragent:harness-configuration-saved", (event) => {
+    if (event.detail?.node === node && event.detail?.agent === agent) {
+      loadModels(true);
+    }
+  });
+  window.addEventListener("staragent:agent-tool-state", (event) => {
+    if (
+      event.detail?.node === node
+      && event.detail?.agent === agent
+      && event.detail?.status === "available"
+      && modelPayload
+      && !modelPayload.installed
+    ) {
+      loadModels(true);
+    }
+  });
+  window.StarAgentAfterPaint(() => loadModels(false));
 }
 
 const harnessConfiguration = document.querySelector("[data-harness-configuration]");
@@ -1395,6 +1847,9 @@ if (harnessConfiguration) {
         size: Number(payload.config?.size || 0),
       });
       window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {detail: {node}}));
+      window.dispatchEvent(new CustomEvent("staragent:harness-configuration-saved", {
+        detail: {node, agent},
+      }));
     } catch (error) {
       configState.textContent = t("agents.save_failed", {
         message: error?.message || t("common.unknown"),
@@ -1426,6 +1881,9 @@ if (harnessConfiguration) {
         applyConfig(payload.config || {});
       }
       window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {detail: {node}}));
+      window.dispatchEvent(new CustomEvent("staragent:harness-configuration-saved", {
+        detail: {node, agent},
+      }));
     } catch (error) {
       environmentState.textContent = t("agents.save_failed", {
         message: error?.message || t("common.unknown"),

@@ -493,7 +493,8 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "credentialDescription" in script
     assert 't("agents.provider_name"' in script
     assert 't("agents.usage.provider_unavailable_message")' in script
-    assert "copy.dataset.copy = auth.action" in script
+    assert 'new CustomEvent("staragent:harness-auth"' in script
+    assert "/auth/logout" in script
     assert "renderAgentUsage" in script
     assert "remaining_percent" in script
     assert "copy.dataset.copy = usage.action" in script

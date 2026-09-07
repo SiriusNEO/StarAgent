@@ -121,6 +121,101 @@ def test_harness_page_exposes_a_node_scoped_interactive_terminal(monkeypatch) ->
     assert 'name="prompt"' not in response.text
 
 
+def test_harness_page_exposes_model_and_reasoning_launch_preferences(monkeypatch) -> None:
+    worker = node_view("worker")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: worker)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/worker/agents/codex")
+
+    assert response.status_code == 200
+    assert "data-agent-model" in response.text
+    assert "data-harness-model-dialog" in response.text
+    assert "data-reasoning-control" in response.text
+    assert "Reasoning effort" in response.text
+    assert "Save preferences" in response.text
+
+    client.cookies.set("staragent_language", "zh-CN")
+    translated = client.get("/nodes/worker/agents/codex")
+    assert "推理强度" in translated.text
+    assert "保存启动配置" in translated.text
+
+
+def test_codex_harness_page_offers_multiple_secure_login_methods(monkeypatch) -> None:
+    worker = node_view("worker")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: worker)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/worker/agents/codex")
+
+    assert response.status_code == 200
+    assert 'data-default-method="device"' in response.text
+    assert "data-harness-auth-terminal" in response.text
+    assert 'data-auth-method="browser"' in response.text
+    assert 'data-auth-method="device"' in response.text
+    assert 'data-auth-method="api-key"' in response.text
+    assert 'data-auth-method="environment"' in response.text
+    assert 'name="api_key"' in response.text
+    assert 'type="password"' in response.text
+    assert "Device-code login is beta" in response.text
+    assert "StarAgent does not save or log this value" in response.text
+
+
+def test_local_codex_harness_recommends_browser_login(monkeypatch) -> None:
+    local = node_view("local")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: local)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/local/agents/codex")
+
+    assert response.status_code == 200
+    assert 'data-default-method="browser"' in response.text
+
+
+def test_claude_harness_offers_account_console_sso_and_cloud_access(monkeypatch) -> None:
+    worker = node_view("worker")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: worker)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/worker/agents/claude")
+
+    assert response.status_code == 200
+    assert 'data-default-method="account"' in response.text
+    assert 'data-auth-method="account"' in response.text
+    assert 'data-auth-method="console"' in response.text
+    assert 'data-auth-method="sso"' in response.text
+    assert 'data-auth-method="environment"' in response.text
+    assert 'data-auth-action="configure"' in response.text
+    assert "https://code.claude.com/docs/en/authentication" in response.text
+    assert "paste the browser code back into this terminal" in response.text
+
+    client.cookies.set("staragent_language", "zh-CN")
+    translated = client.get("/nodes/worker/agents/claude")
+    assert "Claude 账号" in translated.text
+    assert "Anthropic Console" in translated.text
+    assert "组织 SSO" in translated.text
+    assert "API 或云平台" in translated.text
+
+
+def test_opencode_harness_offers_provider_management_and_environment_access(
+    monkeypatch,
+) -> None:
+    worker = node_view("worker")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: worker)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/worker/agents/opencode")
+
+    assert response.status_code == 200
+    assert 'data-default-method="provider"' in response.text
+    assert 'data-auth-method="provider"' in response.text
+    assert 'data-auth-method="remove-provider"' in response.text
+    assert 'data-auth-action="logout"' in response.text
+    assert 'data-auth-method="environment"' in response.text
+    assert "https://opencode.ai/docs/providers/" in response.text
+    assert "provider picker" in response.text
+
+
 def test_node_pages_keep_navigation_and_actions_in_node_scope(monkeypatch) -> None:
     worker = node_view(
         "worker",

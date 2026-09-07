@@ -64,7 +64,13 @@ from staragent.files import (
     file_raw_info_payload,
     file_raw_payload,
 )
-from staragent.harness_terminal import open_codex_login_terminal, open_harness_terminal
+from staragent.harness_terminal import (
+    default_harness_auth_method,
+    harness_auth_flow,
+    harness_auth_flows,
+    open_harness_auth_terminal,
+    open_harness_terminal,
+)
 from staragent.hub import (
     NODE_HEARTBEAT_INTERVAL_SECONDS,
     NodeEntry,
@@ -78,17 +84,20 @@ from staragent.hub import (
     load_nodes,
     mark_hub_session_seen,
     node_agent_history_payload,
+    node_agent_logout_payload,
     node_agent_skills_payload,
     node_agent_tool_install_payload,
     node_agent_tool_update_payload,
     node_agent_tools_payload,
     node_by_name,
-    node_codex_logout_payload,
+    node_codex_api_key_login_payload,
     node_dependencies_payload,
     node_dependency_install_payload,
     node_harness_configuration_payload,
+    node_harness_models_payload,
     node_save_harness_config,
     node_save_harness_environment,
+    node_save_harness_model_preference,
     node_staragent_update_apply_payload,
     node_staragent_update_status_payload,
     refresh_remote_node_heartbeats,
@@ -114,10 +123,12 @@ from staragent.runtime import (
     tmux_session_exists,
 )
 from staragent.schemas import (
+    CodexApiKeyLoginRequest,
     CreateDirectory,
     CreateWorker,
     HarnessConfigRequest,
     HarnessEnvironmentRequest,
+    HarnessModelPreferenceRequest,
     SendMessage,
     TerminalInput,
 )
@@ -665,6 +676,7 @@ def register_pages_routes(app: FastAPI, *, mode: str) -> None:
         )
         if selected_agent is None:
             raise HTTPException(status_code=404, detail=f"agent harness not found: {agent_name}")
+        auth_flows = harness_auth_flows(agent_name)
         agent_presets = [
             preset for preset in command_presets_payload() if preset.get("agent") != "shell"
         ]
@@ -679,6 +691,11 @@ def register_pages_routes(app: FastAPI, *, mode: str) -> None:
                 "selected_agent": selected_agent,
                 "active_agent_name": agent_name,
                 "agent_presets": agent_presets,
+                "auth_flows": auth_flows,
+                "default_auth_method": default_harness_auth_method(
+                    agent_name,
+                    local=node_view.entry.is_local,
+                ),
             },
         )
 
@@ -781,11 +798,50 @@ def register_terminal_routes(app: FastAPI) -> None:
         else:
             await proxy_agent_terminal_socket(websocket, node, spec.name)
 
-    @app.websocket("/ws/nodes/{node_id}/agent-tools/codex/auth/login")
-    async def node_codex_login_socket(websocket: WebSocket, node_id: str) -> None:
+    @app.websocket("/ws/nodes/{node_id}/agent-tools/{agent}/auth/login")
+    async def node_harness_login_socket(
+        websocket: WebSocket,
+        node_id: str,
+        agent: str,
+    ) -> None:
+        try:
+            method = default_harness_auth_method(agent, local=False)
+        except ValueError:
+            await websocket.accept()
+            await websocket.close(code=4404, reason="unsupported Agent authentication")
+            return
+        await route_node_harness_auth_socket(websocket, node_id, agent, "login", method)
+
+    @app.websocket("/ws/nodes/{node_id}/agent-tools/{agent}/auth/{action}/{method}")
+    async def node_harness_auth_method_socket(
+        websocket: WebSocket,
+        node_id: str,
+        agent: str,
+        action: str,
+        method: str,
+    ) -> None:
+        await route_node_harness_auth_socket(websocket, node_id, agent, action, method)
+
+    async def route_node_harness_auth_socket(
+        websocket: WebSocket,
+        node_id: str,
+        agent: str,
+        action: str,
+        method: str,
+    ) -> None:
         if not websocket_is_authenticated(websocket):
             await websocket.accept()
             await websocket.close(code=4401, reason="unauthorized")
+            return
+        try:
+            flow = harness_auth_flow(agent, action, method)
+        except ValueError as exc:
+            await websocket.accept()
+            await websocket.close(code=4404, reason=str(exc)[:120])
+            return
+        if flow.transport != "terminal":
+            await websocket.accept()
+            await websocket.close(code=4404, reason="authentication flow is not interactive")
             return
         try:
             node = node_by_name(node_id)
@@ -794,9 +850,9 @@ def register_terminal_routes(app: FastAPI) -> None:
             await websocket.close(code=4404, reason=f"node not found: {node_id}")
             return
         if node.is_local:
-            await local_codex_login_socket(websocket, node)
+            await local_harness_auth_socket(websocket, node, agent, action, method)
         else:
-            await proxy_codex_login_socket(websocket, node)
+            await proxy_harness_auth_socket(websocket, node, agent, action, method)
 
     async def local_terminal_socket(websocket: WebSocket, name: str) -> None:
         await websocket.accept()
@@ -854,36 +910,46 @@ def register_terminal_routes(app: FastAPI) -> None:
                     details={"agent": agent},
                 )
 
-    async def local_codex_login_socket(websocket: WebSocket, node: NodeEntry) -> None:
+    async def local_harness_auth_socket(
+        websocket: WebSocket,
+        node: NodeEntry,
+        agent: str,
+        action: str,
+        method: str,
+    ) -> None:
         await websocket.accept()
         opened = False
         try:
-            with open_codex_login_terminal() as terminal:
+            with open_harness_auth_terminal(
+                agent,
+                action=action,
+                method=method,
+            ) as terminal:
                 opened = True
                 append_node_event(
                     node.name,
                     "info",
-                    "agent.auth_login_started",
-                    "Codex device login started.",
+                    f"agent.auth_{action}_started",
+                    f"{agent} {method} authentication started.",
                     source="hub.agents",
-                    details={"agent": "codex"},
+                    details={"agent": agent, "action": action, "method": method},
                 )
                 await interact_with_pty_websocket(
                     terminal,
                     websocket,
                     max_age_seconds=15 * 60,
                 )
-        except OSError:
-            await websocket.close(code=1011, reason="could not start Codex login")
+        except (OSError, ValueError):
+            await websocket.close(code=1011, reason="could not start Harness authentication")
         finally:
             if opened:
                 append_node_event(
                     node.name,
                     "info",
-                    "agent.auth_login_finished",
-                    "Codex device login terminal closed.",
+                    f"agent.auth_{action}_finished",
+                    f"{agent} {method} authentication terminal closed.",
                     source="hub.agents",
-                    details={"agent": "codex"},
+                    details={"agent": agent, "action": action, "method": method},
                 )
 
 
@@ -1204,6 +1270,56 @@ def register_nodes_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return no_store_dashboard_json(payload)
 
+    @app.get("/api/nodes/{node_id}/agent-tools/{agent}/models")
+    def node_harness_models(
+        node_id: str,
+        agent: str,
+        refresh: bool = False,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_harness_models_payload(node, agent, refresh=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_dashboard_json(payload)
+
+    @app.put("/api/nodes/{node_id}/agent-tools/{agent}/models/preference")
+    def update_node_harness_model_preference(
+        node_id: str,
+        agent: str,
+        request: HarnessModelPreferenceRequest,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_save_harness_model_preference(
+                node,
+                agent,
+                request.model,
+                request.reasoning_effort,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(
+                status_code=exc.code,
+                detail=remote_http_error_detail(exc),
+            ) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info",
+            "agent.model_preference_saved",
+            f"{agent} launch preferences were updated on {node.name}.",
+            source="hub.agents",
+            details={
+                "node": node.name,
+                "agent": agent,
+                "model": request.model or "automatic",
+                "reasoning_effort": request.reasoning_effort or "automatic",
+            },
+        )
+        return no_store_dashboard_json(payload)
+
     @app.get("/api/nodes/{node_id}/agent-tools/{agent}/skills")
     def node_agent_skills(
         node_id: str,
@@ -1275,13 +1391,15 @@ def register_nodes_routes(app: FastAPI) -> None:
         )
         return no_store_dashboard_json(payload)
 
-    @app.post("/api/nodes/{node_id}/agent-tools/codex/auth/logout")
-    def logout_node_codex(node_id: str) -> JSONResponse:
+    @app.post("/api/nodes/{node_id}/agent-tools/{agent}/auth/logout")
+    def logout_node_agent(node_id: str, agent: str) -> JSONResponse:
         node = dashboard_node_entry(node_id)
+        if agent_tool_spec(agent) is None:
+            raise HTTPException(status_code=404, detail=f"Agent Harness not found: {agent}")
         try:
-            payload = node_codex_logout_payload(node)
+            payload = node_agent_logout_payload(node, agent)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except urllib.error.HTTPError as exc:
             raise HTTPException(
                 status_code=exc.code,
@@ -1292,9 +1410,35 @@ def register_nodes_routes(app: FastAPI) -> None:
         append_hub_event(
             "info" if payload.get("ok") else "warning",
             "agent.auth_logout" if payload.get("ok") else "agent.auth_logout_failed",
-            f"Codex {'logged out' if payload.get('ok') else 'logout failed'} on {node.name}.",
+            f"{agent} {'logged out' if payload.get('ok') else 'logout failed'} on {node.name}.",
             source="hub.agents",
-            details={"node": node.name, "agent": "codex"},
+            details={"node": node.name, "agent": agent},
+        )
+        return no_store_dashboard_json(payload)
+
+    @app.post("/api/nodes/{node_id}/agent-tools/codex/auth/login/api-key")
+    def login_node_codex_with_api_key(
+        node_id: str,
+        request: CodexApiKeyLoginRequest,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_codex_api_key_login_payload(node, request.api_key.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            raise HTTPException(
+                status_code=exc.code,
+                detail=remote_http_error_detail(exc),
+            ) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if payload.get("ok") else "warning",
+            "agent.auth_login_finished" if payload.get("ok") else "agent.auth_login_failed",
+            f"Codex API key login {'finished' if payload.get('ok') else 'failed'} on {node.name}.",
+            source="hub.agents",
+            details={"node": node.name, "agent": "codex", "method": "api_key"},
         )
         return no_store_dashboard_json(payload)
 
@@ -2123,8 +2267,19 @@ async def proxy_agent_terminal_socket(
     await proxy_node_websocket(websocket, node, path)
 
 
-async def proxy_codex_login_socket(websocket: WebSocket, node: NodeEntry) -> None:
-    await proxy_node_websocket(websocket, node, "/ws/agent-tools/codex/auth/login")
+async def proxy_harness_auth_socket(
+    websocket: WebSocket,
+    node: NodeEntry,
+    agent: str,
+    action: str,
+    method: str,
+) -> None:
+    if agent == "codex" and action == "login" and method == "device":
+        path = "/ws/agent-tools/codex/auth/login"
+    else:
+        parts = (agent, "auth", action, method)
+        path = "/ws/agent-tools/" + "/".join(urllib.parse.quote(part, safe="") for part in parts)
+    await proxy_node_websocket(websocket, node, path)
 
 
 async def proxy_node_websocket(websocket: WebSocket, node: NodeEntry, path: str) -> None:
