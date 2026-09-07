@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
 from staragent.agent_auth import logout_codex
 from staragent.agent_history import agent_history_payload
+from staragent.agent_skills import agent_skills_payload, clear_agent_skills_cache
 from staragent.agent_tools import (
     AgentToolUpdateBusyError,
     agent_tools_payload,
@@ -21,6 +22,11 @@ from staragent.agent_tools import (
     update_agent_tool,
 )
 from staragent.auth import node_auth_token
+from staragent.dependencies import (
+    DependencyInstallBusyError,
+    dependencies_status,
+    install_dependency,
+)
 from staragent.event_log import append_node_outbox_event, node_outbox_payload
 from staragent.files import (
     create_directory_payload,
@@ -128,10 +134,12 @@ def create_app() -> FastAPI:
                 "agent_auth_management": 1,
                 "agent_configuration": 1,
                 "agent_install": 1,
+                "agent_skills": 1,
                 "agent_update": 1,
                 "agent_usage": 1,
                 "agent_history": 1,
                 "agent_terminal": 1,
+                "dependencies": 1,
                 "session_status": 2,
                 "staragent_update": 1,
             },
@@ -207,6 +215,43 @@ def create_app() -> FastAPI:
     def agent_tools(refresh: bool = False) -> dict[str, object]:
         return agent_tools_payload(force=refresh)
 
+    @app.get("/api/agent-tools/{agent}/skills")
+    def agent_skills(agent: str, refresh: bool = False) -> JSONResponse:
+        try:
+            payload = agent_skills_payload(agent, force=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_json(payload)
+
+    @app.get("/api/dependencies")
+    def dependencies(refresh: bool = False) -> dict[str, object]:
+        return dependencies_status(force=refresh)
+
+    @app.post("/api/dependencies/{dependency}/install/{option_id}")
+    def install_runtime_dependency(dependency: str, option_id: str) -> dict[str, object]:
+        try:
+            result = install_dependency(dependency, option_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DependencyInstallBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "dependency.install_succeeded" if result.get("ok") else "dependency.install_failed",
+            f"{result.get('label') or dependency} installation "
+            f"{'completed' if result.get('ok') else 'failed'}.",
+            source="node.dependencies",
+            details={
+                "dependency": result.get("dependency") or dependency,
+                "option": result.get("option") or "",
+                "source": result.get("source") or "",
+                "after_status": result.get("after_status") or "",
+                "after_version": result.get("after_version") or "",
+                "error": result.get("error") or "",
+            },
+        )
+        return result
+
     @app.get("/api/agent-tools/{agent}/configuration")
     def harness_configuration(agent: str) -> JSONResponse:
         try:
@@ -224,6 +269,7 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         clear_agent_tools_cache()
+        clear_agent_skills_cache()
         config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
         append_node_outbox_event(
             "info",
@@ -246,6 +292,7 @@ def create_app() -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         clear_agent_tools_cache()
+        clear_agent_skills_cache()
         append_node_outbox_event(
             "info",
             "agent.environment_saved",

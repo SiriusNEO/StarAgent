@@ -11,7 +11,7 @@ Launcher is the default, single-Node StarAgent surface.
 - Runs by invoking `staragent` with no subcommand.
 - Opens the local Harness catalog by default.
 - Reuses Hub's Node Workspace for the local Node, including Current Node details, Agents, Sessions,
-  and Logs.
+  Logs, and runtime dependencies.
 - Does not render the Nodes inventory or run Remote Node heartbeats.
 - Opens a browser only for an attended local desktop launch; SSH and `--no-open` launches only print
   the URL.
@@ -78,6 +78,19 @@ its official Windows Release archive after StarAgent validates the asset metadat
 host, archive layout, and GitHub SHA-256 digest. npm routes remain explicit fallbacks and require an
 existing npm; StarAgent does not install or embed a second package manager.
 
+Current Node owns the supporting-runtime inventory. The local or selected Remote Node detects its
+terminal backend, Tailscale CLI, and Node.js/npm, then exposes only installation options for package
+managers present on that machine. The browser sends fixed dependency and option identifiers; the Node
+reconstructs allowlisted argv and returns bounded, redacted output. Installing Tailscale stops at the
+package boundary and does not manage authentication, routes, or service configuration.
+
+Each Harness also owns a read-only Skills inventory. The Node derives a fixed set of global, bundled,
+compatibility, and enabled-plugin roots from that Harness's managed environment. A bounded walker
+reads only `SKILL.md` frontmatter and returns normalized names, descriptions, scopes, and source
+labels. The API accepts a Harness name and refresh flag, never a filesystem path; file bodies and
+resolved absolute paths do not cross the Node boundary. Hub normalizes Remote Node results again
+before sending them to the browser.
+
 ## Data Flow
 
 ```text
@@ -108,6 +121,12 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/logs` (Remote Node outbox on Nodes; centralized archive query on the Hub)
 - `GET /api/agent-tools` (Remote Node executable probe)
 - `GET /api/nodes/{node}/agent-tools` (Hub view of a local or remote Node probe)
+- `GET /api/agent-tools/{agent}/skills` (bounded, read-only Remote Node Skills inventory)
+- `GET /api/nodes/{node}/agent-tools/{agent}/skills` (Hub view of the selected Node inventory)
+- `GET /api/dependencies` (Remote Node supporting-runtime probe)
+- `GET /api/nodes/{node}/dependencies` (Hub view of the selected Node's dependencies)
+- `POST /api/dependencies/{dependency}/install/{option}` (Remote Node allowlisted install)
+- `POST /api/nodes/{node}/dependencies/{dependency}/install/{option}` (Hub install proxy)
 - `POST /api/agent-tools/{agent}/install/{option}` (Remote Node allowlisted CLI install)
 - `POST /api/nodes/{node}/agent-tools/{agent}/install/{option}` (Hub install proxy)
 - `POST /api/agent-tools/{agent}/update` (Remote Node allowlisted CLI update)

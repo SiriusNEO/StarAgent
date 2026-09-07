@@ -585,8 +585,12 @@ if (agentToolsBand) {
       return;
     }
     row.classList.add("is-installing");
+    refreshButton.disabled = true;
     row.querySelectorAll(".agent-install-button").forEach((installButton) => {
       installButton.disabled = true;
+    });
+    row.querySelectorAll(".launcher-source-choice, .launcher-install-copy").forEach((control) => {
+      control.disabled = true;
     });
     button.textContent = t("agents.installing");
     setAgentUpdateResult(row, t("agents.installing_on", {
@@ -617,9 +621,13 @@ if (agentToolsBand) {
       status.textContent = t("agents.install_failed_on", {agent: label, node, message});
     } finally {
       row.classList.remove("is-installing");
+      refreshButton.disabled = false;
       row.querySelectorAll(".agent-install-button").forEach((installButton) => {
         installButton.disabled = installButton.dataset.enabled !== "true";
         installButton.textContent = t("agents.install_now");
+      });
+      row.querySelectorAll(".launcher-source-choice, .launcher-install-copy").forEach((control) => {
+        control.disabled = false;
       });
     }
   };
@@ -627,7 +635,7 @@ if (agentToolsBand) {
   const renderAgentInstallOptions = (row, tool, payload, actions) => {
     const options = Array.isArray(tool.install_options) ? tool.install_options : [];
     const panel = document.createElement("section");
-    panel.className = "agent-install-panel";
+    panel.className = "agent-install-panel launcher-install";
 
     const head = document.createElement("div");
     head.className = "agent-install-panel-head";
@@ -642,26 +650,43 @@ if (agentToolsBand) {
     head.append(headCopy, mirrorNote);
     panel.appendChild(head);
 
-    const list = document.createElement("div");
-    list.className = "agent-install-options";
-    for (const option of options) {
-      const item = document.createElement("article");
-      item.className = "agent-install-option";
-      item.classList.toggle("is-recommended", Boolean(option.recommended));
-      item.classList.toggle("is-china", Boolean(option.china));
-      item.classList.toggle("is-unavailable", !option.available);
+    const steps = document.createElement("ol");
+    steps.className = "launcher-install-steps";
+    [
+      t("agents.install_step_runtime"),
+      t("agents.install_step_source"),
+      t("agents.install_step_install"),
+    ].forEach((label, index) => {
+      const step = document.createElement("li");
+      step.classList.toggle("is-complete", index === 0);
+      step.classList.toggle("is-active", index === 1);
+      const number = document.createElement("span");
+      number.textContent = String(index + 1);
+      const text = document.createElement("strong");
+      text.textContent = label;
+      step.append(number, text);
+      steps.appendChild(step);
+    });
+    panel.appendChild(steps);
 
-      const information = document.createElement("div");
-      information.className = "agent-install-option-information";
+    const list = document.createElement("div");
+    list.className = "launcher-source-list";
+    const choices = [];
+    for (const option of options) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "launcher-source-choice";
+      item.setAttribute("aria-pressed", "false");
+      item.classList.toggle("is-unavailable", !option.available);
+      const radio = document.createElement("span");
+      radio.className = "launcher-source-radio";
+      radio.setAttribute("aria-hidden", "true");
+      const information = document.createElement("span");
+      information.className = "launcher-source-copy";
       const sourceLine = document.createElement("div");
-      sourceLine.className = "agent-install-option-source";
-      const provider = document.createElement(option.source_url ? "a" : "strong");
+      sourceLine.className = "launcher-source-title";
+      const provider = document.createElement("strong");
       provider.textContent = option.provider || installSourceLabel(option);
-      if (option.source_url) {
-        provider.href = option.source_url;
-        provider.target = "_blank";
-        provider.rel = "noopener noreferrer";
-      }
       sourceLine.appendChild(provider);
 
       const sourceBadge = document.createElement("span");
@@ -678,63 +703,25 @@ if (agentToolsBand) {
       }
 
       const method = document.createElement("span");
-      method.className = "agent-install-option-method";
-      method.textContent = installMethodLabel(option.method);
-      information.append(sourceLine, method);
-      if (option.command) {
-        const command = document.createElement("code");
-        command.textContent = option.command;
-        information.appendChild(command);
-      }
-      if (option.native_binary) {
-        const note = document.createElement("small");
-        note.className = "agent-install-option-note";
-        note.textContent = t("agents.install_native_binary_note");
-        information.appendChild(note);
-      }
+      method.className = "launcher-source-method";
       const missingRequirements = Array.isArray(option.missing_requirements)
         ? option.missing_requirements.join(", ")
         : "";
       if (!option.available) {
-        const requirement = document.createElement("small");
-        requirement.className = "agent-install-option-requirement";
-        requirement.textContent = t("agents.install_missing_requirement", {
+        method.textContent = t("agents.install_missing_requirement", {
           commands: missingRequirements,
         });
-        information.appendChild(requirement);
+      } else {
+        method.textContent = installMethodLabel(option.method);
       }
-
-      const controls = document.createElement("div");
-      controls.className = "agent-install-option-controls";
-      if (option.command) {
-        const copy = document.createElement("button");
-        copy.type = "button";
-        copy.className = "copy-button inline-copy";
-        copy.dataset.copy = option.command;
-        copy.textContent = t("agents.copy_install");
-        controls.appendChild(copy);
-      }
-
-      const install = document.createElement("button");
-      install.type = "button";
-      install.className = "agent-cli-update-button agent-install-button";
-      install.textContent = t("agents.install_now");
-      const oneClickAvailable = Boolean(
-        payload.installs_supported && !payload.stale && option.available,
-      );
-      install.dataset.enabled = oneClickAvailable ? "true" : "false";
-      install.disabled = !oneClickAvailable;
-      if (!option.available) {
-        install.title = t("agents.install_missing_requirement", {
-          commands: missingRequirements,
-        });
-      } else if (!payload.installs_supported || payload.stale) {
-        install.title = t("agents.install_node_update_required");
-      }
-      install.addEventListener("click", () => runAgentInstall(row, tool, option, install));
-      controls.appendChild(install);
-      item.append(information, controls);
+      information.append(sourceLine, method);
+      const arrow = document.createElement("span");
+      arrow.className = "launcher-source-arrow";
+      arrow.setAttribute("aria-hidden", "true");
+      arrow.textContent = "›";
+      item.append(radio, information, arrow);
       list.appendChild(item);
+      choices.push({button: item, option});
     }
     panel.appendChild(list);
 
@@ -748,6 +735,97 @@ if (agentToolsBand) {
       compatibility.className = "agent-install-compatibility";
       compatibility.textContent = t("agents.install_node_update_required");
       panel.appendChild(compatibility);
+    }
+
+    if (options.length) {
+      const selection = document.createElement("div");
+      selection.className = "launcher-install-selection";
+      const selectionCopy = document.createElement("div");
+      selectionCopy.className = "launcher-install-selection-copy";
+      const selectionLabel = document.createElement("span");
+      selectionLabel.textContent = t("agents.install_selected_source");
+      const selectionName = document.createElement("strong");
+      const selectionHint = document.createElement("small");
+      const sourceLink = document.createElement("a");
+      sourceLink.target = "_blank";
+      sourceLink.rel = "noopener noreferrer";
+      sourceLink.textContent = t("agents.install_open_source");
+      selectionCopy.append(selectionLabel, selectionName, selectionHint, sourceLink);
+
+      const commandDetails = document.createElement("details");
+      commandDetails.className = "launcher-command-details";
+      const commandSummary = document.createElement("summary");
+      commandSummary.textContent = t("agents.install_command_details");
+      const command = document.createElement("code");
+      commandDetails.append(commandSummary, command);
+
+      const controls = document.createElement("div");
+      controls.className = "launcher-install-actions";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "copy-button inline-copy launcher-install-copy";
+      copy.textContent = t("agents.copy_install");
+      const install = document.createElement("button");
+      install.type = "button";
+      install.className = "agent-cli-update-button agent-install-button launcher-install-primary";
+      install.textContent = t("agents.install_now");
+      controls.append(copy, install);
+      selection.append(selectionCopy, commandDetails, controls);
+      panel.appendChild(selection);
+
+      let selectedOption = null;
+      const choose = (option) => {
+        selectedOption = option;
+        steps.children[1]?.classList.remove("is-active");
+        steps.children[1]?.classList.add("is-complete");
+        steps.children[2]?.classList.add("is-active");
+        choices.forEach(({button: choice, option: candidate}) => {
+          const active = candidate.id === option.id;
+          choice.classList.toggle("is-selected", active);
+          choice.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        const oneClickAvailable = Boolean(
+          payload.installs_supported && !payload.stale && option.available,
+        );
+        selectionName.textContent = [
+          option.provider,
+          installMethodLabel(option.method),
+        ].filter(Boolean).join(" · ");
+        selectionHint.textContent = oneClickAvailable
+          ? t("agents.install_ready")
+          : t("agents.install_copy_fallback");
+        selectionHint.classList.toggle("is-warning", !oneClickAvailable);
+        sourceLink.hidden = !option.source_url;
+        sourceLink.href = option.source_url || "#";
+        commandDetails.hidden = !option.command;
+        command.textContent = option.command || "";
+        copy.hidden = !option.command;
+        copy.dataset.copy = option.command || "";
+        install.dataset.enabled = oneClickAvailable ? "true" : "false";
+        install.disabled = !oneClickAvailable;
+        const missingRequirements = Array.isArray(option.missing_requirements)
+          ? option.missing_requirements.join(", ")
+          : "";
+        install.title = !option.available
+          ? t("agents.install_missing_requirement", {commands: missingRequirements})
+          : (!payload.installs_supported || payload.stale)
+            ? t("agents.install_node_update_required")
+            : "";
+      };
+      choices.forEach(({button: choice, option}) => {
+        choice.addEventListener("click", () => choose(option));
+      });
+      install.addEventListener("click", () => {
+        if (selectedOption) {
+          runAgentInstall(row, tool, selectedOption, install);
+        }
+      });
+      choose(
+        options.find((option) => option.recommended && option.available)
+          || options.find((option) => option.available)
+          || options.find((option) => option.recommended)
+          || options[0],
+      );
     }
     actions.appendChild(panel);
   };

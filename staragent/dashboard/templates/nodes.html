@@ -141,16 +141,5 @@
     </details>
   </section>
 
-  <section class="band deferred-render">
-    <div class="section-title">
-      <h2>{{ t("nodes.dependencies") }}</h2>
-      <span>{{ t("nodes.dependencies_subtitle") }}</span>
-    </div>
-    <div class="dependency-panel">
-      <div class="dependency-status">{{ t("nodes.dependencies_checking") }}</div>
-      <div class="dependency-list"></div>
-    </div>
-  </section>
-
   <script src="{{ url_for('static', path='nodes.js') }}?v={{ static_version('nodes.js') }}"></script>
 {% endblock %}

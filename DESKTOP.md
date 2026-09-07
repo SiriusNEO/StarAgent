@@ -55,6 +55,10 @@ in the user's `.opencode\bin` directory. These recommended routes do not install
 npmjs, npmmirror, and Tencent Cloud remain clearly labeled fallbacks for users who already have npm;
 their registry argument applies only to that command.
 
+Once the Launcher is running, **Current Node** reports bundled ConPTY, Tailscale, and Node.js/npm.
+Missing optional tools can be installed through reviewed Windows Package Manager entries when
+`winget` is available; Node.js also includes an explicit npmmirror download resource.
+
 Linux and macOS local mode require StarAgent and tmux before opening the desktop app.
 
 Linux (Debian/Ubuntu example):

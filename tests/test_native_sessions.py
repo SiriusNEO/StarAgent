@@ -127,6 +127,16 @@ def test_windows_process_reports_a_missing_command_processor(monkeypatch) -> Non
         )
 
 
+def test_background_process_policy_hides_windows_console(monkeypatch) -> None:
+    monkeypatch.setattr(windows, "_IS_WINDOWS", True)
+    monkeypatch.setattr(windows, "_CREATE_NO_WINDOW", 0x0800_0000)
+
+    assert windows.background_process_kwargs() == {"creationflags": 0x0800_0000}
+
+    monkeypatch.setattr(windows, "_IS_WINDOWS", False)
+    assert windows.background_process_kwargs() == {}
+
+
 def test_augmented_windows_path_includes_native_harness_locations(tmp_path) -> None:
     system = tmp_path / "system-bin"
     home = tmp_path / "home"

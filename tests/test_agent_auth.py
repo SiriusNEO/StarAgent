@@ -36,15 +36,16 @@ def force_codex_login_status_fallback(monkeypatch) -> None:  # type: ignore[no-u
 
 def test_codex_auth_reports_login_method_without_identity(monkeypatch) -> None:
     force_codex_login_status_fallback(monkeypatch)
+
+    def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
+        assert kwargs["creationflags"] == 0x0800_0000
+        return subprocess.CompletedProcess(args, 0, "Logged in using ChatGPT\n", "")
+
+    monkeypatch.setattr(agent_auth.subprocess, "run", fake_run)
     monkeypatch.setattr(
-        agent_auth.subprocess,
-        "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(
-            args,
-            0,
-            "Logged in using ChatGPT\n",
-            "",
-        ),
+        agent_auth,
+        "background_process_kwargs",
+        lambda: {"creationflags": 0x0800_0000},
     )
 
     auth = agent_auth.probe_codex_auth("/tools/codex")
