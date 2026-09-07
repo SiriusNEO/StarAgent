@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import queue
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -88,7 +89,7 @@ def test_windows_process_wraps_npm_command_shims_with_cmd(monkeypatch) -> None:
         windows.shutil,
         "which",
         lambda command, path=None: (
-            "C:/Users/test/AppData/Roaming/npm/codex.cmd"
+            "C:/Users/Test User/AppData/Roaming/npm/codex.cmd"
             if command == "codex"
             else "C:/Windows/System32/cmd.exe"
         ),
@@ -96,9 +97,10 @@ def test_windows_process_wraps_npm_command_shims_with_cmd(monkeypatch) -> None:
 
     argv = windows.windows_process_argv(["codex", "login", "--device-auth"], {"PATH": "C:/bin"})
 
-    assert argv[:4] == ["C:/Windows/System32/cmd.exe", "/d", "/s", "/c"]
-    assert "codex.cmd" in argv[4]
-    assert "--device-auth" in argv[4]
+    assert argv[:5] == ["C:/Windows/System32/cmd.exe", "/d", "/s", "/c", "call"]
+    assert argv[5] == "C:/Users/Test User/AppData/Roaming/npm/codex.cmd"
+    assert argv[6:] == ["login", "--device-auth"]
+    assert r"\"C:/Users" not in subprocess.list2cmdline(argv)
 
 
 def test_windows_process_reports_a_missing_command_before_create_process(monkeypatch) -> None:
