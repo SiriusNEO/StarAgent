@@ -15,13 +15,16 @@ def check_command_shim() -> None:
         shim_directory = Path(directory) / "command shims"
         shim_directory.mkdir()
         shim = shim_directory / "staragent-shim-smoke.cmd"
-        shim.write_text("@echo off\r\necho shim-ready\r\n", encoding="utf-8")
+        shim.write_text(
+            '@echo off\r\nif not "%~1"=="shim argument" exit /b 9\r\necho shim-ready\r\n',
+            encoding="utf-8",
+        )
         environment = {
             **os.environ,
             "PATH": f"{shim_directory}{os.pathsep}{os.environ['PATH']}",
         }
         command = windows_process_argv(
-            ["staragent-shim-smoke"],
+            ["staragent-shim-smoke", "shim argument"],
             environment,
             require_executable=True,
         )
@@ -34,7 +37,11 @@ def check_command_shim() -> None:
             env=environment,
         )
         if result.returncode != 0 or "shim-ready" not in result.stdout:
-            raise RuntimeError("Windows command shim did not execute through cmd.exe.")
+            detail = (result.stderr or result.stdout).strip()
+            raise RuntimeError(
+                "Windows command shim did not execute through cmd.exe"
+                f" (exit {result.returncode}): {detail}"
+            )
 
 
 def main() -> None:
