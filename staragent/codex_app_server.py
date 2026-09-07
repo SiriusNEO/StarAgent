@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import queue
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Any
 
 from staragent import __version__
-from staragent.windows import windows_process_argv
+from staragent.windows import background_process_kwargs, windows_process_argv
+
+_APP_SERVER_EOF = object()
 
 
 def codex_app_server_request(
@@ -54,6 +57,7 @@ def codex_app_server_requests(
         text=True,
         bufsize=1,
         env=environment,
+        **background_process_kwargs(),
     )
     deadline = time.monotonic() + timeout
     try:
@@ -108,21 +112,43 @@ def read_app_server_response(
     request_id: int,
     deadline: float,
 ) -> dict[str, Any]:
-    if process.stdout is None:
+    stdout = process.stdout
+    if stdout is None:
         raise RuntimeError("Codex app-server stdout is unavailable.")
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(f"Codex app-server request {request_id} timed out.")
-        ready, _, _ = select.select([process.stdout], [], [], remaining)
-        if not ready:
-            raise TimeoutError(f"Codex app-server request {request_id} timed out.")
-        line = process.stdout.readline()
-        if not line:
-            raise RuntimeError(f"Codex app-server exited before request {request_id} completed.")
-        payload = json.loads(line)
-        if isinstance(payload, dict) and payload.get("id") == request_id:
-            return payload
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"Codex app-server request {request_id} timed out.")
+
+    messages: queue.Queue[object] = queue.Queue(maxsize=1)
+
+    def read_response() -> None:
+        try:
+            for line in stdout:
+                message = json.loads(line)
+                if isinstance(message, dict) and message.get("id") == request_id:
+                    messages.put(message)
+                    return
+        except (OSError, ValueError) as exc:
+            messages.put(exc)
+            return
+        messages.put(_APP_SERVER_EOF)
+
+    # Windows select() accepts Winsock sockets only, not anonymous process pipes.
+    threading.Thread(
+        target=read_response,
+        name=f"staragent-codex-app-server-{request_id}",
+        daemon=True,
+    ).start()
+    try:
+        message = messages.get(timeout=remaining)
+    except queue.Empty as exc:
+        raise TimeoutError(f"Codex app-server request {request_id} timed out.") from exc
+    if message is _APP_SERVER_EOF:
+        raise RuntimeError(f"Codex app-server exited before request {request_id} completed.")
+    if isinstance(message, Exception):
+        raise message
+    assert isinstance(message, dict)
+    return message
 
 
 def raise_for_app_server_error(response: Mapping[str, Any]) -> None:
@@ -138,19 +164,21 @@ def raise_for_app_server_error(response: Mapping[str, Any]) -> None:
 
 def stop_app_server(process: subprocess.Popen[str]) -> None:
     if process.stdin is not None:
-        with suppress(OSError):
+        with suppress(OSError, ValueError):
             process.stdin.close()
-    if process.poll() is not None:
-        return
-    with suppress(OSError):
-        process.terminate()
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
+    if process.poll() is None:
         with suppress(OSError):
-            process.kill()
-        with suppress(subprocess.TimeoutExpired):
+            process.terminate()
+        try:
             process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            with suppress(OSError):
+                process.kill()
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=1)
+    if process.stdout is not None:
+        with suppress(OSError, ValueError):
+            process.stdout.close()
 
 
 def clean_rpc_text(value: object, *, max_chars: int = 240) -> str:

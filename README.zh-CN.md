@@ -50,7 +50,7 @@ Session 详情页左侧提供类似 IM 的会话切换栏，可以直接切换�
 
 ![StarAgent Session 中的 Chat 与锁定状态 PTY Terminal](assets/demo-session-anime.webp)
 
-查看所选 Node 上 Agent CLI 的可用性、登录状态、升级方式和启动 preset：
+查看所选 Node 上 Agent CLI 的可用性、登录状态、已安装 Skills、更简洁的安装/升级方式和启动 preset：
 
 ![展示 Codex、Claude Code 与 OpenCode 的 StarAgent Agents 页面](assets/demo-agents-anime.webp)
 
@@ -71,6 +71,8 @@ Launcher 默认运行在受监督的 `staragent-launcher` tmux system session �
 
 Launcher 是默认的单机形态，启动后直接进入本机 Agents/Harness 目录。Sessions、Logs、
 Settings 和 Current Node 详情页与 Hub 中选中一个 Node 后看到的是同一套页面。
+Current Node 也会检测该机器上的终端、网络和包运行时依赖，并在可用时提供经过审核的
+系统原生安装方式。
 
 ## 桌面版
 
@@ -130,8 +132,8 @@ staragent hub --host 0.0.0.0 --port 8080
 `staragent hub` 默认会创建 `staragent-hub` 这个 tmux system session。
 打开 `http://<hub-node>:8080`，使用 `staragent hub` 打印出来的 token 登录。
 
-认证与状态目录、Dashboard 页面、集中日志、Agent CLI 检测、国内镜像安装与升级、额度信息、preset
-和历史会话恢复等详细说明见 [HUB.md](HUB.md)。
+认证与状态目录、Dashboard 页面、集中日志、运行依赖、Agent CLI 检测、国内镜像安装与升级、
+额度信息、preset 和历史会话恢复等详细说明见 [HUB.md](HUB.md)。
 
 ## Remote Node
 
@@ -165,7 +167,7 @@ staragent verify-node <node-host-or-100.x-ip>
 
 ## 致谢
 
-StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Launcher 的本机浏览器、SSH 与 `--no-open` 启动行为参考了 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Markdown Preview 遵循 [GitHub Flavored Markdown](https://github.github.com/gfm/) 的常见约定。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
+StarAgent 的 CLI transcript parsing 借鉴并改造了 [botmux](https://github.com/deepcoldy/botmux) 的思路和代码。Launcher 的本机浏览器、SSH 与 `--no-open` 启动行为参考了 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，聚焦来源选择、只保留一个主安装动作的流程参考了 [HMCL](https://github.com/HMCL-dev/HMCL)。Dashboard 视觉风格受到 [Tailscale admin console](https://tailscale.com/) 启发。Markdown Preview 遵循 [GitHub Flavored Markdown](https://github.github.com/gfm/) 的常见约定。Web terminal 使用 [xterm.js](https://xtermjs.org/)，文件预览高亮使用 [highlight.js](https://highlightjs.org/)。
 
 ## License
 

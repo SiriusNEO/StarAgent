@@ -66,6 +66,7 @@ def test_claude_usage_is_manual_and_checks_auth_without_a_model_request(monkeypa
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
         calls.append(args)
+        assert kwargs["creationflags"] == 0x0800_0000
         return subprocess.CompletedProcess(
             args,
             0,
@@ -76,6 +77,11 @@ def test_claude_usage_is_manual_and_checks_auth_without_a_model_request(monkeypa
         )
 
     monkeypatch.setattr(agent_usage.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_usage,
+        "background_process_kwargs",
+        lambda: {"creationflags": 0x0800_0000},
+    )
 
     usage = agent_usage.probe_claude_usage("/tools/claude")
 

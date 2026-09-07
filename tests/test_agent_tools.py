@@ -51,9 +51,15 @@ def test_agent_tool_detection_reports_versions_in_parallel(monkeypatch) -> None:
         barrier.wait(timeout=1)
         assert kwargs["env"]["DISABLE_AUTOUPDATER"] == "1"
         assert kwargs["env"]["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+        assert kwargs["creationflags"] == 0x0800_0000
         return subprocess.CompletedProcess(args, 0, versions[args[0].rsplit("/", 1)[-1]], "")
 
     monkeypatch.setattr(agent_tools.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        agent_tools,
+        "background_process_kwargs",
+        lambda: {"creationflags": 0x0800_0000},
+    )
     agent_tools.clear_agent_tools_cache()
 
     payload = agent_tools.agent_tools_payload(force=True)
@@ -864,6 +870,7 @@ def test_node_agent_tools_endpoint_is_authenticated(monkeypatch) -> None:
     assert sessions["capabilities"]["agent_usage"] == 1
     assert sessions["capabilities"]["agent_history"] == 1
     assert sessions["capabilities"]["agent_terminal"] == 1
+    assert sessions["capabilities"]["dependencies"] == 1
     assert "agent_tools" not in sessions
 
 

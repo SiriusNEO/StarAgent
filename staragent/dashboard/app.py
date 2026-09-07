@@ -49,7 +49,7 @@ from staragent.dashboard.i18n import (
     request_language,
     template_translate,
 )
-from staragent.dependencies import dependencies_status, ensure_dependencies
+from staragent.dependencies import DependencyInstallBusyError
 from staragent.event_log import (
     append_hub_event,
     append_node_event,
@@ -78,11 +78,14 @@ from staragent.hub import (
     load_nodes,
     mark_hub_session_seen,
     node_agent_history_payload,
+    node_agent_skills_payload,
     node_agent_tool_install_payload,
     node_agent_tool_update_payload,
     node_agent_tools_payload,
     node_by_name,
     node_codex_logout_payload,
+    node_dependencies_payload,
+    node_dependency_install_payload,
     node_harness_configuration_payload,
     node_save_harness_config,
     node_save_harness_environment,
@@ -1149,11 +1152,60 @@ def register_nodes_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail=f"node not found: {node_id}") from exc
         return node_agent_tools_payload(node, refresh=refresh)
 
+    @app.get("/api/nodes/{node_id}/dependencies")
+    def node_dependencies(node_id: str, refresh: bool = False) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        return no_store_dashboard_json(node_dependencies_payload(node, refresh=refresh))
+
+    @app.post("/api/nodes/{node_id}/dependencies/{dependency}/install/{option_id}")
+    def install_node_dependency(
+        node_id: str,
+        dependency: str,
+        option_id: str,
+    ) -> dict[str, object]:
+        node = dashboard_node_entry(node_id)
+        try:
+            result = node_dependency_install_payload(node, dependency, option_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DependencyInstallBusyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if result.get("ok") else "warning",
+            "dependency.install_succeeded" if result.get("ok") else "dependency.install_failed",
+            f"{result.get('label') or dependency} installation "
+            f"{'completed' if result.get('ok') else 'failed'} on {node.name}.",
+            source="hub.dependencies",
+            details={
+                "node": node.name,
+                "dependency": result.get("dependency") or dependency,
+                "option": result.get("option") or option_id,
+                "source": result.get("source") or "",
+                "after_status": result.get("after_status") or "",
+                "after_version": result.get("after_version") or "",
+                "error": result.get("error") or "",
+            },
+        )
+        return result
+
     @app.get("/api/nodes/{node_id}/agent-tools/{agent}/configuration")
     def node_harness_configuration(node_id: str, agent: str) -> JSONResponse:
         node = dashboard_node_entry(node_id)
         try:
             payload = node_harness_configuration_payload(node, agent)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_dashboard_json(payload)
+
+    @app.get("/api/nodes/{node_id}/agent-tools/{agent}/skills")
+    def node_agent_skills(
+        node_id: str,
+        agent: str,
+        refresh: bool = False,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_agent_skills_payload(node, agent, refresh=refresh)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return no_store_dashboard_json(payload)
@@ -1486,19 +1538,6 @@ def register_lark_routes(app: FastAPI) -> None:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return {"status": "stopped", "lark": lark_status_payload()}
-
-    @app.get("/api/dependencies")
-    def dependency_status_route() -> dict[str, object]:
-        return dependencies_status()
-
-    @app.post("/api/dependencies/ensure")
-    def ensure_dependencies_route() -> dict[str, object]:
-        try:
-            return ensure_dependencies()
-        except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def register_workspace_routes(app: FastAPI) -> None:

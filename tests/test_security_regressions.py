@@ -503,6 +503,8 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "/install/${encodeURIComponent(option.id)}`" in script
     assert "payload.installs_supported" in script
     assert "renderAgentInstallOptions" in script
+    assert 'class="band agent-skills-band deferred-render"' in template
+    assert "path='agent-skills.js'" in template
     assert 'class="agent-update-dialog agent-install-dialog"' in template
     assert 't("agents.install_safety")' in template
     assert 't("agents.update_description")' in template
@@ -522,6 +524,16 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "{% set tool = selected_agent %}" in template
     assert "agent-tools-node" not in template
     assert "Promise.all(nodeNames.map" in script
+    assert 'className = "launcher-source-list"' in script
+    assert 'className = "launcher-install-actions"' in script
+    assert "agent-install-option" not in script
+
+    skills_script = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agent-skills.js"
+    ).read_text(encoding="utf-8")
+    assert "/agent-tools/${encodeURIComponent(agent)}/skills" in skills_script
+    assert "data-skill-filter" in template
+    assert "SKILL.md instructions" not in skills_script
 
     icon_dir = PROJECT_ROOT / "staragent" / "dashboard" / "static" / "agent-icons"
     for name in ("codex.svg", "claude.svg", "opencode.svg"):
@@ -1076,50 +1088,61 @@ def test_lark_worker_uses_state_auth_token_without_inlining_it(monkeypatch, tmp_
 
 
 def test_dependencies_report_tailscale_as_optional(monkeypatch) -> None:
-    def fake_which(command: str) -> str | None:
+    def fake_find(command: str, environment: dict[str, str]) -> str | None:
         return f"/usr/bin/{command}" if command == "tmux" else None
 
-    monkeypatch.setattr(dependencies.shutil, "which", fake_which)
-    monkeypatch.setattr(dependencies, "dependency_version", lambda command: f"{command} version")
+    monkeypatch.setattr(dependencies, "current_dependency_platform", lambda: "linux")
+    monkeypatch.setattr(dependencies, "find_dependency_executable", fake_find)
+    monkeypatch.setattr(
+        dependencies,
+        "dependency_version",
+        lambda dependency, executables, environment: f"{dependency.name} version",
+    )
+    dependencies.clear_dependencies_cache()
 
-    rows = dependencies.dependencies_status()["dependencies"]
+    rows = dependencies.dependencies_status(force=True)["dependencies"]
     by_name = {row["name"]: row for row in rows}
 
     assert by_name["tmux"]["required"] is True
     assert by_name["tmux"]["installed"] is True
     assert by_name["tailscale"]["required"] is False
     assert by_name["tailscale"]["installed"] is False
+    assert by_name["nodejs"]["required"] is False
+    assert by_name["nodejs"]["installed"] is False
 
 
 def test_ensure_dependencies_does_not_install_optional_items(monkeypatch) -> None:
     optional = dependencies.Dependency(
-        "tailscale",
-        "Tailscale",
-        "tailscale",
-        "",
+        name="tailscale",
+        label="Tailscale",
+        commands=("tailscale",),
         required=False,
+        note="",
+        docs_url="https://tailscale.com/docs/install/linux",
     )
-    monkeypatch.setattr(dependencies, "DEPENDENCIES", (optional,))
-    monkeypatch.setattr(dependencies.shutil, "which", lambda command: None)
+    monkeypatch.setattr(dependencies, "current_dependency_platform", lambda: "linux")
+    monkeypatch.setattr(dependencies, "dependency_specs", lambda platform_name=None: (optional,))
+    monkeypatch.setattr(
+        dependencies,
+        "dependency_status",
+        lambda item, **kwargs: {
+            "name": item.name,
+            "label": item.label,
+            "required": item.required,
+            "installed": False,
+            "status": "missing",
+            "version": "",
+            "error": "",
+        },
+    )
 
-    def fail_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    def fail_install(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise AssertionError("optional dependencies should not be installed automatically")
 
-    monkeypatch.setattr(dependencies.subprocess, "run", fail_run)
+    monkeypatch.setattr(dependencies, "install_dependency", fail_install)
 
     rows = dependencies.ensure_dependencies()["dependencies"]
-    assert rows == [
-        {
-            "name": "tailscale",
-            "label": "Tailscale",
-            "required": False,
-            "installed": False,
-            "version": "",
-            "install_command": "see tailscale/README.md",
-            "note": "",
-            "error": "",
-            "changed": False,
-            "ok": True,
-            "log": "",
-        }
-    ]
+    assert len(rows) == 1
+    assert rows[0]["name"] == "tailscale"
+    assert rows[0]["changed"] is False
+    assert rows[0]["ok"] is True

@@ -12,7 +12,7 @@ from staragent.codex_app_server import codex_app_server_requests
 from staragent.event_log import redact_log_text
 from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
-from staragent.windows import windows_process_argv
+from staragent.windows import background_process_kwargs, windows_process_argv
 
 AGENT_AUTH_TIMEOUT_SECONDS = 3.0
 CODEX_DOCTOR_TIMEOUT_SECONDS = 4.0
@@ -221,6 +221,7 @@ def probe_codex_doctor_auth(
             capture_output=True,
             timeout=CODEX_DOCTOR_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -334,6 +335,7 @@ def probe_codex_login_auth(
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return auth_error("codex", "Codex login check timed out.")
@@ -394,6 +396,7 @@ def logout_codex(executable: str = "") -> dict[str, object]:
             capture_output=True,
             timeout=CODEX_LOGOUT_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return {
@@ -435,6 +438,7 @@ def probe_claude_auth(executable: str) -> dict[str, object]:
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return auth_error("claude", "Claude authentication check timed out.")
@@ -479,6 +483,7 @@ def probe_opencode_auth(executable: str) -> dict[str, object]:
             capture_output=True,
             timeout=AGENT_AUTH_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
     except subprocess.TimeoutExpired:
         return auth_error("opencode", "OpenCode authentication check timed out.")

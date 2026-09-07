@@ -50,7 +50,8 @@ returning to the session table; on narrow screens it collapses into a drawer.
 
 ![StarAgent session chat and locked PTY terminal](assets/demo-session-anime.webp)
 
-Inspect Agent CLI availability, login state, update paths, and launch presets on the selected Node:
+Inspect Agent CLI availability, login state, installed Skills, streamlined install/update paths, and
+launch presets on the selected Node:
 
 ![StarAgent Agents dashboard with Codex, Claude Code, and OpenCode](assets/demo-agents-anime.webp)
 
@@ -71,6 +72,8 @@ browser. Use `staragent --no-open` to explicitly disable browser handoff.
 
 Launcher is the normal single-machine experience. It opens directly on the local Agents catalog;
 Sessions, Logs, Settings, and Current Node details use the same views as a Node selected in Hub.
+Current Node also reports the terminal, networking, and package-runtime dependencies on that machine
+and offers reviewed platform-native installation paths where available.
 
 ## Desktop
 
@@ -134,8 +137,8 @@ staragent hub --host 0.0.0.0 --port 8080
 Open `http://<hub-node>:8080` and log in with the token printed by `staragent hub`.
 
 See [HUB.md](HUB.md) for authentication and state settings, Dashboard surfaces, centralized logs,
-Agent CLI checks, China-friendly install sources, updates, usage reporting, presets, and conversation
-resume behavior.
+runtime dependencies, Agent CLI checks, China-friendly install sources, updates, usage reporting,
+presets, and conversation resume behavior.
 
 ## Remote Node
 
@@ -170,7 +173,7 @@ If the Node uses a non-default port, enter that port explicitly, for example `80
 
 ## Acknowledgements
 
-StarAgent's CLI transcript parsing is adapted from ideas and code in [botmux](https://github.com/deepcoldy/botmux). The Launcher's local-browser, SSH, and `--no-open` startup behavior is inspired by [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The dashboard visual style is inspired by the [Tailscale admin console](https://tailscale.com/). Markdown preview follows [GitHub Flavored Markdown](https://github.github.com/gfm/) conventions. The web terminal uses [xterm.js](https://xtermjs.org/), and file preview highlighting uses [highlight.js](https://highlightjs.org/).
+StarAgent's CLI transcript parsing is adapted from ideas and code in [botmux](https://github.com/deepcoldy/botmux). The Launcher's local-browser, SSH, and `--no-open` startup behavior is inspired by [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Its focused source picker and single-primary-action installation flow draw inspiration from [HMCL](https://github.com/HMCL-dev/HMCL). The dashboard visual style is inspired by the [Tailscale admin console](https://tailscale.com/). Markdown preview follows [GitHub Flavored Markdown](https://github.github.com/gfm/) conventions. The web terminal uses [xterm.js](https://xtermjs.org/), and file preview highlighting uses [highlight.js](https://highlightjs.org/).
 
 ## License
 

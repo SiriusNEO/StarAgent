@@ -219,6 +219,58 @@
   </section>
 
   <section
+    class="band agent-skills-band deferred-render"
+    data-agent-skills
+    data-node="{{ current_node.name }}"
+    data-agent="{{ tool.name }}"
+    data-agent-label="{{ tool.label }}"
+    style="--agent-brand: {{ tool.accent }}"
+  >
+    <header class="agent-skills-head">
+      <div>
+        <span class="agent-market-kicker">{{ t("agents.skills_kicker") }}</span>
+        <h2>{{ t("agents.skills_title") }}</h2>
+        <p>{{ t("agents.skills_description", agent=tool.label, node=current_node.name) }}</p>
+      </div>
+      <button type="button" class="agent-skills-refresh">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 4v5h5M4 13a8.1 8.1 0 0 0 14.9 4M20 20v-5h-5"/></svg>
+        <span>{{ t("agents.skills_refresh") }}</span>
+      </button>
+    </header>
+    <div class="agent-skills-overview">
+      <div class="agent-skills-summary" aria-live="polite">{{ t("agents.skills_scanning") }}</div>
+      <div class="agent-skills-metrics" aria-label="{{ t('agents.skills_title') }}">
+        <span><strong data-skills-count="total">—</strong>{{ t("agents.skills_all") }}</span>
+        <span><strong data-skills-count="bundled">—</strong>{{ t("agents.skills_bundled") }}</span>
+        <span><strong data-skills-count="personal">—</strong>{{ t("agents.skills_personal") }}</span>
+        <span><strong data-skills-count="plugin">—</strong>{{ t("agents.skills_plugins") }}</span>
+      </div>
+    </div>
+    <nav class="agent-skills-filters" aria-label="{{ t('agents.skills_title') }}">
+      <button type="button" class="is-active" data-skill-filter="all" aria-pressed="true">{{ t("agents.skills_all") }}</button>
+      <button type="button" data-skill-filter="bundled" aria-pressed="false">{{ t("agents.skills_bundled") }}</button>
+      <button type="button" data-skill-filter="personal" aria-pressed="false">{{ t("agents.skills_personal") }}</button>
+      <button type="button" data-skill-filter="plugin" aria-pressed="false">{{ t("agents.skills_plugins") }}</button>
+      <label class="agent-skills-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>
+        <input type="search" placeholder="{{ t('agents.skills_search') }}" aria-label="{{ t('agents.skills_search') }}">
+      </label>
+    </nav>
+    <div class="agent-skills-list" aria-busy="true"></div>
+    <div class="agent-skills-empty" hidden>{{ t("agents.skills_empty") }}</div>
+    <footer class="agent-skills-foot">
+      <div class="agent-skills-roots" hidden>
+        <strong>{{ t("agents.skills_locations") }}</strong>
+        <div></div>
+      </div>
+      <p class="agent-skills-safety">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span>{{ t("agents.skills_safety") }}</span>
+      </p>
+    </footer>
+  </section>
+
+  <section
     class="band harness-config-band deferred-render"
     data-harness-configuration
     data-node="{{ current_node.name }}"
@@ -485,5 +537,6 @@
   {% endif %}
 
   <script src="{{ url_for('static', path='agents.js') }}?v={{ static_version('agents.js') }}"></script>
+  <script src="{{ url_for('static', path='agent-skills.js') }}?v={{ static_version('agent-skills.js') }}"></script>
   <script src="{{ url_for('static', path='harness-terminal.js') }}?v={{ static_version('harness-terminal.js') }}"></script>
 {% endblock %}

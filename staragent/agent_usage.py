@@ -9,7 +9,7 @@ from typing import Any
 from staragent.codex_app_server import codex_app_server_request as _codex_app_server_request
 from staragent.harness_config import harness_process_environment
 from staragent.text import strip_ansi
-from staragent.windows import windows_process_argv
+from staragent.windows import background_process_kwargs, windows_process_argv
 
 AGENT_USAGE_STATUSES = {"available", "manual", "unavailable", "error", "unknown", "unsupported"}
 AGENT_USAGE_MESSAGE_CODES = {"provider_rate_limits_unavailable"}
@@ -89,6 +89,7 @@ def probe_claude_usage(executable: str) -> dict[str, object]:
             capture_output=True,
             timeout=CLAUDE_AUTH_TIMEOUT_SECONDS,
             env=environment,
+            **background_process_kwargs(),
         )
         if result.returncode == 0:
             payload = json.loads(result.stdout)
