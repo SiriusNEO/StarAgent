@@ -64,11 +64,14 @@ def windows_process_argv(
     if Path(executable).suffix.lower() not in {".bat", ".cmd"}:
         command[0] = executable
         return command
-    command_line = subprocess.list2cmdline([executable, *command[1:]])
     command_prompt = environment.get("COMSPEC") or shutil.which(
         "cmd.exe",
         path=environment.get("PATH"),
     )
     if not command_prompt:
         raise FileNotFoundError("Required Windows command processor not found: cmd.exe")
-    return [command_prompt, "/d", "/s", "/c", command_line]
+    # Keep `call`, the shim path, and its arguments as separate argv entries.
+    # subprocess and pywinpty can then quote each entry once when they build the
+    # CreateProcess command line. Passing one pre-quoted command string here
+    # causes paths with spaces to be escaped a second time and rejected by cmd.
+    return [command_prompt, "/d", "/s", "/c", "call", executable, *command[1:]]
