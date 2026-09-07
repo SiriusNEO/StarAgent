@@ -3478,6 +3478,7 @@ dd {
 }
 
 .agent-cli-auth,
+.agent-cli-model,
 .agent-cli-usage {
   background: transparent;
   border: 0;
@@ -3491,9 +3492,118 @@ dd {
   border-top: 1px solid var(--line);
 }
 
-.agent-cli-auth {
+.agent-cli-auth,
+.agent-cli-model {
   align-items: center;
   grid-template-columns: minmax(220px, 0.45fr) minmax(0, 1fr) auto;
+}
+
+.agent-cli-model {
+  border-top: 1px solid var(--line);
+  position: relative;
+}
+
+.agent-cli-model[hidden] {
+  display: none;
+}
+
+.agent-cli-model.is-loading {
+  opacity: 0.7;
+}
+
+.agent-model-head {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.agent-model-head > strong {
+  font-size: 13px;
+}
+
+.agent-model-head .pill {
+  font-size: 9px;
+  padding: 4px 7px;
+}
+
+.agent-model-current {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.agent-model-current > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-model-current > strong {
+  font: 650 14px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-model-current > small,
+.agent-model-error {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-model-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.agent-model-refresh {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+  width: 30px;
+}
+
+.agent-model-refresh:hover:not(:disabled) {
+  background: var(--neutral);
+  border-color: var(--agent-brand, var(--accent));
+  color: var(--text);
+}
+
+.agent-model-refresh:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.agent-model-refresh svg {
+  fill: none;
+  height: 14px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 14px;
+}
+
+.agent-model-error {
+  color: var(--warn);
+  grid-column: 1 / -1;
+  margin: -3px 0 0;
 }
 
 .agent-cli-usage {
@@ -3508,7 +3618,6 @@ dd {
 }
 
 .agent-auth-head,
-.agent-auth-action,
 .agent-usage-head,
 .agent-usage-bucket-head,
 .agent-usage-window-copy,
@@ -3544,12 +3653,10 @@ dd {
   color: var(--warn);
 }
 
-.agent-auth-action,
 .agent-usage-action {
   justify-content: flex-start;
 }
 
-.agent-auth-action code,
 .agent-usage-action code {
   color: var(--text);
   font-size: 11px;
@@ -3557,7 +3664,6 @@ dd {
   overflow-wrap: anywhere;
 }
 
-.agent-auth-action .copy-button,
 .agent-usage-action .copy-button {
   flex: 0 0 auto;
   position: static;
@@ -5084,7 +5190,7 @@ dd {
 .harness-config-safety svg,
 .harness-env-reveal svg,
 .harness-env-remove svg,
-.codex-auth-dialog-close svg {
+.harness-auth-dialog-close svg {
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -5137,6 +5243,12 @@ dd {
 
 .harness-env-pane {
   border-left: 1px solid var(--line);
+  transition: background 180ms ease, box-shadow 180ms ease;
+}
+
+.harness-env-pane.is-auth-target {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 7%, var(--surface));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--agent-brand, var(--accent)) 42%, transparent);
 }
 
 .harness-config-pane-head {
@@ -5487,7 +5599,7 @@ dd {
   opacity: 0.58;
 }
 
-.codex-auth-dialog {
+.harness-auth-dialog {
   background: transparent;
   border: 0;
   color: var(--text);
@@ -5495,20 +5607,20 @@ dd {
   max-width: none;
   overflow: visible;
   padding: 0;
-  width: min(720px, calc(100vw - 32px));
+  width: min(780px, calc(100vw - 32px));
 }
 
-.codex-auth-dialog::backdrop {
+.harness-auth-dialog::backdrop {
   background: rgba(18, 16, 15, 0.5);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
 }
 
-.codex-auth-dialog[open] {
+.harness-auth-dialog[open] {
   animation: agent-dialog-enter 170ms ease-out;
 }
 
-.codex-auth-dialog-shell {
+.harness-auth-dialog-shell {
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--agent-brand, var(--accent)) 14%, var(--line));
   border-radius: 20px;
@@ -5520,20 +5632,20 @@ dd {
   padding: 22px;
 }
 
-.codex-auth-dialog-head {
+.harness-auth-dialog-head {
   align-items: center;
   display: grid;
   gap: 12px;
   grid-template-columns: 44px minmax(0, 1fr) 34px;
 }
 
-.codex-auth-dialog-head > div:nth-child(2) {
+.harness-auth-dialog-head > div:nth-child(2) {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.codex-auth-dialog-head span {
+.harness-auth-dialog-head span {
   color: var(--muted);
   font-size: 9px;
   font-weight: 850;
@@ -5541,15 +5653,15 @@ dd {
   text-transform: uppercase;
 }
 
-.codex-auth-dialog-head h2 {
+.harness-auth-dialog-head h2 {
   font-size: 20px;
   letter-spacing: -0.025em;
   margin: 0;
 }
 
-.codex-auth-dialog-mark {
+.harness-auth-dialog-mark {
   align-items: center;
-  background: #111;
+  background: var(--agent-brand, #111);
   border-radius: 13px;
   display: flex;
   height: 44px;
@@ -5557,13 +5669,12 @@ dd {
   width: 44px;
 }
 
-.codex-auth-dialog-mark img {
-  filter: invert(1);
+.harness-auth-dialog-mark img {
   height: 25px;
   width: 25px;
 }
 
-.codex-auth-dialog-close {
+.harness-auth-dialog-close {
   align-items: center;
   background: transparent;
   border: 0;
@@ -5577,33 +5688,188 @@ dd {
   width: 34px;
 }
 
-.codex-auth-dialog-close:hover {
+.harness-auth-dialog-close:hover {
   background: var(--neutral);
   color: var(--text);
 }
 
-.codex-auth-dialog-close svg {
+.harness-auth-dialog-close svg {
   height: 17px;
   width: 17px;
 }
 
-.codex-auth-dialog-intro {
+.harness-auth-dialog-intro {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
   margin: 16px 0 14px;
 }
 
-.codex-auth-terminal {
+.harness-auth-methods {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.harness-auth-dialog[data-agent="claude"] .harness-auth-methods {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.harness-auth-dialog[data-agent="codex"] .harness-auth-methods {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.harness-auth-method {
+  align-items: center;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 9px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-height: 68px;
+  padding: 11px 12px;
+  position: relative;
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.harness-auth-method:hover {
+  background: var(--neutral);
+  border-color: var(--line-strong);
+}
+
+.harness-auth-method.is-active {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--agent-brand, var(--accent)) 55%, var(--line));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent-brand, var(--accent)) 15%, transparent);
+}
+
+.harness-auth-method:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.harness-auth-method > svg {
+  fill: none;
+  height: 21px;
+  justify-self: center;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+  width: 21px;
+}
+
+.harness-auth-method > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.harness-auth-method strong {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.harness-auth-method small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.harness-auth-method em {
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 850;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  position: absolute;
+  right: 7px;
+  text-transform: uppercase;
+  top: 6px;
+}
+
+.harness-auth-method-details {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 9px 2px;
+}
+
+.harness-auth-method-details p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.harness-auth-method-details p[hidden] {
+  display: none;
+}
+
+.harness-auth-method-details a {
+  color: var(--agent-brand, var(--accent));
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.harness-auth-method-details a:hover {
+  text-decoration: underline;
+}
+
+[data-harness-auth-terminal-panel][hidden],
+.harness-api-key-form[hidden],
+.harness-auth-alert[hidden] {
+  display: none;
+}
+
+.harness-auth-alert {
+  align-items: start;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: 10px;
+  color: var(--danger);
+  display: grid;
+  font-size: 11px;
+  gap: 8px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  line-height: 1.45;
+  margin-bottom: 9px;
+  padding: 9px 11px;
+}
+
+.harness-auth-alert svg {
+  fill: none;
+  height: 17px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 17px;
+}
+
+.harness-auth-terminal {
   border-radius: 13px;
   grid-template-rows: minmax(280px, 42vh) auto;
 }
 
-.codex-auth-terminal .terminal-screen {
+.harness-auth-terminal .terminal-screen {
   padding-right: 9px;
 }
 
-.codex-auth-terminal-placeholder {
+.harness-auth-terminal-placeholder {
   align-items: center;
   color: var(--terminal-fg);
   display: flex;
@@ -5615,7 +5881,84 @@ dd {
   position: absolute;
 }
 
-.codex-auth-dialog-actions {
+.harness-api-key-form {
+  background:
+    radial-gradient(circle at 90% 10%, color-mix(in srgb, var(--agent-brand, var(--accent)) 9%, transparent), transparent 38%),
+    var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 13px;
+  min-height: 210px;
+  padding: clamp(18px, 3vw, 30px);
+}
+
+.harness-api-key-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.harness-api-key-form label > span {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.harness-api-key-form input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--text);
+  font: 13px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-height: 44px;
+  outline: 0;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.harness-api-key-form input:focus {
+  border-color: var(--agent-brand, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-brand, var(--accent)) 13%, transparent);
+}
+
+.harness-api-key-privacy {
+  align-items: start;
+  color: var(--muted);
+  display: grid;
+  font-size: 10px;
+  gap: 8px;
+  grid-template-columns: 16px minmax(0, 1fr);
+  line-height: 1.45;
+}
+
+.harness-api-key-privacy svg {
+  fill: none;
+  height: 16px;
+  stroke: var(--success);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 16px;
+}
+
+.harness-api-key-status {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+  min-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.harness-api-key-status.is-success {
+  color: var(--success);
+}
+
+.harness-api-key-status.is-error {
+  color: var(--danger);
+}
+
+.harness-auth-dialog-actions {
   align-items: center;
   display: flex;
   gap: 12px;
@@ -5623,17 +5966,21 @@ dd {
   padding-top: 14px;
 }
 
-.codex-auth-dialog-actions > span {
+.harness-auth-dialog-actions > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.harness-auth-dialog-actions > span {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
 }
 
-.codex-auth-dialog-done {
-  background: #111;
-  border: 1px solid #111;
+.harness-auth-dialog-done,
+.harness-auth-dialog-start {
   border-radius: 999px;
-  color: white;
   cursor: pointer;
   flex: 0 0 auto;
   font: inherit;
@@ -5643,10 +5990,539 @@ dd {
   padding: 7px 14px;
 }
 
+.harness-auth-dialog-done {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.harness-auth-dialog-start {
+  background: #111;
+  border: 1px solid #111;
+  color: white;
+}
+
+.harness-auth-dialog-start:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
 .harness-config-band :focus-visible,
-.codex-auth-dialog :focus-visible {
+.harness-auth-dialog :focus-visible,
+.harness-model-dialog :focus-visible {
   outline: 2px solid var(--agent-brand, var(--accent));
   outline-offset: 2px;
+}
+
+.harness-model-dialog {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  margin: auto;
+  max-height: calc(100vh - 32px);
+  max-width: none;
+  overflow: visible;
+  padding: 0;
+  width: min(780px, calc(100vw - 32px));
+}
+
+.harness-model-dialog::backdrop {
+  background: rgba(18, 16, 15, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.harness-model-dialog[open] {
+  animation: agent-dialog-enter 170ms ease-out;
+}
+
+.harness-model-dialog-shell {
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--agent-brand, var(--accent)) 14%, var(--line));
+  border-radius: 20px;
+  box-shadow: 0 28px 80px rgba(35, 29, 25, 0.24);
+  display: grid;
+  gap: 14px;
+  grid-template-rows: auto auto auto minmax(100px, 1fr) auto auto auto auto;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 22px;
+}
+
+.harness-model-dialog-head {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 44px minmax(0, 1fr) 34px;
+}
+
+.harness-model-dialog-head > div:nth-child(2) {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.harness-model-dialog-head span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.harness-model-dialog-head h2 {
+  font-size: 20px;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+
+.harness-model-dialog-mark {
+  align-items: center;
+  background: var(--agent-brand, #111);
+  border-radius: 13px;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.harness-model-dialog-mark img {
+  height: 25px;
+  width: 25px;
+}
+
+.harness-model-dialog-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 34px;
+  justify-content: center;
+  padding: 0;
+  width: 34px;
+}
+
+.harness-model-dialog-close:hover {
+  background: var(--neutral);
+  color: var(--text);
+}
+
+.harness-model-dialog-close svg,
+.harness-model-scope svg,
+.harness-model-search svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.harness-model-dialog-close svg {
+  height: 17px;
+  width: 17px;
+}
+
+.harness-model-scope {
+  align-items: start;
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 6%, var(--surface-subtle));
+  border-left: 3px solid color-mix(in srgb, var(--agent-brand, var(--accent)) 72%, var(--line));
+  border-radius: 4px 10px 10px 4px;
+  color: var(--muted);
+  display: grid;
+  font-size: 10px;
+  gap: 9px;
+  grid-template-columns: 17px minmax(0, 1fr);
+  line-height: 1.5;
+  padding: 9px 11px;
+}
+
+.harness-model-scope svg {
+  color: var(--agent-brand, var(--accent));
+  height: 17px;
+  width: 17px;
+}
+
+.harness-model-search {
+  align-items: center;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 0 11px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.harness-model-search:focus-within {
+  border-color: var(--agent-brand, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent);
+}
+
+.harness-model-search svg {
+  color: var(--muted);
+  height: 17px;
+  width: 17px;
+}
+
+.harness-model-search input {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  min-width: 0;
+  outline: 0;
+}
+
+.harness-model-search kbd {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font: 10px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 4px 6px;
+}
+
+.harness-model-list {
+  border-bottom: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+  max-height: min(410px, 42vh);
+  min-height: 100px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.harness-model-group + .harness-model-group {
+  border-top: 1px solid var(--line);
+}
+
+.harness-model-group-title {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 4px 6px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.harness-model-group-title strong {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.harness-model-group-title span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.harness-model-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 11px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  min-height: 58px;
+  padding: 9px 8px;
+  text-align: left;
+  transition: background 120ms ease;
+  width: 100%;
+}
+
+.harness-model-option:hover {
+  background: var(--neutral);
+}
+
+.harness-model-option.is-selected {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 8%, var(--surface));
+}
+
+.harness-model-option-indicator {
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  height: 16px;
+  position: relative;
+  width: 16px;
+}
+
+.harness-model-option.is-selected .harness-model-option-indicator {
+  border-color: var(--agent-brand, var(--accent));
+}
+
+.harness-model-option.is-selected .harness-model-option-indicator::after {
+  background: var(--agent-brand, var(--accent));
+  border-radius: 999px;
+  content: "";
+  inset: 3px;
+  position: absolute;
+}
+
+.harness-model-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.harness-model-option-copy strong {
+  font-size: 12px;
+}
+
+.harness-model-option-copy code {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harness-model-option-copy small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.harness-model-option-badges {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+
+.harness-model-option-badges em {
+  background: var(--neutral);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 850;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.harness-model-option.is-selected .harness-model-option-badges em {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 13%, var(--surface));
+  color: var(--agent-brand, var(--accent));
+}
+
+.harness-model-empty {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 18px 4px;
+  text-align: center;
+}
+
+.harness-model-custom {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr);
+}
+
+.harness-model-custom > span {
+  display: grid;
+  gap: 2px;
+}
+
+.harness-model-custom strong {
+  font-size: 11px;
+}
+
+.harness-model-custom small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.harness-model-custom input {
+  background: var(--surface-subtle);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--text);
+  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-height: 38px;
+  outline: 0;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.harness-model-custom input:focus {
+  border-color: var(--agent-brand, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent);
+}
+
+.harness-model-custom input[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.harness-reasoning {
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.harness-reasoning > header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.harness-reasoning > header > span {
+  display: grid;
+  gap: 2px;
+}
+
+.harness-reasoning-title {
+  font-size: 11px;
+}
+
+.harness-reasoning-help,
+.harness-reasoning-unavailable {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.harness-reasoning-current {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 10%, var(--surface));
+  border-radius: 999px;
+  color: var(--agent-brand, var(--accent));
+  flex: 0 0 auto;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 850;
+  padding: 4px 7px;
+}
+
+.harness-reasoning-options {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+}
+
+.harness-reasoning-option {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 3px;
+  min-height: 54px;
+  padding: 8px 9px;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.harness-reasoning-option:hover {
+  border-color: var(--line-strong);
+}
+
+.harness-reasoning-option.is-selected {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--agent-brand, var(--accent)) 65%, var(--line));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent);
+}
+
+.harness-reasoning-option strong {
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.harness-reasoning-option small {
+  color: var(--muted);
+  display: -webkit-box;
+  font-size: 8px;
+  line-height: 1.35;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.harness-reasoning-unavailable {
+  margin: 0;
+}
+
+.harness-reasoning-options[hidden],
+.harness-reasoning-unavailable[hidden],
+.harness-reasoning-current[hidden] {
+  display: none;
+}
+
+.harness-model-dialog-status {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  min-height: 14px;
+  overflow-wrap: anywhere;
+}
+
+.harness-model-dialog-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.harness-model-dialog-actions > div {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.harness-model-dialog-actions button,
+.harness-model-dialog-actions a {
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  min-height: 32px;
+  padding: 7px 11px;
+  text-decoration: none;
+}
+
+.harness-model-auth,
+.harness-model-inherit,
+.harness-model-cancel,
+.harness-model-dialog-actions a {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.harness-model-dialog-actions a {
+  align-items: center;
+  display: flex;
+}
+
+.harness-model-save {
+  background: var(--agent-brand, var(--accent));
+  border: 1px solid var(--agent-brand, var(--accent));
+  color: white;
+}
+
+.harness-model-dialog-actions button:disabled {
+  cursor: default;
+  opacity: 0.46;
 }
 
 .agent-test-band {
@@ -9909,6 +10785,97 @@ dd {
     padding: 20px;
   }
 
+  .harness-auth-dialog {
+    max-height: calc(100vh - 20px);
+    width: calc(100vw - 20px);
+  }
+
+  .harness-model-dialog {
+    max-height: calc(100vh - 20px);
+    width: calc(100vw - 20px);
+  }
+
+  .harness-auth-dialog-shell {
+    border-radius: 17px;
+    padding: 16px;
+  }
+
+  .harness-model-dialog-shell {
+    border-radius: 17px;
+    max-height: calc(100vh - 20px);
+    padding: 16px;
+  }
+
+  .harness-model-custom {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harness-model-dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .harness-model-dialog-actions > div {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .harness-model-dialog-actions > div:last-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .harness-model-save {
+    grid-column: 1 / -1;
+  }
+
+  .harness-model-dialog-actions button,
+  .harness-model-dialog-actions a {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .harness-auth-methods {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harness-auth-dialog[data-agent="claude"] .harness-auth-methods {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harness-auth-dialog[data-agent="codex"] .harness-auth-methods {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harness-auth-method {
+    min-height: 54px;
+  }
+
+  .harness-auth-method-details {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .harness-auth-terminal {
+    grid-template-rows: minmax(220px, 38vh) auto;
+  }
+
+  .harness-auth-dialog-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .harness-auth-dialog-actions > div {
+    display: grid;
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  }
+
+  .harness-auth-dialog-done,
+  .harness-auth-dialog-start {
+    width: 100%;
+  }
+
   .agent-harness-hero-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -10310,6 +11277,7 @@ dd {
   }
 
   .agent-cli-auth,
+  .agent-cli-model,
   .agent-cli-usage,
   .agent-cli-detail-grid {
     grid-template-columns: minmax(0, 1fr);

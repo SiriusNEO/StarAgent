@@ -16,7 +16,8 @@ from staragent.windows import background_process_kwargs, windows_process_argv
 
 AGENT_AUTH_TIMEOUT_SECONDS = 3.0
 CODEX_DOCTOR_TIMEOUT_SECONDS = 4.0
-CODEX_LOGOUT_TIMEOUT_SECONDS = 10.0
+CODEX_LOGIN_TIMEOUT_SECONDS = 30.0
+AGENT_LOGOUT_TIMEOUT_SECONDS = 10.0
 AGENT_AUTH_STATUSES = {
     "authenticated",
     "not_authenticated",
@@ -47,6 +48,26 @@ CODEX_PROVIDER_LABELS = {
     "lmstudio": "LM Studio",
     "amazon-bedrock": "Amazon Bedrock",
 }
+AGENT_LOGOUT_ARGS = {
+    "codex": ("logout",),
+    "claude": ("auth", "logout"),
+}
+AGENT_LABELS = {
+    "codex": "Codex",
+    "claude": "Claude Code",
+    "opencode": "OpenCode",
+}
+CLAUDE_CLOUD_ENVIRONMENTS = (
+    ("CLAUDE_CODE_USE_BEDROCK", "Amazon Bedrock"),
+    ("CLAUDE_CODE_USE_VERTEX", "Google Vertex AI"),
+    ("CLAUDE_CODE_USE_FOUNDRY", "Microsoft Foundry"),
+)
+CLAUDE_CREDENTIAL_ENVIRONMENTS = (
+    ("ANTHROPIC_AUTH_TOKEN", "Anthropic bearer token"),
+    ("ANTHROPIC_API_KEY", "Anthropic API key"),
+    ("CLAUDE_CODE_OAUTH_TOKEN", "Claude OAuth token"),
+    ("ANTHROPIC_PROFILE", "Anthropic profile"),
+)
 
 
 def probe_agent_auth(agent: str, executable: str) -> dict[str, object]:
@@ -342,7 +363,10 @@ def probe_codex_login_auth(
     except OSError as exc:
         return auth_error("codex", exc)
 
-    output = first_auth_line(result.stdout, result.stderr)
+    output = redact_log_text(
+        first_auth_line(result.stdout, result.stderr),
+        max_chars=300,
+    )
     if result.returncode == 0:
         method = ""
         match = re.search(r"logged\s+in\s+using\s+(.+)$", output, flags=re.IGNORECASE)
@@ -382,19 +406,25 @@ def codex_login_credential_type(method: str) -> str:
     return "unknown"
 
 
-def logout_codex(executable: str = "") -> dict[str, object]:
+def login_codex_with_api_key(api_key: str, executable: str = "") -> dict[str, object]:
+    secret = api_key.strip()
+    if not secret:
+        raise ValueError("An OpenAI API key is required.")
+    if len(secret) > 8192:
+        raise ValueError("The OpenAI API key is too long.")
+
     environment = auth_environment("codex")
     command = executable or shutil.which("codex", path=environment.get("PATH")) or ""
     if not command:
         raise ValueError("Codex is not installed in the Node service PATH.")
     try:
         result = subprocess.run(
-            auth_process_argv(command, "logout", env=environment),
+            auth_process_argv(command, "login", "--with-api-key", env=environment),
             check=False,
-            stdin=subprocess.DEVNULL,
+            input=f"{secret}\n",
             text=True,
             capture_output=True,
-            timeout=CODEX_LOGOUT_TIMEOUT_SECONDS,
+            timeout=CODEX_LOGIN_TIMEOUT_SECONDS,
             env=environment,
             **background_process_kwargs(),
         )
@@ -402,7 +432,60 @@ def logout_codex(executable: str = "") -> dict[str, object]:
         return {
             "ok": False,
             "status": "error",
-            "detail": "Codex logout timed out.",
+            "detail": "Codex API key login timed out.",
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": clean_auth_text(exc),
+        }
+
+    stdout = (result.stdout or "").replace(secret, "[REDACTED]")
+    stderr = (result.stderr or "").replace(secret, "[REDACTED]")
+    output = first_auth_line(stdout, stderr)
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": redact_log_text(
+                output or f"Codex login exited with code {result.returncode}.",
+                max_chars=300,
+            ),
+        }
+    return {
+        "ok": True,
+        "status": "authenticated",
+        "credential_type": "api_key",
+        "detail": "Codex accepted and stored the API key on this Node.",
+    }
+
+
+def logout_agent(agent: str, executable: str = "") -> dict[str, object]:
+    args = AGENT_LOGOUT_ARGS.get(agent)
+    if args is None:
+        raise ValueError(f"Interactive logout is required for Agent CLI: {agent}")
+    label = AGENT_LABELS.get(agent, agent)
+    environment = auth_environment(agent)
+    command = executable or shutil.which(agent, path=environment.get("PATH")) or ""
+    if not command:
+        raise ValueError(f"{label} is not installed in the Node service PATH.")
+    try:
+        result = subprocess.run(
+            auth_process_argv(command, *args, env=environment),
+            check=False,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            capture_output=True,
+            timeout=AGENT_LOGOUT_TIMEOUT_SECONDS,
+            env=environment,
+            **background_process_kwargs(),
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": f"{label} logout timed out.",
         }
     except OSError as exc:
         return {
@@ -418,17 +501,20 @@ def logout_codex(executable: str = "") -> dict[str, object]:
         return {
             "ok": False,
             "status": "error",
-            "detail": output or f"Codex logout exited with code {result.returncode}.",
+            "detail": output or f"{label} logout exited with code {result.returncode}.",
         }
     return {
         "ok": True,
         "status": "not_authenticated",
-        "detail": "Codex credentials were removed from this Node.",
+        "detail": f"{label} credentials were removed from this Node.",
     }
 
 
 def probe_claude_auth(executable: str) -> dict[str, object]:
     environment = auth_environment("claude")
+    configured = claude_environment_auth(environment)
+    if configured is not None:
+        return configured
     try:
         result = subprocess.run(
             auth_process_argv(executable, "auth", "status", "--json", env=environment),
@@ -470,6 +556,35 @@ def probe_claude_auth(executable: str) -> dict[str, object]:
         output or f"Claude authentication check exited with code {result.returncode}.",
         source="claude-auth-status",
     )
+
+
+def claude_environment_auth(environment: dict[str, str]) -> dict[str, object] | None:
+    for name, provider in CLAUDE_CLOUD_ENVIRONMENTS:
+        value = environment.get(name, "").strip().lower()
+        if value and value not in {"0", "false", "no", "off"}:
+            return agent_auth_status(
+                "claude",
+                status="configured",
+                source="claude-environment",
+                provider=provider,
+                credential_type="environment",
+                credential_name=name,
+                method="Cloud provider credentials",
+                detail=f"Claude Code is configured to use {provider} on this Node.",
+            )
+    for name, method in CLAUDE_CREDENTIAL_ENVIRONMENTS:
+        if environment.get(name, "").strip():
+            return agent_auth_status(
+                "claude",
+                status="configured",
+                source="claude-environment",
+                provider="Anthropic",
+                credential_type="environment",
+                credential_name=name,
+                method=method,
+                detail=f"Claude Code found {name} in its managed environment.",
+            )
+    return None
 
 
 def probe_opencode_auth(executable: str) -> dict[str, object]:

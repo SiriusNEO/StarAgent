@@ -282,18 +282,35 @@
     }
   });
 
-  const authRoot = document.querySelector("[data-codex-auth-terminal]");
+  const authRoot = document.querySelector("[data-harness-auth-terminal]");
   if (authRoot) {
     const authNode = authRoot.dataset.node || "";
-    const authTerminalElement = authRoot.querySelector(".codex-auth-terminal");
+    const authAgent = authRoot.dataset.agent || "";
+    const authTerminalElement = authRoot.querySelector(".harness-auth-terminal");
     const authScreen = authTerminalElement.querySelector(".terminal-screen");
     const authStatus = authTerminalElement.querySelector(".terminal-connection-state");
-    const authClose = authRoot.querySelector(".codex-auth-dialog-close");
-    const authDone = authRoot.querySelector(".codex-auth-dialog-done");
+    const authTerminalPanel = authRoot.querySelector("[data-harness-auth-terminal-panel]");
+    const authApiKeyForm = authRoot.querySelector("[data-harness-api-key-form]");
+    const authApiKeyInput = authApiKeyForm.querySelector("input[name='api_key']");
+    const authApiKeyStatus = authApiKeyForm.querySelector("[data-harness-api-key-status]");
+    const authMethodButtons = Array.from(authRoot.querySelectorAll("[data-auth-method]"));
+    const authMethodDetails = Array.from(authRoot.querySelectorAll("[data-auth-method-detail]"));
+    const authDeviceForbidden = authRoot.querySelector("[data-auth-device-forbidden]");
+    const authClose = authRoot.querySelector(".harness-auth-dialog-close");
+    const authDone = authRoot.querySelector(".harness-auth-dialog-done");
+    const authStart = authRoot.querySelector(".harness-auth-dialog-start");
+    const authStartLabel = authStart.querySelector("span");
     let authTerm = null;
     let authFitAddon = null;
     let authSocket = null;
     let authRefreshDispatched = false;
+    let authMethod = authRoot.dataset.defaultMethod || "";
+    let authAction = "login";
+    let authTransport = "terminal";
+    let authOutputTail = "";
+    let authActionError = "";
+    let authRequestBusy = false;
+    let authDecoder = new TextDecoder();
 
     const sendAuth = (payload) => {
       if (!authSocket || authSocket.readyState !== WebSocket.OPEN) {
@@ -321,8 +338,71 @@
       }
       authRefreshDispatched = true;
       window.dispatchEvent(new CustomEvent("staragent:agent-auth-finished", {
-        detail: {node: authNode},
+        detail: {node: authNode, agent: authAgent},
       }));
+    };
+
+    const setAuthControlsDisabled = (disabled) => {
+      authMethodButtons.forEach((button) => {
+        button.disabled = disabled;
+      });
+      authStart.disabled = disabled;
+      if (authApiKeyInput) {
+        authApiKeyInput.disabled = disabled;
+      }
+    };
+
+    const setAuthMethod = (method, {focus = false} = {}) => {
+      const selectedButton = authMethodButtons.find(
+        (button) => button.dataset.authMethod === method,
+      );
+      if (!selectedButton || authRequestBusy) {
+        return;
+      }
+      if (authSocket && authSocket.readyState < WebSocket.CLOSING) {
+        authSocket.close(1000, "login method changed");
+      }
+      authMethod = method;
+      authAction = selectedButton.dataset.authAction || "login";
+      authTransport = selectedButton.dataset.authTransport || "terminal";
+      authActionError = "";
+      authOutputTail = "";
+      authDeviceForbidden.hidden = true;
+      authMethodButtons.forEach((button) => {
+        const selected = button.dataset.authMethod === method;
+        button.classList.toggle("is-active", selected);
+        button.setAttribute("aria-pressed", String(selected));
+      });
+      authMethodDetails.forEach((detail) => {
+        detail.hidden = detail.dataset.authMethodDetail !== method;
+      });
+      const usesTerminal = authTransport === "terminal";
+      const usesApiKey = authTransport === "api_key";
+      authTerminalPanel.hidden = !usesTerminal;
+      authApiKeyForm.hidden = !usesApiKey;
+      authApiKeyStatus.textContent = "";
+      authApiKeyStatus.classList.remove("is-error", "is-success");
+      authStartLabel.textContent = selectedButton.dataset.startLabel || t("agents.continue");
+      if (usesApiKey) {
+        if (focus) {
+          requestAnimationFrame(() => authApiKeyInput.focus());
+        }
+      } else if (usesTerminal) {
+        authStatus.textContent = t("agents.auth_not_started");
+        requestAnimationFrame(fitAuth);
+      }
+    };
+
+    const inspectAuthOutput = (text) => {
+      if (authAgent !== "codex" || authMethod !== "device") {
+        return;
+      }
+      authOutputTail = `${authOutputTail}${text}`.slice(-2400);
+      if (/device code request failed[\s\S]*403|403 forbidden/i.test(authOutputTail)) {
+        authActionError = t("agents.codex_device_forbidden");
+        authDeviceForbidden.hidden = false;
+        authStatus.textContent = authActionError;
+      }
     };
 
     const initializeAuthTerminal = async () => {
@@ -330,7 +410,7 @@
         return;
       }
       await ensureAssets();
-      authScreen.querySelector(".codex-auth-terminal-placeholder")?.remove();
+      authScreen.querySelector(".harness-auth-terminal-placeholder")?.remove();
       authTerm = new Terminal({
         allowProposedApi: false,
         convertEol: true,
@@ -355,42 +435,109 @@
     };
 
     const connectAuthTerminal = async () => {
+      if (authTransport !== "terminal" || authRequestBusy) {
+        return;
+      }
+      authRequestBusy = true;
+      setAuthControlsDisabled(true);
       authRefreshDispatched = false;
-      authStatus.textContent = t("agents.codex_login_starting");
+      authActionError = "";
+      authOutputTail = "";
+      authDecoder = new TextDecoder();
+      authDeviceForbidden.hidden = true;
+      authStatus.textContent = t("agents.auth_starting");
       try {
         await initializeAuthTerminal();
       } catch (error) {
         authStatus.textContent = error?.message || t("agents.test_assets_failed");
+        authRequestBusy = false;
+        setAuthControlsDisabled(false);
         return;
       }
       authTerm.reset();
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${protocol}//${window.location.host}/ws/nodes/${encodeURIComponent(authNode)}`
-        + "/agent-tools/codex/auth/login";
-      authSocket = new WebSocket(url);
-      authSocket.binaryType = "arraybuffer";
-      authSocket.addEventListener("open", () => {
-        authStatus.textContent = t("agents.codex_login_connected");
+        + `/agent-tools/${encodeURIComponent(authAgent)}/auth/${encodeURIComponent(authAction)}`
+        + `/${encodeURIComponent(authMethod)}`;
+      const socket = new WebSocket(url);
+      authSocket = socket;
+      socket.binaryType = "arraybuffer";
+      socket.addEventListener("open", () => {
+        authStatus.textContent = t("agents.auth_running");
         fitAuth();
         authTerm.focus();
       });
-      authSocket.addEventListener("message", (event) => {
+      socket.addEventListener("message", (event) => {
         if (typeof event.data === "string") {
           authTerm.write(event.data);
+          inspectAuthOutput(event.data);
         } else {
-          authTerm.write(new Uint8Array(event.data));
+          const bytes = new Uint8Array(event.data);
+          authTerm.write(bytes);
+          inspectAuthOutput(authDecoder.decode(bytes, {stream: true}));
         }
       });
-      authSocket.addEventListener("error", () => {
-        authStatus.textContent = t("agents.codex_login_error");
+      socket.addEventListener("error", () => {
+        authStatus.textContent = t("agents.auth_terminal_error");
       });
-      authSocket.addEventListener("close", (event) => {
-        authSocket = null;
-        authStatus.textContent = event.reason && event.reason !== "terminal exited"
-          ? event.reason
-          : t("agents.codex_login_closed");
+      socket.addEventListener("close", (event) => {
+        if (authSocket === socket) {
+          authSocket = null;
+        }
+        authRequestBusy = false;
+        setAuthControlsDisabled(false);
+        authStatus.textContent = authActionError || (
+          event.reason && event.reason !== "terminal exited"
+            ? event.reason
+            : t("agents.auth_finished")
+        );
         refreshAuthStatus();
       });
+    };
+
+    const submitApiKey = async () => {
+      const apiKey = authApiKeyInput.value.trim();
+      if (!apiKey) {
+        authApiKeyStatus.textContent = t("agents.codex_api_key_required");
+        authApiKeyStatus.classList.add("is-error");
+        authApiKeyInput.focus();
+        return;
+      }
+      authRequestBusy = true;
+      setAuthControlsDisabled(true);
+      authRefreshDispatched = false;
+      authApiKeyStatus.textContent = t("agents.codex_api_key_submitting", {node: authNode});
+      authApiKeyStatus.classList.remove("is-error", "is-success");
+      try {
+        const requestBody = JSON.stringify({api_key: apiKey});
+        authApiKeyInput.value = "";
+        const response = await fetch(
+          `/api/nodes/${encodeURIComponent(authNode)}/agent-tools/${encodeURIComponent(authAgent)}`
+            + "/auth/login/api-key",
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {"Content-Type": "application/json"},
+            body: requestBody,
+          },
+        );
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.ok) {
+          throw new Error(body.detail || t("agents.auth.error"));
+        }
+        authApiKeyStatus.textContent = t("agents.codex_api_key_success");
+        authApiKeyStatus.classList.add("is-success");
+        refreshAuthStatus();
+      } catch (error) {
+        authApiKeyStatus.textContent = t("agents.codex_api_key_failed", {
+          message: error?.message || t("agents.auth.error"),
+        });
+        authApiKeyStatus.classList.add("is-error");
+      } finally {
+        authApiKeyInput.value = "";
+        authRequestBusy = false;
+        setAuthControlsDisabled(false);
+      }
     };
 
     const closeAuthDialog = () => {
@@ -399,17 +546,52 @@
       }
     };
 
-    window.addEventListener("staragent:codex-login", (event) => {
-      if ((event.detail?.node || "") !== authNode) {
+    const openEnvironmentSettings = () => {
+      closeAuthDialog();
+      const configuration = document.querySelector("[data-harness-configuration]");
+      if (!configuration) {
+        return;
+      }
+      configuration.scrollIntoView({behavior: "smooth", block: "start"});
+      configuration.querySelector(".harness-env-pane")?.classList.add("is-auth-target");
+      window.setTimeout(() => {
+        configuration.querySelector(".harness-env-pane")?.classList.remove("is-auth-target");
+      }, 1600);
+    };
+
+    window.addEventListener("staragent:harness-auth", (event) => {
+      if (
+        (event.detail?.node || "") !== authNode
+        || (event.detail?.agent || "") !== authAgent
+      ) {
         return;
       }
       if (!authRoot.open) {
         authRoot.showModal();
       }
+      authRefreshDispatched = false;
+      setAuthMethod(authRoot.dataset.defaultMethod || authMethodButtons[0]?.dataset.authMethod || "");
       requestAnimationFrame(() => {
         fitAuth();
-        connectAuthTerminal();
       });
+    });
+    authMethodButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        setAuthMethod(button.dataset.authMethod || "", {focus: true});
+      });
+    });
+    authApiKeyForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitApiKey();
+    });
+    authStart.addEventListener("click", () => {
+      if (authTransport === "api_key") {
+        authApiKeyForm.requestSubmit();
+      } else if (authTransport === "environment") {
+        openEnvironmentSettings();
+      } else {
+        connectAuthTerminal();
+      }
     });
     authClose.addEventListener("click", closeAuthDialog);
     authDone.addEventListener("click", closeAuthDialog);
@@ -420,8 +602,9 @@
     });
     authRoot.addEventListener("close", () => {
       if (authSocket && authSocket.readyState < WebSocket.CLOSING) {
-        authSocket.close(1000, "login dialog closed");
+        authSocket.close(1000, "authentication dialog closed");
       }
+      authApiKeyInput.value = "";
       refreshAuthStatus();
     });
     window.addEventListener("beforeunload", () => {
@@ -429,5 +612,6 @@
         authSocket.close(1000, "page unload");
       }
     });
+    setAuthMethod(authMethod || authMethodButtons[0]?.dataset.authMethod || "");
   }
 })();
