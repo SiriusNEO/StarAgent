@@ -54,7 +54,7 @@ def fake_registry(monkeypatch) -> tuple[native_sessions.NativeSessionRegistry, F
         assert Path(cwd).is_dir()
         assert env["TERM"] == "xterm-256color"
         assert dimensions == (36, 120)
-        assert argv[0].endswith("powershell.exe")
+        assert argv
         return process
 
     monkeypatch.setattr(
@@ -212,11 +212,19 @@ def test_native_registry_keeps_session_alive_when_terminal_detaches(monkeypatch,
     assert not registry.exists("work")
 
 
-def test_runtime_dispatches_existing_session_api_to_conpty(monkeypatch, tmp_path) -> None:
+def test_runtime_dispatches_existing_session_api_to_native_registry(monkeypatch, tmp_path) -> None:
     registry, process = fake_registry(monkeypatch)
-    monkeypatch.setattr(runtime, "native_windows_sessions", lambda: True)
+    monkeypatch.setattr(runtime, "native_sessions_enabled", lambda: True)
+    monkeypatch.setattr(runtime, "native_session_backend", lambda: "pty")
     monkeypatch.setattr(runtime, "native_registry", lambda: registry)
     monkeypatch.setattr(runtime, "managed_harness_environment", lambda _agent: {})
+    monkeypatch.setattr(
+        runtime,
+        "run_tmux",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Native Desktop Sessions must not invoke tmux")
+        ),
+    )
 
     runtime.start_tmux_worker("native", str(tmp_path), "codex --yolo")
     process.output.put("working\r\n")
@@ -225,10 +233,10 @@ def test_runtime_dispatches_existing_session_api_to_conpty(monkeypatch, tmp_path
     wait_for_output(session, b"working")
 
     assert runtime.tmux_session_exists("native")
-    assert runtime.list_tmux_sessions()[0]["backend"] == "conpty"
+    assert runtime.list_tmux_sessions()[0]["backend"] == "pty"
     assert runtime.tmux_active_pane("native")["current_command"] == "codex"
     assert "working" in runtime.capture_tmux_pane_ansi("native")
-    assert runtime.discover_local_tmux_navigation_statuses()["native"].source == "conpty"
+    assert runtime.discover_local_tmux_navigation_statuses()["native"].source == "pty"
     runtime.send_tmux_message("native", "ship it")
     assert process.writes[-2:] == ["ship it", "\r"]
 
@@ -248,3 +256,51 @@ def test_conpty_session_view_does_not_offer_tmux_commands() -> None:
     commands = session_quick_commands(view)
     assert commands[0] == {"label": "Backend", "command": "Windows ConPTY"}
     assert not any("tmux" in item["command"].lower() for item in commands)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY smoke test")
+def test_posix_native_registry_runs_without_tmux(tmp_path) -> None:
+    registry = native_sessions.NativeSessionRegistry()
+    session = registry.create(
+        "native-posix",
+        str(tmp_path),
+        "printf native-pty-ready",
+        keep_shell_on_exit=False,
+    )
+
+    wait_for_output(session, b"native-pty-ready")
+
+    assert session.process.pid > 0
+    registry.close_all()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX PTY smoke test")
+def test_posix_native_session_drops_into_interactive_shell(tmp_path) -> None:
+    registry = native_sessions.NativeSessionRegistry()
+    session = registry.create(
+        "native-posix-shell",
+        str(tmp_path),
+        "printf agent-finished",
+        keep_shell_on_exit=True,
+    )
+    wait_for_output(session, b"agent-finished")
+
+    assert session.is_alive()
+    session.write("printf shell-still-live\\r")
+    wait_for_output(session, b"shell-still-live")
+
+    registry.kill("native-posix-shell")
+
+
+def test_native_pty_session_view_does_not_offer_tmux_commands() -> None:
+    view = SessionView(
+        config=SessionConfig(name="native", node="local"),
+        status_report=SessionStatus(name="native", source="pty"),
+    )
+
+    assert view.backend == "Native PTY"
+    assert view.terminal_backend == "Native PTY"
+    assert session_quick_commands(view)[0] == {
+        "label": "Backend",
+        "command": "Native PTY",
+    }

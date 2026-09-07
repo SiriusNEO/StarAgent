@@ -3277,6 +3277,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "staragent-desktop"
 version = "0.1.3-dev.0"
 dependencies = [
+ "libc",
  "open",
  "serde",
  "serde_json",

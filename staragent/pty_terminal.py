@@ -90,9 +90,9 @@ class PtyTerminal:
 
     @classmethod
     def attach_session(cls, session: str, cols: int = 120, rows: int = 36) -> PtyTerminal:
-        if os.name == "nt":
-            from staragent.native_sessions import native_session_registry
+        from staragent.native_sessions import native_session_mode_enabled, native_session_registry
 
+        if native_session_mode_enabled():
             attachment = native_session_registry().attach(session)
             attachment.resize(cols, rows)
             return attachment  # type: ignore[return-value]
@@ -116,7 +116,7 @@ class PtyTerminal:
             stderr=slave_fd,
             close_fds=True,
             env=env,
-            preexec_fn=os.setsid,
+            start_new_session=True,
         )
         os.close(slave_fd)
         return cls(master_fd=master_fd, process=process)
@@ -160,6 +160,8 @@ class PtyTerminal:
         process_env = dict(env) if env is not None else os.environ.copy()
         process_env.pop("TMUX", None)
         process_env.pop("LD_LIBRARY_PATH", None)
+        process_env.pop("DYLD_LIBRARY_PATH", None)
+        process_env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
         process_env["TERM"] = "xterm-256color"
         process_env["COLORTERM"] = "truecolor"
         try:
@@ -171,7 +173,7 @@ class PtyTerminal:
                 close_fds=True,
                 cwd=cwd,
                 env=process_env,
-                preexec_fn=os.setsid,
+                start_new_session=True,
             )
         except Exception:
             os.close(master_fd)

@@ -15,14 +15,15 @@ lifecycle, connection selection, and OS integration instead of duplicating the f
 | Platform | Desktop shell | Local Launcher runtime | Bundles |
 | --- | --- | --- | --- |
 | Windows x64 | Native Tauri/WebView2 | Bundled Python runtime + Windows ConPTY | NSIS `.exe` |
-| Linux x64 | Native Tauri/WebKitGTK | Native StarAgent CLI + tmux | `.deb`, `.AppImage` |
-| macOS Intel + Apple Silicon | Universal Tauri/WKWebView | Native StarAgent CLI + tmux | `.app`, `.dmg` |
+| Linux x64 | Native Tauri/WebKitGTK | Bundled Python runtime + native PTY | `.deb`, `.AppImage` |
+| macOS Apple Silicon / Intel | Native Tauri/WKWebView | Bundled Python runtime + native PTY | architecture-specific `.app`, `.dmg` |
 
-The Windows runtime is packaged as a Tauri sidecar with PyInstaller. `pywinpty` owns the native
-pseudoconsole, while StarAgent keeps one shared process and bounded scrollback buffer per Session so
-closing a terminal view only detaches that view. Closing the whole desktop application stops its local
-runtime and Sessions. All three apps can connect to an existing StarAgent Hub without local runtime
-prerequisites.
+The StarAgent runtime and Dashboard assets are packaged on every platform as a PyInstaller Tauri
+sidecar. Windows uses `pywinpty`/ConPTY; macOS and Linux use the operating system PTY API. StarAgent
+keeps one shared process and bounded scrollback buffer per Session, so closing a terminal view only
+detaches that view. Closing the whole desktop application gracefully stops its local runtime and
+Sessions. Every desktop package can also connect to an existing StarAgent Hub without starting the
+local sidecar.
 
 ## Security boundary
 
@@ -34,52 +35,36 @@ remote IPC origin. Top-level navigation is restricted to the selected Hub origin
 new window are handed to the default browser only for `http`, `https`, and `mailto` URLs. This keeps a
 Hub page—even a compromised one—outside the desktop command boundary.
 
-The local runtime binds to `127.0.0.1:8765`. The app first verifies that the response is actually a
-StarAgent login page, reuses an already-running instance, or starts:
+The local runtime binds to `127.0.0.1:8765`. The app verifies the public runtime identity, reuses an
+already-running bundled instance, or starts the packaged sidecar with fixed arguments:
 
 ```text
-staragent dashboard --host 127.0.0.1 --port 8765 --mode launcher
+staragent-runtime --host 127.0.0.1 --port 8765 --mode launcher
 ```
 
-On Windows the fixed Launcher arguments are passed directly to the bundled `staragent-runtime.exe`.
-There is no `wsl.exe` invocation. The app never accepts a runtime command from the WebView.
+There is no `wsl.exe`, system Python, or system `staragent` invocation. The app never accepts a
+runtime command from the WebView. It forwards the user's login-shell `PATH` to the sidecar so
+already-installed Harness CLIs remain discoverable when the app was opened from Finder or another
+graphical launcher.
 
 ## Local prerequisites
 
-Windows local mode requires a supported Windows installation with WebView2. StarAgent, Python,
-pywinpty, and the Dashboard assets are included in the installer; WSL and tmux are not used. Coding
-Harness CLIs are intentionally separate and can be installed with one click from the Agents page.
-Codex and Claude Code use their official native PowerShell installers. OpenCode is downloaded as its
-official Windows executable, verified against the SHA-256 digest published by GitHub, and installed
-in the user's `.opencode\bin` directory. These recommended routes do not install Node.js or npm.
-npmjs, npmmirror, and Tencent Cloud remain clearly labeled fallbacks for users who already have npm;
-their registry argument applies only to that command.
+Local mode has no StarAgent, Python, tmux, npm, or WSL prerequisite. The installer includes the
+StarAgent runtime, Dashboard assets, and terminal backend. Windows additionally requires a supported
+installation with WebView2; macOS uses WKWebView and Linux packages install their WebKitGTK package
+dependency through the native package manager.
 
-Once the Launcher is running, **Current Node** reports bundled ConPTY, Tailscale, and Node.js/npm.
-Missing optional tools can be installed through reviewed Windows Package Manager entries when
-`winget` is available; Node.js also includes an explicit npmmirror download resource.
+Coding Harness CLIs are intentionally separate applications and can be installed from the Agents
+page. Codex and Claude Code use official native installers where available. OpenCode's Windows route
+downloads the official executable, verifies the SHA-256 digest published by GitHub, and installs it
+in the user's `.opencode\bin` directory. npmjs, npmmirror, and Tencent Cloud remain clearly labelled
+fallbacks for systems that already provide npm; their registry argument applies only to that command.
 
-Linux and macOS local mode require StarAgent and tmux before opening the desktop app.
-
-Linux (Debian/Ubuntu example):
-
-```bash
-sudo apt install tmux pipx
-pipx install git+https://github.com/SiriusNEO/StarAgent.git
-pipx ensurepath
-```
-
-macOS:
-
-```bash
-brew install tmux pipx
-pipx install git+https://github.com/SiriusNEO/StarAgent.git
-pipx ensurepath
-```
-
-The welcome screen reports the selected backend (`Windows ConPTY` or `tmux`) and shows a copyable
-command when a system runtime is missing. On macOS and Linux it resolves the user's login-shell
-`PATH`, because GUI applications do not normally inherit shell startup files.
+Once the Launcher is running, **Current Node** reports the bundled terminal backend plus optional
+Tailscale and Node.js/npm integrations. Missing optional tools keep their reviewed platform-native
+installation paths and China-friendly resources. They are not required to open StarAgent itself.
+The welcome screen reports `Windows ConPTY` or `Native PTY`; a packaged build never asks the user to
+install a separate StarAgent runtime.
 
 ## Automatic updates
 
@@ -98,8 +83,8 @@ a downgrade; after moving from an ahead-of-Stable Nightly, Stable becomes availa
 catches up.
 
 Updating stops the Launcher runtime owned by the desktop app. Save work in a running local Session
-before confirming an update—especially on Windows, where those Sessions live inside the bundled
-runtime. Merely dismissing or postponing the update does not stop anything.
+before confirming an update, because desktop Sessions live inside that bundled runtime on every
+platform. Merely dismissing or postponing the update does not stop anything.
 
 Stable and Nightly packages are verified with the same Tauri updater public key before installation.
 The app accepts only two compiled-in manifest endpoints, so the WebView cannot supply an arbitrary
@@ -116,39 +101,32 @@ Nightly. Updates after that use the selected in-app channel.
 
 ## Develop and build
 
-Install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for the host platform, then:
+Install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) plus Python 3.11 and
+PyInstaller. From the repository root:
 
 ```bash
+python -m pip install . pyinstaller
 cd desktop
 npm ci
 npm run desktop:dev
 ```
 
-Build a native installer on the current platform:
+Use `npm run desktop:build` instead of `desktop:dev` to create a native installer. Both commands first
+freeze the bundled runtime and then invoke Tauri. The GitHub workflow performs the same steps and
+places the target-suffixed sidecar in `desktop/src-tauri/binaries/`. PyInstaller must run natively on
+the target operating system and CPU architecture.
 
 ```bash
-cd desktop
-npm ci
-npm run desktop:build
-```
-
-The Windows build also needs Python 3.11 and PyInstaller to create the bundled runtime before Tauri is
-invoked. The GitHub workflow performs these steps and places the target-suffixed sidecar in
-`desktop/src-tauri/binaries/`. PyInstaller must run on Windows; it does not cross-compile Windows
-executables from Linux or macOS. A local Windows build is:
-
-```powershell
-python -m pip install . pyinstaller
-cd desktop
-npm run runtime:build:windows
 npm run desktop:build
 ```
 
 Installers are written below `desktop/src-tauri/target/*/release/bundle/`. Installer creation should run
 on the target operating system; in particular, MSI/NSIS and DMG tooling are platform-specific.
 
-The `Desktop` GitHub Actions workflow builds Linux x64, Windows x64, and a universal macOS binary. It
-runs for desktop pull requests, `dev`/`main` pushes, published versioned GitHub Releases, or manual
+The `Desktop` GitHub Actions workflow builds Linux x64, Windows x64, macOS Apple Silicon, and macOS
+Intel packages. The native macOS packages replace the former universal shell because a frozen Python
+sidecar must be produced and tested for the same CPU architecture. It runs for desktop pull requests,
+`dev`/`main` pushes, published versioned GitHub Releases, or manual
 dispatch, and uploads each installer set as a workflow artifact. A versioned Release signs and
 publishes the Stable assets and manifest. A relevant `dev` push derives one synchronized Nightly
 version for Python, npm, Cargo, and Tauri, signs the updater payloads, and atomically refreshes the
@@ -168,6 +146,6 @@ the operating systems may still show an unknown-publisher warning. A public prod
 also add Apple Developer ID signing/notarization and Authenticode signing for the Windows executable,
 sidecar, and NSIS installer.
 
-The Windows sidecar and ConPTY backend are covered by Windows CI smoke tests. Linux/macOS runtime
-bundling remains separate future work because those packages already share the established tmux
-backend with source installations.
+Every sidecar is started in CI. The smoke test verifies its bundled runtime identity and creates a
+real Session through ConPTY on Windows or the native PTY backend on Linux/macOS before an installer is
+published.

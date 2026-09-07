@@ -77,6 +77,41 @@ def test_windows_dependencies_use_conpty_and_native_package_ids(monkeypatch) -> 
     )
 
 
+def test_bundled_macos_runtime_uses_native_pty_without_tmux(monkeypatch) -> None:
+    monkeypatch.setenv("STARAGENT_DESKTOP_BUNDLED", "1")
+    monkeypatch.setattr(dependencies, "current_dependency_platform", lambda: "macos")
+    monkeypatch.setattr(
+        "staragent.native_sessions.native_session_backend_available",
+        lambda: True,
+    )
+    dependencies.clear_dependencies_cache()
+
+    payload = dependencies.dependencies_status(force=True)
+    pty = dependency_by_name(payload, "pty")
+
+    assert pty["installed"] is True
+    assert pty["version"] == "Bundled"
+    assert "tmux" not in {item["name"] for item in payload["dependencies"]}
+
+
+def test_remote_bundled_posix_dependency_payload_keeps_native_pty() -> None:
+    payload = dependencies.normalize_dependencies_payload(
+        {
+            "supported": True,
+            "installs_supported": True,
+            "platform": "macos",
+            "dependencies": [
+                {"name": "pty", "status": "available", "installed": True},
+                {"name": "tailscale", "status": "missing", "installed": False},
+                {"name": "nodejs", "status": "missing", "installed": False},
+            ],
+        }
+    )
+
+    assert dependency_by_name(payload, "pty")["installed"] is True
+    assert "tmux" not in {item["name"] for item in payload["dependencies"]}
+
+
 def test_dependency_version_probes_hide_windows_console(monkeypatch) -> None:
     dependency = dependencies.Dependency(
         name="nodejs",

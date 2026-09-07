@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import os
 import queue
+import shlex
 import shutil
 import threading
 import time
@@ -21,14 +23,23 @@ SUBSCRIBER_QUEUE_CHUNKS = 512
 SHELL_ALIASES = {"bash", "bash.exe", "sh", "sh.exe", "powershell", "powershell.exe", "pwsh"}
 
 
+def native_session_mode_enabled() -> bool:
+    """Use the in-process terminal registry for self-contained desktop builds."""
+    return os.name == "nt" or os.environ.get("STARAGENT_DESKTOP_BUNDLED") == "1"
+
+
+def native_session_backend_name() -> str:
+    return "conpty" if os.name == "nt" else "pty"
+
+
 def native_session_backend_available() -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        from winpty import Backend, PtyProcess  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    if os.name == "nt":
+        try:
+            from winpty import Backend, PtyProcess  # noqa: F401
+        except ImportError:
+            return False
+        return True
+    return callable(getattr(os, "openpty", None)) and Path("/bin/sh").is_file()
 
 
 def windows_shell_executable() -> str:
@@ -91,6 +102,104 @@ def spawn_conpty_process(
         )
     except (EOFError, FileNotFoundError, OSError, WinptyError) as exc:
         raise OSError(f"Could not start the Windows ConPTY command: {exc}") from exc
+
+
+class PosixPtyProcess:
+    """Small adapter that gives the standard-library PTY the winpty process contract."""
+
+    def __init__(self, terminal: Any) -> None:
+        self.terminal = terminal
+
+    @property
+    def pid(self) -> int:
+        return int(self.terminal.process.pid)
+
+    def isalive(self) -> bool:
+        return self.terminal.is_alive()
+
+    def read(self, size: int) -> bytes:
+        try:
+            return os.read(self.terminal.master_fd, size)
+        except OSError as exc:
+            # Linux reports EIO when the PTY slave exits; macOS commonly returns
+            # an empty read. Present both as the EOF contract used by the registry.
+            if exc.errno in {errno.EIO, errno.EBADF}:
+                raise EOFError from exc
+            raise
+
+    def write(self, value: str) -> None:
+        self.terminal.write(value)
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        self.terminal.resize(cols, rows)
+
+    def close(self, force: bool = False) -> None:
+        del force
+        self.terminal.close()
+
+
+def posix_shell_executable() -> str:
+    configured = os.environ.get("SHELL", "").strip()
+    candidates = (configured, "/bin/zsh", "/bin/bash", "/bin/sh")
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK)
+        ),
+        "/bin/sh",
+    )
+
+
+def posix_shell_argv(command: str = "", *, keep_open: bool = True) -> list[str]:
+    shell = posix_shell_executable()
+    normalized = command.strip()
+    aliases = {"sh", "bash", "zsh", Path(shell).name}
+    if not normalized or normalized.lower() in aliases:
+        return [shell, "-l"]
+    if not keep_open:
+        return [shell, "-lc", normalized]
+    fallback_shell = shlex.quote(shell)
+    script = "\n".join(
+        (
+            "set +e",
+            normalized,
+            "staragent_status=$?",
+            "printf '\\n[StarAgent] agent exited with status %s. Dropping into shell.\\n' "
+            '"$staragent_status"',
+            f'exec "${{SHELL:-{fallback_shell}}}" -l',
+        )
+    )
+    return [shell, "-lc", script]
+
+
+def spawn_posix_pty_process(
+    argv: Sequence[str],
+    *,
+    cwd: str | None,
+    env: Mapping[str, str],
+    dimensions: tuple[int, int],
+) -> PosixPtyProcess:
+    from staragent.pty_terminal import PtyTerminal
+
+    rows, cols = dimensions
+    try:
+        terminal = PtyTerminal.spawn(argv, cwd=cwd, env=env, cols=cols, rows=rows)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise OSError(f"Could not start the native PTY command: {exc}") from exc
+    return PosixPtyProcess(terminal)
+
+
+def spawn_native_session_process(
+    argv: Sequence[str],
+    *,
+    cwd: str | None,
+    env: Mapping[str, str],
+    dimensions: tuple[int, int],
+) -> Any:
+    if os.name == "nt":
+        return spawn_conpty_process(argv, cwd=cwd, env=env, dimensions=dimensions)
+    return spawn_posix_pty_process(argv, cwd=cwd, env=env, dimensions=dimensions)
 
 
 ProcessFactory = Callable[..., Any]
@@ -168,11 +277,11 @@ class NativeSession:
             return
         with self._lock:
             if not self.is_alive():
-                raise OSError("Native Windows session has exited.")
+                raise OSError("Native session has exited.")
             try:
                 self.process.write(data)
             except EOFError as exc:
-                raise OSError("Native Windows session has exited.") from exc
+                raise OSError("Native session has exited.") from exc
             self.activity = int(time.time())
 
     def resize(self, cols: int, rows: int) -> None:
@@ -227,7 +336,7 @@ class NativeSessionAttachment:
 
 class NativeSessionRegistry:
     def __init__(self, process_factory: ProcessFactory | None = None) -> None:
-        self._process_factory = process_factory or spawn_conpty_process
+        self._process_factory = process_factory or spawn_native_session_process
         self._sessions: dict[str, NativeSession] = {}
         self._lock = threading.RLock()
 
@@ -244,12 +353,19 @@ class NativeSessionRegistry:
         rows: int = 36,
     ) -> NativeSession:
         process_env = dict(os.environ if environment is None else environment)
-        process_env["PATH"] = augmented_windows_path(process_env)
+        if os.name == "nt":
+            process_env["PATH"] = augmented_windows_path(process_env)
         process_env["TERM"] = "xterm-256color"
         process_env["COLORTERM"] = "truecolor"
         process_env.pop("TMUX", None)
         process_env.pop("LD_LIBRARY_PATH", None)
-        argv = windows_shell_argv(command, keep_open=keep_shell_on_exit)
+        process_env.pop("DYLD_LIBRARY_PATH", None)
+        process_env.pop("DYLD_FALLBACK_LIBRARY_PATH", None)
+        argv = (
+            windows_shell_argv(command, keep_open=keep_shell_on_exit)
+            if os.name == "nt"
+            else posix_shell_argv(command, keep_open=keep_shell_on_exit)
+        )
         cols, rows = terminal_dimensions(cols, rows)
         now = int(time.time())
         with self._lock:
@@ -277,7 +393,7 @@ class NativeSessionRegistry:
         reader = threading.Thread(
             target=self._read_session,
             args=(session,),
-            name=f"staragent-conpty-{name}",
+            name=f"staragent-{native_session_backend_name()}-{name}",
             daemon=True,
         )
         reader.start()
@@ -313,6 +429,13 @@ class NativeSessionRegistry:
             raise ValueError(f"session not found: {name}")
         session.terminate()
 
+    def close_all(self) -> None:
+        with self._lock:
+            sessions = tuple(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            session.terminate()
+
     @staticmethod
     def _read_session(session: NativeSession) -> None:
         try:
@@ -327,7 +450,7 @@ class NativeSessionRegistry:
         except (OSError, RuntimeError):
             pass
         finally:
-            session.finish()
+            session.terminate()
 
 
 def _offer(target: queue.Queue[bytes | None], value: bytes | None) -> None:

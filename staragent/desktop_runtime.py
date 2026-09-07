@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,9 +28,46 @@ def prepare_desktop_environment() -> None:
         from staragent.windows import augmented_windows_path
 
         os.environ["PATH"] = augmented_windows_path()
-        home = Path.home()
-        if home.is_dir():
-            os.chdir(home)
+    else:
+        os.environ["PATH"] = desktop_login_path()
+    home = Path.home()
+    if home.is_dir():
+        os.chdir(home)
+
+
+def desktop_login_path() -> str:
+    values: list[str] = []
+    shell = os.environ.get("SHELL", "").strip() or "/bin/sh"
+    if Path(shell).is_file():
+        try:
+            result = subprocess.run(
+                [shell, "-lc", 'printf %s "$PATH"'],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                values.extend(result.stdout.split(os.pathsep))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    values.extend(os.environ.get("PATH", "").split(os.pathsep))
+    home = Path.home()
+    values.extend(
+        str(path)
+        for path in (
+            home / ".local" / "bin",
+            home / ".cargo" / "bin",
+            Path("/opt/homebrew/bin"),
+            Path("/usr/local/bin"),
+            Path("/usr/bin"),
+            Path("/bin"),
+            Path("/usr/sbin"),
+            Path("/sbin"),
+        )
+    )
+    return os.pathsep.join(dict.fromkeys(value for value in values if value))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -48,6 +87,9 @@ def main() -> None:
     os.environ["STARAGENT_DESKTOP_BUNDLED"] = "1"
 
     from staragent.dashboard.app import create_app
+    from staragent.native_sessions import native_session_registry
+
+    atexit.register(native_session_registry().close_all)
 
     uvicorn.run(
         create_app(mode=args.mode),
