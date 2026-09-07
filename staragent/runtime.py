@@ -476,8 +476,10 @@ def send_tmux_key(session: str, key: str) -> None:
 
 
 def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: bool = True) -> None:
+    from staragent.agent_models import apply_harness_model_preference
+
     name = name.strip()
-    command = command.strip()
+    command = apply_harness_model_preference(command)
     cwd_path = Path(cwd).expanduser().resolve()
     if not SESSION_NAME_PATTERN.fullmatch(name):
         raise ValueError(

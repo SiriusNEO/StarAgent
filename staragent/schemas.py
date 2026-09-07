@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 
 class SendMessage(BaseModel):
@@ -28,3 +28,12 @@ class HarnessConfigRequest(BaseModel):
 
 class HarnessEnvironmentRequest(BaseModel):
     variables: dict[str, str]
+
+
+class HarnessModelPreferenceRequest(BaseModel):
+    model: str = ""
+    reasoning_effort: str = ""
+
+
+class CodexApiKeyLoginRequest(BaseModel):
+    api_key: SecretStr

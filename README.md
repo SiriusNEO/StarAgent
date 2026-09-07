@@ -32,6 +32,8 @@ Based on hands-on experience, StarAgent uses the simplest effective stack for th
 
 - **Unified management through a web dashboard**. The web dashboard lets you control agents from any device with a browser, including phones and laptops, without installing extra software.
 
+- **Node-local account and launch control**. Sign in or switch credential sources from the Harness page, browse the models exposed by each CLI, and choose model plus reasoning-effort defaults for new Sessions without rewriting vendor configuration files.
+
 Running `staragent` opens the single-Node `StarAgent Launcher`, scoped directly to the current machine. When cross-machine management is needed, `staragent hub` keeps the existing Hub experience: choose a Node, then enter the same Node workspace used by Launcher.
 For the technical architecture, see [ARCHITECTURE.md](ARCHITECTURE.md).
 

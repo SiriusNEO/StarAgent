@@ -349,6 +349,10 @@ def test_agents_page_renders_node_scoped_catalog_and_presets(monkeypatch, tmp_pa
     assert 'class="harness-config-exists"' in response.text
     assert 'class="harness-config-modified"' in response.text
     assert 'class="harness-env-inherited" hidden' in response.text
+    assert "data-agent-model" in response.text
+    assert "data-harness-model-dialog" in response.text
+    assert "Default for new Sessions" in response.text
+    assert "Login / switch account" in response.text
 
     claude = client.get("/nodes/local/agents/claude")
     missing = client.get("/nodes/local/agents/not-a-harness")

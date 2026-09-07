@@ -63,6 +63,7 @@ class AgentToolSpec:
     npm_package: str
     install_command: str
     docs_url: str
+    auth_docs_url: str
     vendor: str
     description: str
     icon: str
@@ -106,6 +107,7 @@ AGENT_TOOL_SPECS = (
         npm_package="@openai/codex",
         install_command="npm install -g @openai/codex@latest",
         docs_url="https://github.com/openai/codex",
+        auth_docs_url="https://learn.chatgpt.com/docs/auth",
         vendor="OpenAI",
         description="A coding agent that works with you directly from the terminal.",
         icon="agent-icons/codex.svg",
@@ -119,6 +121,7 @@ AGENT_TOOL_SPECS = (
         npm_package="@anthropic-ai/claude-code",
         install_command="npm install -g @anthropic-ai/claude-code@latest",
         docs_url="https://code.claude.com/docs/en/setup",
+        auth_docs_url="https://code.claude.com/docs/en/authentication",
         vendor="Anthropic",
         description="An agentic coding tool that understands your codebase and workflow.",
         icon="agent-icons/claude.svg",
@@ -132,6 +135,7 @@ AGENT_TOOL_SPECS = (
         npm_package="opencode-ai",
         install_command="npm install -g opencode-ai@latest",
         docs_url="https://opencode.ai/docs",
+        auth_docs_url="https://opencode.ai/docs/providers/",
         vendor="Anomaly",
         description="An open-source coding agent with a provider-flexible terminal experience.",
         icon="agent-icons/opencode.svg",
@@ -1115,6 +1119,7 @@ def agent_catalog_payload() -> list[dict[str, object]]:
             "command": spec.command,
             "install_command": spec.install_command,
             "docs_url": spec.docs_url,
+            "auth_docs_url": spec.auth_docs_url,
             "vendor": spec.vendor,
             "description": spec.description,
             "icon": spec.icon,

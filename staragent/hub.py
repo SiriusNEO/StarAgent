@@ -11,12 +11,20 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from staragent.agent_auth import logout_codex
+from staragent.agent_auth import login_codex_with_api_key, logout_agent
 from staragent.agent_history import (
     HISTORY_AGENTS,
     agent_history_payload,
     history_payload_with_node,
     unavailable_agent_history_payload,
+)
+from staragent.agent_models import (
+    agent_models_payload,
+    normalize_agent_models_payload,
+    save_harness_model_preference,
+    unavailable_agent_models,
+    validate_model_id,
+    validate_reasoning_effort,
 )
 from staragent.agent_skills import (
     agent_skills_payload,
@@ -55,6 +63,7 @@ from staragent.event_log import (
     append_node_event,
     ingest_node_events,
     node_ingest_cursor,
+    redact_log_text,
 )
 from staragent.harness_config import (
     harness_configuration_payload,
@@ -102,6 +111,8 @@ NODE_AGENT_TOOL_HUB_CACHE_SECONDS = 90.0
 NODE_AGENT_HISTORY_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_AGENT_SKILLS_REQUEST_TIMEOUT_SECONDS = 8.0
 NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS = 10.0
+NODE_HARNESS_MODELS_REQUEST_TIMEOUT_SECONDS = 15.0
+NODE_CODEX_LOGIN_REQUEST_TIMEOUT_SECONDS = 35.0
 NODE_STARAGENT_UPDATE_REQUEST_TIMEOUT_SECONDS = GIT_TIMEOUT_SECONDS + 15.0
 
 
@@ -898,6 +909,73 @@ def node_harness_configuration_payload(
     return normalized
 
 
+def node_harness_models_payload(
+    node: NodeEntry,
+    agent: str,
+    *,
+    refresh: bool = False,
+) -> dict[str, object]:
+    if node.is_local:
+        payload = agent_models_payload(agent, force=refresh)
+    else:
+        query = urllib.parse.urlencode({"refresh": str(refresh).lower()})
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/models?{query}"
+        try:
+            payload = request_json(
+                node,
+                "GET",
+                path,
+                timeout=NODE_HARNESS_MODELS_REQUEST_TIMEOUT_SECONDS,
+            )
+        except urllib.error.HTTPError as exc:
+            detail = (
+                "Update StarAgent on this Node to manage Harness models."
+                if exc.code in {404, 405}
+                else f"Node rejected the model request: HTTP {exc.code}."
+            )
+            payload = unavailable_agent_models(agent, detail)
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            payload = unavailable_agent_models(agent, f"Node is unavailable: {exc}")
+    normalized = normalize_agent_models_payload(agent, payload)
+    normalized["node"] = node.name
+    return normalized
+
+
+def node_save_harness_model_preference(
+    node: NodeEntry,
+    agent: str,
+    model: str,
+    reasoning_effort: str = "",
+) -> dict[str, object]:
+    normalized_model = validate_model_id(model, allow_empty=True)
+    normalized_effort = validate_reasoning_effort(
+        agent,
+        reasoning_effort,
+        allow_empty=True,
+    )
+    if node.is_local:
+        payload = save_harness_model_preference(
+            agent,
+            normalized_model,
+            normalized_effort,
+        )
+    else:
+        path = f"/api/agent-tools/{urllib.parse.quote(agent, safe='')}/models/preference"
+        payload = request_json(
+            node,
+            "PUT",
+            path,
+            {
+                "model": normalized_model,
+                "reasoning_effort": normalized_effort,
+            },
+            timeout=NODE_HARNESS_MODELS_REQUEST_TIMEOUT_SECONDS,
+        )
+    normalized = normalize_agent_models_payload(agent, payload)
+    normalized["node"] = node.name
+    return normalized
+
+
 def node_agent_skills_payload(
     node: NodeEntry,
     agent: str,
@@ -974,23 +1052,62 @@ def node_save_harness_environment(
     return normalized
 
 
-def node_codex_logout_payload(node: NodeEntry) -> dict[str, object]:
+def node_agent_logout_payload(node: NodeEntry, agent: str) -> dict[str, object]:
+    spec = agent_tool_spec(agent)
+    if spec is None:
+        raise ValueError(f"Unsupported Agent CLI: {agent}")
     if node.is_local:
-        result = logout_codex()
+        result = logout_agent(spec.name)
     else:
         result = request_json(
             node,
             "POST",
-            "/api/agent-tools/codex/auth/logout",
+            f"/api/agent-tools/{urllib.parse.quote(spec.name, safe='')}/auth/logout",
             timeout=NODE_HARNESS_CONFIG_REQUEST_TIMEOUT_SECONDS,
         )
     payload = result if isinstance(result, dict) else {}
+    status = "not_authenticated" if payload.get("status") == "not_authenticated" else "error"
     normalized = {
-        "ok": bool(payload.get("ok")),
-        "status": (
-            "not_authenticated" if payload.get("status") == "not_authenticated" else "error"
+        "ok": bool(payload.get("ok")) and status == "not_authenticated",
+        "status": status,
+        "detail": redact_log_text(payload.get("detail"), max_chars=500),
+        "node": node.name,
+        "agent": spec.name,
+    }
+    if normalized["ok"]:
+        invalidate_node_agent_tools(node.name)
+    return normalized
+
+
+def node_codex_api_key_login_payload(node: NodeEntry, api_key: str) -> dict[str, object]:
+    secret = api_key.strip()
+    if not secret:
+        raise ValueError("An OpenAI API key is required.")
+    if len(secret) > 8192:
+        raise ValueError("The OpenAI API key is too long.")
+    if node.is_local:
+        result = login_codex_with_api_key(secret)
+    else:
+        result = request_json(
+            node,
+            "POST",
+            "/api/agent-tools/codex/auth/login/api-key",
+            {"api_key": secret},
+            timeout=NODE_CODEX_LOGIN_REQUEST_TIMEOUT_SECONDS,
+        )
+    payload = result if isinstance(result, dict) else {}
+    detail = redact_log_text(
+        str(payload.get("detail") or "").replace(secret, "[REDACTED]"),
+        max_chars=500,
+    )
+    status = "authenticated" if payload.get("status") == "authenticated" else "error"
+    normalized = {
+        "ok": bool(payload.get("ok")) and status == "authenticated",
+        "status": status,
+        "credential_type": (
+            "api_key" if payload.get("credential_type") == "api_key" else "unknown"
         ),
-        "detail": str(payload.get("detail") or "")[:500],
+        "detail": detail,
         "node": node.name,
     }
     if normalized["ok"]:

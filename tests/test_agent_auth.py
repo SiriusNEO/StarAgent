@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 from staragent import agent_auth, agent_tools
 
 
@@ -32,6 +34,81 @@ def force_codex_login_status_fallback(monkeypatch) -> None:  # type: ignore[no-u
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("unsupported")),
     )
     monkeypatch.setattr(agent_auth, "probe_codex_doctor_auth", lambda *args: None)
+
+
+def test_codex_api_key_login_uses_stdin_without_exposing_the_key(monkeypatch) -> None:
+    secret = "sk-test-private-value"
+    call: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        call.update({"argv": argv, **kwargs})
+        return subprocess.CompletedProcess(argv, 0, stdout="Login successful\n", stderr="")
+
+    monkeypatch.setattr(agent_auth, "auth_environment", lambda _agent: {"PATH": "/tools"})
+    monkeypatch.setattr(agent_auth.shutil, "which", lambda *_args, **_kwargs: "/tools/codex")
+    monkeypatch.setattr(agent_auth.subprocess, "run", fake_run)
+
+    result = agent_auth.login_codex_with_api_key(secret)
+
+    assert call["argv"] == ["/tools/codex", "login", "--with-api-key"]
+    assert call["input"] == f"{secret}\n"
+    assert secret not in " ".join(call["argv"])
+    assert result == {
+        "ok": True,
+        "status": "authenticated",
+        "credential_type": "api_key",
+        "detail": "Codex accepted and stored the API key on this Node.",
+    }
+
+
+def test_codex_api_key_login_redacts_cli_error_output(monkeypatch) -> None:
+    secret = "sk-test-must-not-leak"
+    monkeypatch.setattr(agent_auth, "auth_environment", lambda _agent: {"PATH": "/tools"})
+    monkeypatch.setattr(agent_auth.shutil, "which", lambda *_args, **_kwargs: "/tools/codex")
+    monkeypatch.setattr(
+        agent_auth.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr=f"Rejected credential {secret}\n",
+        ),
+    )
+
+    result = agent_auth.login_codex_with_api_key(secret)
+
+    assert result["ok"] is False
+    assert secret not in str(result)
+    assert "[REDACTED]" in result["detail"]
+
+
+def test_logout_agent_uses_the_claude_allowlisted_command(monkeypatch) -> None:
+    call: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        call.update({"argv": argv, **kwargs})
+        return subprocess.CompletedProcess(argv, 0, stdout="Logged out\n", stderr="")
+
+    monkeypatch.setattr(agent_auth, "auth_environment", lambda _agent: {"PATH": "/tools"})
+    monkeypatch.setattr(agent_auth.shutil, "which", lambda *_args, **_kwargs: "/tools/claude")
+    monkeypatch.setattr(agent_auth.subprocess, "run", fake_run)
+
+    result = agent_auth.logout_agent("claude")
+
+    assert call["argv"] == ["/tools/claude", "auth", "logout"]
+    assert call["stdin"] is subprocess.DEVNULL
+    assert "shell" not in call
+    assert result == {
+        "ok": True,
+        "status": "not_authenticated",
+        "detail": "Claude Code credentials were removed from this Node.",
+    }
+
+
+def test_logout_agent_requires_an_explicit_supported_flow() -> None:
+    with pytest.raises(ValueError, match="Interactive logout is required"):
+        agent_auth.logout_agent("opencode")
 
 
 def test_codex_auth_reports_login_method_without_identity(monkeypatch) -> None:
@@ -229,6 +306,49 @@ def test_claude_auth_uses_signed_out_json_even_with_nonzero_exit(monkeypatch) ->
     assert auth["status"] == "not_authenticated"
     assert auth["authenticated"] is False
     assert auth["action"] == "claude auth login"
+
+
+def test_claude_auth_prefers_effective_environment_credentials_without_exposing_values(
+    monkeypatch,
+) -> None:
+    secret = "sk-ant-do-not-return"
+    monkeypatch.setattr(
+        agent_auth,
+        "auth_environment",
+        lambda _agent: {"ANTHROPIC_API_KEY": secret},
+    )
+    monkeypatch.setattr(
+        agent_auth.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("environment auth should not invoke the CLI"),
+    )
+
+    auth = agent_auth.probe_claude_auth("/tools/claude")
+
+    assert auth["status"] == "configured"
+    assert auth["credential_type"] == "environment"
+    assert auth["credential_name"] == "ANTHROPIC_API_KEY"
+    assert auth["method"] == "Anthropic API key"
+    assert secret not in json.dumps(auth)
+
+
+def test_claude_auth_recognizes_cloud_provider_selection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        agent_auth,
+        "auth_environment",
+        lambda _agent: {"CLAUDE_CODE_USE_BEDROCK": "1"},
+    )
+    monkeypatch.setattr(
+        agent_auth.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("cloud auth should not invoke the CLI"),
+    )
+
+    auth = agent_auth.probe_claude_auth("/tools/claude")
+
+    assert auth["status"] == "configured"
+    assert auth["provider"] == "Amazon Bedrock"
+    assert auth["credential_name"] == "CLAUDE_CODE_USE_BEDROCK"
 
 
 def test_opencode_auth_reports_provider_count_without_provider_names(monkeypatch) -> None:

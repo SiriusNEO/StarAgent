@@ -83,6 +83,30 @@
                 <div class="agent-cli-install"></div>
                 <div class="agent-cli-detail-grid">
                   <div class="agent-cli-auth"></div>
+                  <div
+                    class="agent-cli-model"
+                    data-agent-model
+                    data-node="{{ node.name }}"
+                    data-agent="{{ tool.name }}"
+                    data-agent-label="{{ tool.label }}"
+                  >
+                    <div class="agent-model-head">
+                      <strong>{{ t("agents.model") }}</strong>
+                      <span class="pill node-status-optional agent-model-state">{{ t("common.checking") }}</span>
+                    </div>
+                    <div class="agent-model-current">
+                      <span>{{ t("agents.model_for_new_sessions") }}</span>
+                      <strong>{{ t("agents.model_loading") }}</strong>
+                      <small>{{ t("agents.model_loading_hint") }}</small>
+                    </div>
+                    <div class="agent-model-actions">
+                      <button type="button" class="agent-auth-button is-primary agent-model-change" disabled>{{ t("agents.choose_model") }}</button>
+                      <button type="button" class="agent-model-refresh" aria-label="{{ t('agents.refresh_models') }}" title="{{ t('agents.refresh_models') }}" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8.1 8.1 0 0 0-14.9-4M4 4v5h5M4 13a8.1 8.1 0 0 0 14.9 4M20 20v-5h-5"/></svg>
+                      </button>
+                    </div>
+                    <p class="agent-model-error" hidden></p>
+                  </div>
                   <div class="agent-cli-usage" hidden></div>
                 </div>
                 <div class="agent-cli-actions"></div>
@@ -217,6 +241,78 @@
     </dialog>
     <p class="form-hint agent-market-note">{{ t("agents.ready_note") }}</p>
   </section>
+
+  <dialog
+    class="harness-model-dialog"
+    data-harness-model-dialog
+    data-node="{{ current_node.name }}"
+    data-agent="{{ tool.name }}"
+    data-agent-label="{{ tool.label }}"
+    style="--agent-brand: {{ tool.accent }}"
+    aria-labelledby="harness-model-title-{{ tool.name }}"
+  >
+    <div class="harness-model-dialog-shell">
+      <header class="harness-model-dialog-head">
+        <div class="harness-model-dialog-mark" aria-hidden="true">
+          <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="44" height="44">
+        </div>
+        <div>
+          <span>{{ t("agents.account_and_model") }}</span>
+          <h2 id="harness-model-title-{{ tool.name }}">{{ t("agents.choose_model_for", agent=tool.label) }}</h2>
+        </div>
+        <button type="button" class="harness-model-dialog-close" aria-label="{{ t('common.close') }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+        </button>
+      </header>
+
+      <div class="harness-model-scope">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg>
+        <span>{{ t("agents.model_scope_help", node=current_node.name) }}</span>
+      </div>
+
+      <label class="harness-model-search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>
+        <input type="search" autocomplete="off" placeholder="{{ t('agents.search_models') }}" aria-label="{{ t('agents.search_models') }}">
+        <kbd>/</kbd>
+      </label>
+
+      <div class="harness-model-list" role="listbox" aria-label="{{ t('agents.available_models') }}"></div>
+      <div class="harness-model-empty" hidden>{{ t("agents.no_models_match") }}</div>
+
+      <label class="harness-model-custom">
+        <span>
+          <strong>{{ t("agents.custom_model") }}</strong>
+          <small>{{ t("agents.custom_model_hint") }}</small>
+        </span>
+        <input type="text" maxlength="512" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="{{ t('agents.custom_model_placeholder') }}">
+      </label>
+
+      <section class="harness-reasoning" data-reasoning-control>
+        <header>
+          <span>
+            <strong class="harness-reasoning-title">{{ t("agents.reasoning_effort") }}</strong>
+            <small class="harness-reasoning-help">{{ t("agents.reasoning_effort_help") }}</small>
+          </span>
+          <em class="harness-reasoning-current" hidden></em>
+        </header>
+        <div class="harness-reasoning-options" role="listbox" aria-label="{{ t('agents.reasoning_effort') }}"></div>
+        <p class="harness-reasoning-unavailable" hidden>{{ t("agents.reasoning_effort_unavailable") }}</p>
+      </section>
+
+      <div class="harness-model-dialog-status" aria-live="polite"></div>
+      <footer class="harness-model-dialog-actions">
+        <div>
+          <button type="button" class="harness-model-auth">{{ t("agents.login_or_switch") }}</button>
+          <a href="{{ tool.docs_url }}" data-model-docs target="_blank" rel="noreferrer">{{ t("agents.model_docs") }}</a>
+        </div>
+        <div>
+          <button type="button" class="harness-model-inherit">{{ t("agents.use_harness_default") }}</button>
+          <button type="button" class="harness-model-cancel">{{ t("common.cancel") }}</button>
+          <button type="button" class="harness-model-save" disabled>{{ t("agents.save_launch_preferences") }}</button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
 
   <section
     class="band agent-skills-band deferred-render"
@@ -359,11 +455,19 @@
             <option value="DEEPSEEK_API_KEY"></option>
           {% elif tool.name == "claude" %}
             <option value="ANTHROPIC_API_KEY"></option>
+            <option value="ANTHROPIC_AUTH_TOKEN"></option>
             <option value="ANTHROPIC_BASE_URL"></option>
+            <option value="ANTHROPIC_PROFILE"></option>
+            <option value="CLAUDE_CODE_OAUTH_TOKEN"></option>
+            <option value="CLAUDE_CODE_USE_BEDROCK"></option>
+            <option value="CLAUDE_CODE_USE_VERTEX"></option>
+            <option value="CLAUDE_CODE_USE_FOUNDRY"></option>
             <option value="CLAUDE_CONFIG_DIR"></option>
           {% else %}
             <option value="OPENAI_API_KEY"></option>
             <option value="ANTHROPIC_API_KEY"></option>
+            <option value="DEEPSEEK_API_KEY"></option>
+            <option value="OPENROUTER_API_KEY"></option>
             <option value="OPENCODE_CONFIG"></option>
             <option value="OPENCODE_CONFIG_DIR"></option>
           {% endif %}
@@ -384,33 +488,86 @@
     </p>
   </section>
 
-  {% if tool.name == "codex" %}
-    <dialog
-      class="codex-auth-dialog"
-      data-codex-auth-terminal
-      data-node="{{ current_node.name }}"
-      data-xterm-js="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}?v={{ static_version('vendor/xterm/xterm.min.js') }}"
-      data-xterm-fit-js="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}?v={{ static_version('vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"
-      data-xterm-web-links-js="{{ url_for('static', path='vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}?v={{ static_version('vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}"
-      aria-labelledby="codex-auth-title"
-    >
-      <div class="codex-auth-dialog-shell">
-        <header class="codex-auth-dialog-head">
-          <div class="codex-auth-dialog-mark" aria-hidden="true">
-            <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="44" height="44">
-          </div>
-          <div>
-            <span>{{ t("agents.codex_account") }}</span>
-            <h2 id="codex-auth-title">{{ t("agents.codex_device_login") }}</h2>
-          </div>
-          <button type="button" class="codex-auth-dialog-close" aria-label="{{ t('common.close') }}">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+  <dialog
+    class="harness-auth-dialog"
+    data-harness-auth-terminal
+    data-node="{{ current_node.name }}"
+    data-agent="{{ tool.name }}"
+    data-agent-label="{{ tool.label }}"
+    data-default-method="{{ default_auth_method }}"
+    style="--agent-brand: {{ tool.accent }}"
+    data-xterm-js="{{ url_for('static', path='vendor/xterm/xterm.min.js') }}?v={{ static_version('vendor/xterm/xterm.min.js') }}"
+    data-xterm-fit-js="{{ url_for('static', path='vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}?v={{ static_version('vendor/xterm-addon-fit/xterm-addon-fit.min.js') }}"
+    data-xterm-web-links-js="{{ url_for('static', path='vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}?v={{ static_version('vendor/xterm-addon-web-links/xterm-addon-web-links.min.js') }}"
+    aria-labelledby="harness-auth-title-{{ tool.name }}"
+  >
+    <div class="harness-auth-dialog-shell">
+      <header class="harness-auth-dialog-head">
+        <div class="harness-auth-dialog-mark" aria-hidden="true">
+          <img src="{{ url_for('static', path=tool.icon) }}" alt="" width="44" height="44">
+        </div>
+        <div>
+          <span>{{ t("agents.harness_access", agent=tool.label) }}</span>
+          <h2 id="harness-auth-title-{{ tool.name }}">{{ t("agents.manage_authentication") }}</h2>
+        </div>
+        <button type="button" class="harness-auth-dialog-close" aria-label="{{ t('common.close') }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+        </button>
+      </header>
+      <p class="harness-auth-dialog-intro">{{ t("agents.harness_auth_help", agent=tool.label, node=current_node.name) }}</p>
+
+      <div class="harness-auth-methods" role="group" aria-label="{{ t('agents.login_method_title') }}">
+        {% for flow in auth_flows %}
+          {% set flow_key = "agents.auth_flow." ~ tool.name ~ "." ~ flow.method %}
+          <button
+            type="button"
+            class="harness-auth-method{% if default_auth_method == flow.method %} is-active{% endif %}"
+            data-auth-method="{{ flow.method }}"
+            data-auth-action="{{ flow.action }}"
+            data-auth-transport="{{ flow.transport }}"
+            data-start-label="{{ t(flow_key ~ '.start') }}"
+            aria-pressed="{{ 'true' if default_auth_method == flow.method else 'false' }}"
+          >
+            {% if flow.method == "browser" %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>
+            {% elif flow.method == "device" %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M10 7h4M11 17h2"/></svg>
+            {% elif flow.method in ("api-key", "environment") %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M15 8l2 2M17 6l2 2"/></svg>
+            {% elif flow.method == "console" %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16M6 10V7l6-3 6 3v3M6 10v8M10 10v8M14 10v8M18 10v8M4 20h16"/></svg>
+            {% elif flow.method == "sso" %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            {% elif flow.action == "logout" %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5H5v14h4M13 8l4 4-4 4M17 12H9"/></svg>
+            {% else %}
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 20c.8-4 3.1-6 7-6s6.2 2 7 6"/></svg>
+            {% endif %}
+            <span>
+              <strong>{{ t(flow_key ~ ".title") }}</strong>
+              <small>{{ t(flow_key ~ ".short") }}</small>
+            </span>
+            {% if default_auth_method == flow.method %}<em>{{ t("agents.recommended") }}</em>{% endif %}
           </button>
-        </header>
-        <p class="codex-auth-dialog-intro">{{ t("agents.codex_login_help") }}</p>
-        <div class="web-terminal codex-auth-terminal">
+        {% endfor %}
+      </div>
+
+      <div class="harness-auth-method-details" aria-live="polite">
+        {% for flow in auth_flows %}
+          {% set flow_key = "agents.auth_flow." ~ tool.name ~ "." ~ flow.method %}
+          <p data-auth-method-detail="{{ flow.method }}"{% if default_auth_method != flow.method %} hidden{% endif %}>{{ t(flow_key ~ ".help") }}</p>
+        {% endfor %}
+        <a href="{{ tool.auth_docs_url }}" target="_blank" rel="noreferrer">{{ t("agents.authentication_docs") }}</a>
+      </div>
+
+      <div data-harness-auth-terminal-panel>
+        <div class="harness-auth-alert" data-auth-device-forbidden hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 19h18.4L12 3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+          <span>{{ t("agents.codex_device_forbidden") }}</span>
+        </div>
+        <div class="web-terminal harness-auth-terminal">
           <div class="terminal-screen">
-            <div class="codex-auth-terminal-placeholder">{{ t("agents.codex_login_starting") }}</div>
+            <div class="harness-auth-terminal-placeholder">{{ t("agents.auth_not_started") }}</div>
           </div>
           <div class="terminal-status">
             <span class="terminal-connection-meta">
@@ -420,16 +577,40 @@
               <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
               <strong class="terminal-connection-value">WebSocket</strong>
             </span>
-            <span class="terminal-connection-state" aria-live="polite">{{ t("agents.codex_login_not_started") }}</span>
+            <span class="terminal-connection-state" aria-live="polite">{{ t("agents.auth_not_started") }}</span>
           </div>
         </div>
-        <footer class="codex-auth-dialog-actions">
-          <span>{{ t("agents.codex_login_refresh_hint") }}</span>
-          <button type="button" class="codex-auth-dialog-done">{{ t("agents.done") }}</button>
-        </footer>
       </div>
-    </dialog>
-  {% endif %}
+
+      <form class="harness-api-key-form" data-harness-api-key-form hidden>
+        <label for="harness-api-key-{{ tool.name }}">
+          <span>{{ t("agents.codex_api_key_label") }}</span>
+          <input
+            id="harness-api-key-{{ tool.name }}"
+            name="api_key"
+            type="password"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            placeholder="{{ t('agents.codex_api_key_placeholder') }}"
+          >
+        </label>
+        <div class="harness-api-key-privacy">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>{{ t("agents.codex_api_key_privacy") }}</span>
+        </div>
+        <p class="harness-api-key-status" data-harness-api-key-status aria-live="polite"></p>
+      </form>
+
+      <footer class="harness-auth-dialog-actions">
+        <span>{{ t("agents.auth_refresh_hint") }}</span>
+        <div>
+          <button type="button" class="harness-auth-dialog-done">{{ t("agents.done") }}</button>
+          <button type="button" class="harness-auth-dialog-start"><span>{{ t("agents.continue") }}</span></button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
 
   <section
     class="band agent-test-band deferred-render"

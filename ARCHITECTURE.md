@@ -73,6 +73,18 @@ Node. It uses the same xterm.js and WebSocket path as a Session terminal. When t
 falls back to a login Shell, but the process remains tied to the browser connection rather than a
 persistent tmux Session.
 
+The Harness status surface keeps account management and launch-profile selection together. Model catalogs are
+resolved on the owning Node: Codex uses its local app-server `model/list`, OpenCode uses its fixed
+`models` argv, and Claude Code combines its stable aliases with the configured `availableModels`
+allowlist. Exact custom model IDs remain available for private providers and gateways. StarAgent
+stores only per-Harness model and reasoning preferences in Node-local state. For new Sessions and
+Harness test terminals it maps those values to validated `--model` plus vendor-native launch
+overrides: Codex `--config model_reasoning_effort=…`, Claude Code `--effort`, or OpenCode
+`--variant`. Codex effort choices and defaults come from each app-server model entry; Claude and
+OpenCode choices follow their installed CLI/config capabilities. StarAgent does not rewrite vendor
+TOML or JSONC, override explicit command arguments, change a running Session, or replace the launch
+profile remembered by a resumed conversation.
+
 Missing Harnesses expose a normalized catalog of reviewed install options: official native and npm
 routes plus npmmirror and Tencent Cloud npm routes for China. The browser sends only an option ID.
 Each Node resolves that ID back to fixed argv or a fixed official HTTPS installer before execution;
@@ -127,6 +139,10 @@ The Hub and Remote Node share the same core session operations:
 - `GET /api/nodes/{node}/agent-tools` (Hub view of a local or remote Node probe)
 - `GET /api/agent-tools/{agent}/skills` (bounded, read-only Remote Node Skills inventory)
 - `GET /api/nodes/{node}/agent-tools/{agent}/skills` (Hub view of the selected Node inventory)
+- `GET /api/agent-tools/{agent}/models` (Node-local model catalog and launch preference)
+- `GET /api/nodes/{node}/agent-tools/{agent}/models` (Hub view of the selected Node model catalog)
+- `PUT /api/agent-tools/{agent}/models/preference` (Node-local model/reasoning launch preferences)
+- `PUT /api/nodes/{node}/agent-tools/{agent}/models/preference` (Hub launch preference proxy)
 - `GET /api/dependencies` (Remote Node supporting-runtime probe)
 - `GET /api/nodes/{node}/dependencies` (Hub view of the selected Node's dependencies)
 - `POST /api/dependencies/{dependency}/install/{option}` (Remote Node allowlisted install)
@@ -135,8 +151,14 @@ The Hub and Remote Node share the same core session operations:
 - `POST /api/nodes/{node}/agent-tools/{agent}/install/{option}` (Hub install proxy)
 - `POST /api/agent-tools/{agent}/update` (Remote Node allowlisted CLI update)
 - `POST /api/nodes/{node}/agent-tools/{agent}/update` (Hub update proxy)
+- `POST /api/agent-tools/{agent}/auth/logout` (Remote Node allowlisted noninteractive logout)
+- `POST /api/nodes/{node}/agent-tools/{agent}/auth/logout` (Hub logout proxy)
+- `POST /api/agent-tools/codex/auth/login/api-key` (Remote Node Codex stdin login)
+- `POST /api/nodes/{node}/agent-tools/codex/auth/login/api-key` (Hub Codex login proxy)
 - `WS /ws/agent-tools/{agent}/terminal` (Remote Node interactive Shell PTY)
 - `WS /ws/nodes/{node}/agent-tools/{agent}/terminal` (Hub Shell proxy for the selected Node)
+- `WS /ws/agent-tools/{agent}/auth/{action}/{method}` (Remote Node allowlisted auth PTY)
+- `WS /ws/nodes/{node}/agent-tools/{agent}/auth/{action}/{method}` (Hub auth PTY proxy)
 - `GET /api/agent-history` (bounded, read-only Remote Node history scan)
 - `GET /api/nodes/{node}/agent-history` (Hub proxy for an explicitly requested scan)
 - `GET /api/staragent-update` (Node-local official checkout status)
@@ -187,16 +209,37 @@ through `cmd.exe`, so missing prerequisites become a bounded diagnostic instead 
 `WinError 2`. Per-Agent locks reject duplicate maintenance operations. Output is bounded and
 redacted, results are normalized at the Hub boundary, and success or failure is written to the
 centralized log without command output.
-Login probes use
-`codex login status`, `claude auth status --json`, and `opencode auth list`. The same cached probe uses Codex's local read-only
+Stored-login probes use
+`codex login status`, `claude auth status --json`, and `opencode auth list`; Claude's effective managed
+API-key, bearer-token, OAuth-token, profile, or cloud-provider environment takes precedence and is
+reported only by variable name. The same cached probe uses Codex's local read-only
 `account/rateLimits/read` app-server method for quota windows; Claude remaining usage is intentionally
 left to its interactive `/status` command. No identity or credential values are returned, and all
-remote payloads are normalized to an allowlisted shape before display. Conversation history scanning
-is manual, reads only fixed Codex/Claude history locations, bounds both file count and bytes read, and
-returns an allowlisted metadata shape with a short prompt preview. It never modifies source history
-files or returns their paths. Resume creation sends a structured Agent/session ID to the Hub. The Hub
-combines it with the selected preset before forwarding a normal worker command, so preset permissions
-are retained and older Remote Nodes remain protocol-compatible.
+remote payloads are normalized to an allowlisted shape before display.
+
+Authentication actions use a fixed per-Harness registry rather than browser-provided commands. Codex
+offers its browser and device-code PTY flows, API-key login, and a direct link to managed environment
+credentials for custom providers; the OpenAI API key travels only in a no-store request body and
+process stdin, never argv, environment, or structured logs. Claude Code exposes its
+Claude account, Anthropic Console, and organization SSO PTY flows; Anthropic API keys and the supported
+Bedrock, Vertex AI, or Foundry switches use the existing managed Harness environment. OpenCode exposes
+its interactive provider add/remove pickers plus managed provider environment variables. Direct logout
+is allowlisted for Codex and Claude Code; OpenCode provider removal remains interactive so the user can
+choose exactly which credential source to delete. The legacy Codex device-login WebSocket stays mapped
+for older Remote Nodes, while capability `agent_auth_management: 2` identifies the generic flow API.
+
+Model and reasoning selection follow the same Node boundary. Catalog commands are fixed by the backend, bounded by
+timeouts and normalized again at the Hub. Browser input is accepted only as a length- and
+character-validated model or effort/variant ID, then stored in `harness-models.json` with user-only
+permissions. The launch layer appends values only to recognized interactive Harness commands;
+explicit model/reasoning arguments, administrative subcommands, and resume commands take precedence
+and remain unchanged.
+
+Conversation history scanning is manual, reads only fixed Codex/Claude history locations, bounds both
+file count and bytes read, and returns an allowlisted metadata shape with a short prompt preview. It
+never modifies source history files or returns their paths. Resume creation sends a structured
+Agent/session ID to the Hub. The Hub combines it with the selected preset before forwarding a normal
+worker command, so preset permissions are retained and older Remote Nodes remain protocol-compatible.
 
 Each service reports process-cached StarAgent version, branch, and commit metadata in the
 authenticated Node heartbeat; public health checks do not expose versions, and heartbeats do not

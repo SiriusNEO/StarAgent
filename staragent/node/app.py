@@ -11,11 +11,17 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
-from staragent.agent_auth import logout_codex
+from staragent.agent_auth import login_codex_with_api_key, logout_agent
 from staragent.agent_history import agent_history_payload
+from staragent.agent_models import (
+    agent_models_payload,
+    clear_agent_models_cache,
+    save_harness_model_preference,
+)
 from staragent.agent_skills import agent_skills_payload, clear_agent_skills_cache
 from staragent.agent_tools import (
     AgentToolUpdateBusyError,
+    agent_tool_spec,
     agent_tools_payload,
     clear_agent_tools_cache,
     install_agent_tool,
@@ -40,7 +46,11 @@ from staragent.harness_config import (
     save_harness_config,
     save_harness_environment,
 )
-from staragent.harness_terminal import open_codex_login_terminal, open_harness_terminal
+from staragent.harness_terminal import (
+    default_harness_auth_method,
+    open_harness_auth_terminal,
+    open_harness_terminal,
+)
 from staragent.pty_terminal import PtyTerminal, parse_client_message
 from staragent.runtime import (
     capture_tmux_pane_ansi,
@@ -51,10 +61,12 @@ from staragent.runtime import (
     tmux_session_exists,
 )
 from staragent.schemas import (
+    CodexApiKeyLoginRequest,
     CreateDirectory,
     CreateWorker,
     HarnessConfigRequest,
     HarnessEnvironmentRequest,
+    HarnessModelPreferenceRequest,
     SendMessage,
     TerminalInput,
 )
@@ -131,9 +143,10 @@ def create_app() -> FastAPI:
                 "logs": 1,
                 "agent_tools": 6,
                 "agent_auth": 1,
-                "agent_auth_management": 1,
+                "agent_auth_management": 2,
                 "agent_configuration": 1,
                 "agent_install": 1,
+                "agent_models": 2,
                 "agent_skills": 1,
                 "agent_update": 1,
                 "agent_usage": 1,
@@ -260,6 +273,42 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return no_store_json(payload)
 
+    @app.get("/api/agent-tools/{agent}/models")
+    def harness_models(agent: str, refresh: bool = False) -> JSONResponse:
+        try:
+            payload = agent_models_payload(agent, force=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return no_store_json(payload)
+
+    @app.put("/api/agent-tools/{agent}/models/preference")
+    def update_harness_model_preference(
+        agent: str,
+        request: HarnessModelPreferenceRequest,
+    ) -> JSONResponse:
+        try:
+            payload = save_harness_model_preference(
+                agent,
+                request.model,
+                request.reasoning_effort,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info",
+            "agent.model_preference_saved",
+            f"{agent} launch preferences were updated.",
+            source="node.agents",
+            details={
+                "agent": agent,
+                "model": request.model or "automatic",
+                "reasoning_effort": request.reasoning_effort or "automatic",
+            },
+        )
+        return no_store_json(payload)
+
     @app.put("/api/agent-tools/{agent}/configuration/file")
     def update_harness_config(agent: str, request: HarnessConfigRequest) -> JSONResponse:
         try:
@@ -270,6 +319,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         clear_agent_tools_cache()
         clear_agent_skills_cache()
+        clear_agent_models_cache(agent)
         config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
         append_node_outbox_event(
             "info",
@@ -293,6 +343,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         clear_agent_tools_cache()
         clear_agent_skills_cache()
+        clear_agent_models_cache(agent)
         append_node_outbox_event(
             "info",
             "agent.environment_saved",
@@ -302,19 +353,38 @@ def create_app() -> FastAPI:
         )
         return no_store_json(payload)
 
-    @app.post("/api/agent-tools/codex/auth/logout")
-    def codex_logout() -> JSONResponse:
+    @app.post("/api/agent-tools/{agent}/auth/logout")
+    def agent_logout(agent: str) -> JSONResponse:
+        spec = agent_tool_spec(agent)
+        if spec is None:
+            raise HTTPException(status_code=404, detail=f"Agent Harness not found: {agent}")
         try:
-            result = logout_codex()
+            result = logout_agent(spec.name)
         except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         clear_agent_tools_cache()
         append_node_outbox_event(
             "info" if result.get("ok") else "warning",
             "agent.auth_logout" if result.get("ok") else "agent.auth_logout_failed",
-            "Codex logged out." if result.get("ok") else "Codex logout failed.",
+            f"{spec.label} logged out." if result.get("ok") else f"{spec.label} logout failed.",
             source="node.agents",
-            details={"agent": "codex"},
+            details={"agent": spec.name},
+        )
+        return no_store_json(result)
+
+    @app.post("/api/agent-tools/codex/auth/login/api-key")
+    def codex_api_key_login(request: CodexApiKeyLoginRequest) -> JSONResponse:
+        try:
+            result = login_codex_with_api_key(request.api_key.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        clear_agent_tools_cache()
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "agent.auth_login_finished" if result.get("ok") else "agent.auth_login_failed",
+            "Codex API key login finished." if result.get("ok") else "Codex API key login failed.",
+            source="node.agents",
+            details={"agent": "codex", "method": "api_key"},
         )
         return no_store_json(result)
 
@@ -569,39 +639,68 @@ def create_app() -> FastAPI:
                     details={"agent": agent},
                 )
 
-    @app.websocket("/ws/agent-tools/codex/auth/login")
-    async def codex_login_socket(websocket: WebSocket) -> None:
+    @app.websocket("/ws/agent-tools/{agent}/auth/login")
+    async def harness_login_socket(websocket: WebSocket, agent: str) -> None:
+        try:
+            method = default_harness_auth_method(agent, local=False)
+        except ValueError:
+            await websocket.accept()
+            await websocket.close(code=4404, reason="unsupported Agent authentication")
+            return
+        await run_harness_auth_socket(websocket, agent, "login", method)
+
+    @app.websocket("/ws/agent-tools/{agent}/auth/{action}/{method}")
+    async def harness_auth_method_socket(
+        websocket: WebSocket,
+        agent: str,
+        action: str,
+        method: str,
+    ) -> None:
+        await run_harness_auth_socket(websocket, agent, action, method)
+
+    async def run_harness_auth_socket(
+        websocket: WebSocket,
+        agent: str,
+        action: str,
+        method: str,
+    ) -> None:
         await websocket.accept()
         if not websocket_is_authenticated(websocket):
             await websocket.close(code=4401, reason="unauthorized")
             return
         opened = False
         try:
-            with open_codex_login_terminal() as terminal:
+            with open_harness_auth_terminal(
+                agent,
+                action=action,
+                method=method,
+            ) as terminal:
                 opened = True
                 append_node_outbox_event(
                     "info",
-                    "agent.auth_login_started",
-                    "Codex device login started.",
+                    f"agent.auth_{action}_started",
+                    f"{agent} {method} authentication started.",
                     source="node.agents",
-                    details={"agent": "codex"},
+                    details={"agent": agent, "action": action, "method": method},
                 )
                 await interact_with_pty_websocket(
                     terminal,
                     websocket,
                     max_age_seconds=15 * 60,
                 )
+        except ValueError as exc:
+            await websocket.close(code=4404, reason=str(exc)[:120])
         except OSError:
-            await websocket.close(code=1011, reason="could not start Codex login")
+            await websocket.close(code=1011, reason="could not start Harness authentication")
         finally:
             clear_agent_tools_cache()
             if opened:
                 append_node_outbox_event(
                     "info",
-                    "agent.auth_login_finished",
-                    "Codex device login terminal closed.",
+                    f"agent.auth_{action}_finished",
+                    f"{agent} {method} authentication terminal closed.",
                     source="node.agents",
-                    details={"agent": "codex"},
+                    details={"agent": agent, "action": action, "method": method},
                 )
 
     return app

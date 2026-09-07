@@ -710,6 +710,7 @@ def test_agent_catalog_and_session_presets_cover_the_same_clis() -> None:
     assert catalog == {"codex", "claude", "opencode"}
     assert all(item["vendor"] for item in catalog_payload)
     assert all(item["description"] for item in catalog_payload)
+    assert all(str(item["auth_docs_url"]).startswith("https://") for item in catalog_payload)
     assert all(str(item["icon"]).startswith("agent-icons/") for item in catalog_payload)
     assert all(str(item["accent"]).startswith("#") for item in catalog_payload)
     assert preset_agents == catalog
@@ -865,11 +866,13 @@ def test_node_agent_tools_endpoint_is_authenticated(monkeypatch) -> None:
     ).json()
     assert sessions["capabilities"]["agent_tools"] == 6
     assert sessions["capabilities"]["agent_auth"] == 1
+    assert sessions["capabilities"]["agent_auth_management"] == 2
     assert sessions["capabilities"]["agent_install"] == 1
     assert sessions["capabilities"]["agent_update"] == 1
     assert sessions["capabilities"]["agent_usage"] == 1
     assert sessions["capabilities"]["agent_history"] == 1
     assert sessions["capabilities"]["agent_terminal"] == 1
+    assert sessions["capabilities"]["agent_models"] == 2
     assert sessions["capabilities"]["dependencies"] == 1
     assert "agent_tools" not in sessions
 
