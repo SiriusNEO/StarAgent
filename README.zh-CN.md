@@ -54,7 +54,9 @@ Session 详情页左侧提供类似 IM 的会话切换栏，可以直接切换�
 
 ![展示 Codex、Claude Code 与 OpenCode 的 StarAgent Agents 页面](assets/demo-agents-anime.webp)
 
-**注意：** 在 Linux/macOS Node 上，仍可手动 SSH 到服务器并 attach 对应 tmux session；Windows Desktop 则由内置 runtime 持有原生 ConPTY session。两种情况下，关闭浏览器或工作区页面都只是 detach，不会停止 Agent session。
+**注意：** 源码安装的 Linux/macOS Node 仍使用方便 SSH attach 的 tmux；开箱即用的 Desktop
+安装包则由自身持有原生 PTY Session（Windows 为 ConPTY）。两种情况下，关闭浏览器或工作区页面
+都只是 detach，不会停止 Agent Session。
 
 ## Launcher
 
@@ -77,8 +79,8 @@ Current Node 也会检测该机器上的终端、网络和包运行时依赖，�
 ## 桌面版
 
 项目现在提供基于 Tauri 的 Windows、Linux 与 macOS 桌面应用，可以启动本机 Launcher，
-也可以连接已有 Hub。Windows 安装包内置 StarAgent Python runtime，并使用 Windows 原生
-ConPTY 承载终端与持久 Session；无需安装 WSL、Python 或 tmux。
+也可以连接已有 Hub。三个平台的安装包都内置 StarAgent Python runtime 与原生终端后端：
+Windows 使用 ConPTY，Linux/macOS 使用系统 PTY API；无需另装 WSL、Python、StarAgent 或 tmux。
 
 ### 下载预编译安装包
 
@@ -90,7 +92,8 @@ ConPTY 承载终端与持久 Session；无需安装 WSL、Python 或 tmux。
 | Windows x64 | `*-setup.exe` | 运行当前用户安装程序 |
 | Linux x64 | `*.AppImage` | 添加可执行权限后直接运行 |
 | Debian / Ubuntu x64 | `*.deb` | 执行 `sudo apt install ./<下载的文件>.deb` |
-| macOS Intel / Apple Silicon | `*.dmg` | 打开 Universal DMG，将 StarAgent 拖入 Applications |
+| macOS Apple Silicon | `*_aarch64.dmg` | 打开 DMG，将 StarAgent 拖入 Applications |
+| macOS Intel | `*_x64.dmg` | 打开 DMG，将 StarAgent 拖入 Applications |
 
 GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果某个旧 Release 只有这两个源码
 压缩包，说明它早于桌面版打包流程；请改用更新版本、CI Artifact，或使用上面的源码安装方式。
@@ -104,19 +107,18 @@ GitHub 自动生成的 **Source code** 压缩包不是桌面安装包。如果�
 也可以通过 [GitHub CLI](https://cli.github.com/) 下载同一份 Release 文件：
 
 ```bash
-# Linux AppImage 示例；其他系统可将 pattern 换成 '*.deb' 或 '*.dmg'。
+# Linux 示例；也可按系统换成 '*.deb'、'*_aarch64.dmg' 或 '*_x64.dmg'。
 gh release download --repo SiriusNEO/StarAgent --pattern '*.AppImage'
 ```
 
 如果想体验尚未发布的开发版，可以直接在应用中选择 Nightly。每次构建仍会保留在
 [Desktop workflow](https://github.com/SiriusNEO/StarAgent/actions/workflows/desktop.yml) 的
-`staragent-windows-x64`、`staragent-linux-x64` 与 `staragent-macos-universal` Artifact 中；直接下载
-Actions Artifact 需要登录 GitHub。
+`staragent-windows-x64`、`staragent-linux-x64`、`staragent-macos-arm64` 与
+`staragent-macos-x64` Artifact 中；直接下载 Actions Artifact 需要登录 GitHub。
 
 Release 的 updater 产物带有 Tauri 更新签名，但操作系统发行者签名仍待补充，因此仍可能出现“未知
-发行者”提示。Windows 本机模式已自包含；Codex、Claude Code 等 Agent Harness CLI 仍是按需组件，
-可直接在 Agents 页面通过 Windows 原生路线安装，不会额外加入 Node.js/npm。npm 官方源和国内镜像
-仍作为系统已有 npm 时的显式备用项。Linux/macOS 本机模式仍使用系统中的 StarAgent CLI 与 tmux。
+发行者”提示。三个平台的本机模式均已自包含；Codex、Claude Code 等 Agent Harness CLI 仍是按需
+组件，可直接在 Agents 页面安装。npm 官方源和国内镜像仍作为系统已有 npm 时的显式备用项。
 运行时、自动更新、构建和签名细节见
 [DESKTOP.zh-CN.md](DESKTOP.zh-CN.md)。
 

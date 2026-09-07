@@ -1,6 +1,8 @@
 # StarAgent Architecture
 
-StarAgent is a tmux-first control plane for coding CLI sessions. The system treats tmux as the source of truth: if a session exists in tmux, StarAgent can observe it, attach to it, and optionally send chat input to it.
+StarAgent is a terminal-native control plane for coding CLI sessions. Source and server installs treat
+tmux as the source of truth. Self-contained Desktop installs use an in-process native terminal
+registry instead (ConPTY on Windows and PTY on Linux/macOS), without changing the Dashboard API.
 
 ## Components
 
@@ -17,8 +19,8 @@ Launcher is the default, single-Node StarAgent surface.
   the URL.
 
 Launcher and Hub are modes of one Dashboard application, not separate frontend implementations.
-`create_app(mode="launcher")` is also the stable host boundary for a future desktop shell: a native
-app can own window lifecycle while continuing to use the same local ASGI runtime and web assets.
+`create_app(mode="launcher")` is also the desktop host boundary: the native app owns the packaged
+ASGI sidecar and window lifecycle while continuing to use the same runtime and web assets.
 
 ### Hub
 
@@ -53,7 +55,9 @@ StarAgent has two kinds of sessions:
 - `system` sessions: infrastructure sessions, such as `staragent-launcher`, `staragent-hub`,
   `staragent-node`, and `staragent-tailscaled`.
 
-Agent sessions can be created from the Dashboard or adopted from existing tmux sessions. System sessions are visible for observability but are read-only from Chat.
+Agent sessions can be created from the Dashboard or adopted from existing tmux sessions. Desktop
+Sessions use the bundled native registry and cannot adopt an unrelated system tmux session. System
+sessions are visible for observability but are read-only from Chat.
 
 Hub starts with the Nodes connection inventory. Selecting a Node scopes the Agents,
 Sessions, and Logs pages to that machine; the browser never mixes multiple Nodes in one operational
@@ -94,15 +98,15 @@ before sending them to the browser.
 ## Data Flow
 
 ```text
-Browser / future desktop shell
+Browser / desktop shell
   |
   | HTTP / WebSocket
   v
 Shared StarAgent Dashboard :8080
   |                                |
-  | Launcher: local tmux calls     | Hub: authenticated HTTP / WebSocket proxy
+  | Launcher: local backend calls  | Hub: authenticated HTTP / WebSocket proxy
   v                                v
-local tmux sessions          Remote Node :8081
+tmux or native PTY sessions  Remote Node :8081
                                    |
                                    | tmux list/capture/send/attach
                                    v
@@ -155,9 +159,12 @@ The Hub adds node management, browser authentication, and checkout maintenance:
 
 ## Chat and Terminal
 
-Terminal is a live tmux PTY view. It is the ground truth display and accepts direct keyboard input.
+Terminal is a live PTY view attached to tmux or the Desktop native registry. It is the ground truth
+display and accepts direct keyboard input.
 
-Chat is a structured view derived from each CLI's native transcript, with captured pane output as a fallback. StarAgent maps user and agent turns into the chat UI. Chat sends input through tmux, so messages also appear in the real terminal.
+Chat is a structured view derived from each CLI's native transcript, with captured terminal output as
+a fallback. StarAgent maps user and agent turns into the chat UI and sends input through the selected
+session backend, so messages also appear in the real terminal.
 
 Session status uses the same agent-native lifecycle principle but a cheaper path: Codex and Claude JSONL files are scanned backward only until the newest user or completed-turn event. The Dashboard exposes only `idle`, `working`, and `review`; terminal attachment and tmux activity age do not affect these states. A completed turn remains `review` until its Session is viewed, while visible approval/input prompts remain actionable.
 

@@ -9,3 +9,4 @@ dist/
 test-results/
 node_modules/
 target/
+desktop/src-tauri/binaries/staragent-runtime-*

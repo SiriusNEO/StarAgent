@@ -66,7 +66,7 @@ class DependencyInstallBusyError(RuntimeError):
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, tuple[float, dict[str, object]]] = {}
 _INSTALL_LOCKS: dict[str, threading.Lock] = {
-    name: threading.Lock() for name in ("conpty", "tmux", "tailscale", "nodejs")
+    name: threading.Lock() for name in ("conpty", "pty", "tmux", "tailscale", "nodejs")
 }
 
 
@@ -85,8 +85,16 @@ def normalize_dependency_platform(value: object, *, fallback: str | None = None)
     return fallback or current_dependency_platform()
 
 
-def dependency_specs(platform_name: str | None = None) -> tuple[Dependency, ...]:
+def dependency_specs(
+    platform_name: str | None = None,
+    *,
+    native_terminal: bool | None = None,
+) -> tuple[Dependency, ...]:
     platform_name = normalize_dependency_platform(platform_name)
+    if native_terminal is None:
+        from staragent.native_sessions import native_session_mode_enabled
+
+        native_terminal = platform_name == "windows" or native_session_mode_enabled()
     terminal = (
         Dependency(
             name="conpty",
@@ -98,6 +106,16 @@ def dependency_specs(platform_name: str | None = None) -> tuple[Dependency, ...]
             builtin=True,
         )
         if platform_name == "windows"
+        else Dependency(
+            name="pty",
+            label="Native PTY",
+            commands=(),
+            required=True,
+            note="Bundled native terminal backend; tmux is not required by StarAgent Desktop.",
+            docs_url="https://docs.python.org/3/library/pty.html",
+            builtin=True,
+        )
+        if native_terminal
         else Dependency(
             name="tmux",
             label="tmux",
@@ -129,10 +147,19 @@ def dependency_specs(platform_name: str | None = None) -> tuple[Dependency, ...]
     )
 
 
-def dependency_spec(name: str, platform_name: str | None = None) -> Dependency | None:
+def dependency_spec(
+    name: str,
+    platform_name: str | None = None,
+    *,
+    native_terminal: bool | None = None,
+) -> Dependency | None:
     normalized = str(name or "").strip().lower()
     return next(
-        (item for item in dependency_specs(platform_name) if item.name == normalized),
+        (
+            item
+            for item in dependency_specs(platform_name, native_terminal=native_terminal)
+            if item.name == normalized
+        ),
         None,
     )
 
@@ -141,14 +168,20 @@ def known_dependency_names() -> set[str]:
     return {
         item.name
         for platform_name in DEPENDENCY_PLATFORMS
-        for item in dependency_specs(platform_name)
+        for native_terminal in (False, True)
+        for item in dependency_specs(platform_name, native_terminal=native_terminal)
     }
 
 
 def dependencies_status(*, force: bool = False) -> dict[str, object]:
     platform_name = current_dependency_platform()
+    from staragent.native_sessions import native_session_mode_enabled
+
+    native_terminal = native_session_mode_enabled()
     environment = dependency_environment()
-    cache_key = "\0".join((platform_name, environment.get("PATH", "")))
+    cache_key = "\0".join(
+        (platform_name, "native" if native_terminal else "system", environment.get("PATH", ""))
+    )
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _CACHE.get(cache_key)
@@ -163,7 +196,7 @@ def dependencies_status(*, force: bool = False) -> dict[str, object]:
         "cache_ttl_seconds": int(DEPENDENCY_CACHE_TTL_SECONDS),
         "dependencies": [
             dependency_status(item, platform_name=platform_name, environment=environment)
-            for item in dependency_specs(platform_name)
+            for item in dependency_specs(platform_name, native_terminal=native_terminal)
         ],
         "error": "",
     }
@@ -195,7 +228,7 @@ def dependency_status(
             status="available" if installed else "error",
             installed=installed,
             version="Bundled" if installed else "",
-            error="" if installed else "Bundled ConPTY component is unavailable.",
+            error="" if installed else f"Bundled {dependency.label} component is unavailable.",
         )
 
     executables = {
@@ -613,7 +646,13 @@ def known_dependency_install_option(name: str, option_id: str) -> bool:
 
 def install_dependency(name: str, option_id: str) -> dict[str, object]:
     platform_name = current_dependency_platform()
-    dependency = dependency_spec(name, platform_name)
+    from staragent.native_sessions import native_session_mode_enabled
+
+    dependency = dependency_spec(
+        name,
+        platform_name,
+        native_terminal=native_session_mode_enabled(),
+    )
     if dependency is None:
         raise ValueError(f"Unsupported dependency: {name}")
     option = dependency_install_option(dependency, option_id, platform_name=platform_name)
@@ -825,8 +864,9 @@ def normalize_dependencies_payload(value: object) -> dict[str, object]:
         if isinstance(raw_items, list)
         else {}
     )
+    native_terminal = "pty" in by_name or "conpty" in by_name
     dependencies = []
-    for dependency in dependency_specs(platform_name):
+    for dependency in dependency_specs(platform_name, native_terminal=native_terminal):
         raw = by_name.get(dependency.name)
         if raw is None:
             dependencies.append(
@@ -896,7 +936,11 @@ def normalize_dependency_install_result(name: str, value: object) -> dict[str, o
         payload.get("platform"),
         fallback=fallback_platform,
     )
-    dependency = dependency_spec(name, platform_name)
+    dependency = dependency_spec(
+        name,
+        platform_name,
+        native_terminal=name in {"conpty", "pty"},
+    )
     if dependency is None:
         raise ValueError(f"Unsupported dependency: {name}")
     options = {

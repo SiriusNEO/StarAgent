@@ -114,11 +114,15 @@ class SessionView:
     @property
     def backend(self) -> str:
         source = self.status_report.source.lower() if self.status_report else ""
-        return "ConPTY" if source == "conpty" else "tmux"
+        if source == "conpty":
+            return "ConPTY"
+        if source == "pty":
+            return "Native PTY"
+        return "tmux"
 
     @property
     def terminal_backend(self) -> str:
-        return "ConPTY" if self.backend == "ConPTY" else "PTY · tmux"
+        return "PTY · tmux" if self.backend == "tmux" else self.backend
 
     @property
     def node_name(self) -> str:

@@ -2,16 +2,13 @@ use serde::Serialize;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-#[cfg(not(target_os = "windows"))]
-use std::process::{Child, Stdio};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 use tauri::webview::{NewWindowResponse, WebviewWindowBuilder};
 use tauri::{AppHandle, Manager, RunEvent, State, WebviewUrl};
-#[cfg(target_os = "windows")]
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
@@ -65,19 +62,11 @@ impl DesktopUpdateChannel {
     }
 }
 
-enum ManagedRuntime {
-    #[cfg(not(target_os = "windows"))]
-    System(Child),
-    #[cfg(target_os = "windows")]
-    Bundled(tauri_plugin_shell::process::CommandChild),
-}
+struct ManagedRuntime(tauri_plugin_shell::process::CommandChild);
 
-#[cfg(target_os = "windows")]
 impl ManagedRuntime {
     fn pid(&self) -> u32 {
-        match self {
-            Self::Bundled(child) => child.pid(),
-        }
+        self.0.pid()
     }
 }
 
@@ -127,13 +116,6 @@ enum DesktopUpdateEvent {
         content_length: Option<u64>,
     },
     Downloaded,
-}
-
-#[derive(Default)]
-struct NativeEnvironment {
-    path: Option<OsString>,
-    staragent: Option<OsString>,
-    tmux: Option<OsString>,
 }
 
 #[tauri::command]
@@ -297,59 +279,41 @@ fn compact_update_notes(notes: Option<&str>) -> Option<String> {
 
 fn inspect_environment() -> Result<EnvironmentInfo, String> {
     let endpoint = local_endpoint(DEFAULT_PORT);
-    if cfg!(target_os = "windows") {
-        return Ok(EnvironmentInfo {
-            desktop_version: env!("CARGO_PKG_VERSION"),
-            build_commit: build_commit(),
-            platform: "windows",
-            strategy: "bundled",
-            runtime_available: true,
-            runtime_version: format!("v{}", env!("CARGO_PKG_VERSION")),
-            session_backend: "Windows ConPTY",
-            session_backend_available: true,
-            runtime_running: local_runtime_ready(DEFAULT_PORT),
-            default_endpoint: endpoint,
-            install_hint: String::new(),
-        });
-    }
-
-    let native = native_environment();
-    let staragent_version = command_output(
-        native.staragent.as_ref(),
-        &["version"],
-        native.path.as_ref(),
-    );
-    let tmux_version = command_output(native.tmux.as_ref(), &["-V"], native.path.as_ref());
-    let install_hint = if cfg!(target_os = "macos") {
-        concat!(
-            "brew install tmux pipx && ",
-            "pipx install git+https://github.com/SiriusNEO/StarAgent.git && pipx ensurepath"
-        )
-        .to_string()
+    let runtime_available = bundled_runtime_path().is_some_and(|path| path.is_file());
+    let (platform, session_backend) = if cfg!(target_os = "windows") {
+        ("windows", "Windows ConPTY")
+    } else if cfg!(target_os = "macos") {
+        ("macos", "Native PTY")
     } else {
-        concat!(
-            "sudo apt install tmux pipx && ",
-            "pipx install git+https://github.com/SiriusNEO/StarAgent.git && pipx ensurepath"
-        )
-        .to_string()
+        ("linux", "Native PTY")
     };
     Ok(EnvironmentInfo {
         desktop_version: env!("CARGO_PKG_VERSION"),
         build_commit: build_commit(),
-        platform: if cfg!(target_os = "macos") {
-            "macos"
+        platform,
+        strategy: "bundled",
+        runtime_available,
+        runtime_version: if runtime_available {
+            format!("v{}", env!("CARGO_PKG_VERSION"))
         } else {
-            "linux"
+            String::new()
         },
-        strategy: "native",
-        runtime_available: !staragent_version.is_empty(),
-        runtime_version: staragent_version,
-        session_backend: "tmux",
-        session_backend_available: !tmux_version.is_empty(),
+        session_backend,
+        session_backend_available: runtime_available,
         runtime_running: local_runtime_ready(DEFAULT_PORT),
         default_endpoint: endpoint,
-        install_hint,
+        install_hint: String::new(),
     })
+}
+
+fn bundled_runtime_path() -> Option<PathBuf> {
+    let directory = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let name = if cfg!(target_os = "windows") {
+        "staragent-runtime.exe"
+    } else {
+        "staragent-runtime"
+    };
+    Some(directory.join(name))
 }
 
 fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
@@ -363,62 +327,14 @@ fn start_runtime(app: &AppHandle, port: u16) -> Result<RuntimeStart, String> {
             reused: true,
         });
     }
-    #[cfg(target_os = "windows")]
     if local_dashboard_ready(port) {
         return Err(format!(
-            "Port {port} is occupied by a non-native or older StarAgent runtime. Stop it before starting the bundled Windows Launcher."
+            "Port {port} is occupied by a non-bundled or older StarAgent runtime. Stop it before starting the desktop Launcher."
         ));
     }
-
-    #[cfg(target_os = "windows")]
-    return start_bundled_runtime(app, port, endpoint);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        start_system_runtime(app, port, endpoint)
-    }
+    start_bundled_runtime(app, port, endpoint)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn start_system_runtime(
-    app: &AppHandle,
-    port: u16,
-    endpoint: String,
-) -> Result<RuntimeStart, String> {
-    clear_finished_child(app)?;
-    let state = app.state::<RuntimeState>();
-    if state
-        .child
-        .lock()
-        .map_err(|_| "The runtime process lock is unavailable.".to_string())?
-        .is_some()
-    {
-        return wait_for_runtime(port, endpoint, true);
-    }
-
-    let mut command = system_runtime_command(port)?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    suppress_console_window(&mut command);
-    let child = command
-        .spawn()
-        .map_err(|error| format!("Could not start StarAgent: {error}"))?;
-    *state
-        .child
-        .lock()
-        .map_err(|_| "The runtime process lock is unavailable.".to_string())? =
-        Some(ManagedRuntime::System(child));
-
-    let result = wait_for_runtime(port, endpoint, false);
-    if result.is_err() {
-        stop_managed_runtime(app);
-    }
-    result
-}
-
-#[cfg(target_os = "windows")]
 fn start_bundled_runtime(
     app: &AppHandle,
     port: u16,
@@ -434,7 +350,7 @@ fn start_bundled_runtime(
         return wait_for_runtime(port, endpoint, true);
     }
 
-    let command = app
+    let mut command = app
         .shell()
         .sidecar("staragent-runtime")
         .map_err(|error| format!("Bundled StarAgent runtime is unavailable: {error}"))?
@@ -446,6 +362,9 @@ fn start_bundled_runtime(
             "--mode",
             "launcher",
         ]);
+    if let Some(path) = native_path() {
+        command = command.env("PATH", path);
+    }
     let (mut events, child) = command
         .spawn()
         .map_err(|error| format!("Could not start the bundled StarAgent runtime: {error}"))?;
@@ -454,7 +373,7 @@ fn start_bundled_runtime(
         .child
         .lock()
         .map_err(|_| "The runtime process lock is unavailable.".to_string())? =
-        Some(ManagedRuntime::Bundled(child));
+        Some(ManagedRuntime(child));
 
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -477,55 +396,10 @@ fn wait_for_runtime(port: u16, endpoint: String, reused: bool) -> Result<Runtime
         }
         std::thread::sleep(Duration::from_millis(150));
     }
-    let hint = if cfg!(target_os = "windows") {
-        "Check that the port is free. If this repeats, reinstall the Windows desktop package."
-    } else {
-        "Check that the port is free and run `staragent` in a terminal for details."
-    };
+    let hint = "Check that the port is free. If this repeats, reinstall the desktop package.";
     Err(format!(
         "StarAgent did not become ready at {endpoint} within 20 seconds. {hint}"
     ))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn system_runtime_command(port: u16) -> Result<Command, String> {
-    let native = native_environment();
-    let staragent = native
-        .staragent
-        .ok_or_else(|| "StarAgent CLI was not found in your login PATH.".to_string())?;
-    if native.tmux.is_none() {
-        return Err("tmux was not found in your login PATH.".to_string());
-    }
-    let mut command = Command::new(staragent);
-    command.args([
-        "dashboard",
-        "--host",
-        DEFAULT_HOST,
-        "--port",
-        &port.to_string(),
-        "--mode",
-        "launcher",
-    ]);
-    if let Some(path) = native.path {
-        command.env("PATH", path);
-    }
-    Ok(command)
-}
-
-fn native_environment() -> NativeEnvironment {
-    let path = native_path();
-    let staragent = std::env::var_os("STARAGENT_DESKTOP_CLI").or_else(|| {
-        path.as_ref()
-            .and_then(|value| find_executable("staragent", value))
-    });
-    let tmux = path
-        .as_ref()
-        .and_then(|value| find_executable("tmux", value));
-    NativeEnvironment {
-        path,
-        staragent,
-        tmux,
-    }
 }
 
 fn native_path() -> Option<OsString> {
@@ -550,32 +424,12 @@ fn native_path() -> Option<OsString> {
     std::env::join_paths(paths).ok()
 }
 
-fn find_executable(name: &str, path: &OsString) -> Option<OsString> {
-    std::env::split_paths(path)
-        .map(|directory| directory.join(name))
-        .find(|candidate| Path::new(candidate).is_file())
-        .map(PathBuf::into_os_string)
-}
-
 fn login_shell_output(script: &str) -> Option<String> {
     let shell = std::env::var_os("SHELL").unwrap_or_else(|| OsString::from("/bin/sh"));
     let mut command = Command::new(shell);
     command.args(["-lc", script]);
     suppress_console_window(&mut command);
     successful_output(&mut command)
-}
-
-fn command_output(program: Option<&OsString>, args: &[&str], path: Option<&OsString>) -> String {
-    let Some(program) = program else {
-        return String::new();
-    };
-    let mut command = Command::new(program);
-    command.args(args);
-    if let Some(path) = path {
-        command.env("PATH", path);
-    }
-    suppress_console_window(&mut command);
-    successful_output(&mut command).unwrap_or_default()
 }
 
 fn successful_output(command: &mut Command) -> Option<String> {
@@ -606,13 +460,7 @@ fn local_dashboard_ready(port: u16) -> bool {
 }
 
 fn local_runtime_ready(port: u16) -> bool {
-    #[cfg(target_os = "windows")]
-    return local_http_response_contains(port, "/api/runtime", "\"session_backend\":\"conpty\"");
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        local_dashboard_ready(port)
-    }
+    local_http_response_contains(port, "/api/runtime", "\"desktop_bundled\":true")
 }
 
 fn local_http_response_contains(port: u16, path: &str, marker: &str) -> bool {
@@ -640,44 +488,29 @@ fn local_http_response_contains(port: u16, path: &str, marker: &str) -> bool {
     String::from_utf8_lossy(&response).contains(marker)
 }
 
-#[cfg(not(target_os = "windows"))]
-fn clear_finished_child(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<RuntimeState>();
-    let mut guard = state
-        .child
-        .lock()
-        .map_err(|_| "The runtime process lock is unavailable.".to_string())?;
-    if let Some(ManagedRuntime::System(child)) = guard.as_mut() {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => *guard = None,
-            Ok(None) => {}
-        }
-    }
-    Ok(())
-}
-
 fn stop_managed_runtime(app: &AppHandle) {
     let state = app.state::<RuntimeState>();
     let Ok(mut guard) = state.child.lock() else {
         return;
     };
     if let Some(child) = guard.take() {
-        match child {
-            #[cfg(not(target_os = "windows"))]
-            ManagedRuntime::System(mut child) => {
-                let _ = child.kill();
-                let _ = child.wait();
+        #[cfg(target_os = "windows")]
+        terminate_windows_process_tree(child.pid());
+        #[cfg(unix)]
+        {
+            // Let uvicorn run Python's atexit cleanup so native PTY children do
+            // not survive an app update or a full desktop exit.
+            if let Ok(pid) = i32::try_from(child.pid()) {
+                unsafe {
+                    let _ = libc::kill(pid, libc::SIGTERM);
+                }
             }
-            #[cfg(target_os = "windows")]
-            ManagedRuntime::Bundled(child) => {
-                terminate_windows_process_tree(child.pid());
-                let _ = child.kill();
-            }
+            std::thread::sleep(Duration::from_millis(500));
         }
+        let _ = child.0.kill();
     }
 }
 
-#[cfg(target_os = "windows")]
 fn clear_runtime_if_pid(app: &AppHandle, pid: u32) {
     let state = app.state::<RuntimeState>();
     let Ok(mut guard) = state.child.lock() else {
@@ -818,8 +651,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        compact_update_notes, normalize_endpoint, normalized_commit, same_origin,
-        DesktopUpdateChannel, DesktopUpdateEvent, NIGHTLY_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT,
+        bundled_runtime_path, compact_update_notes, normalize_endpoint, normalized_commit,
+        same_origin, DesktopUpdateChannel, DesktopUpdateEvent, NIGHTLY_UPDATE_ENDPOINT,
+        STABLE_UPDATE_ENDPOINT,
     };
     use url::Url;
 
@@ -827,6 +661,17 @@ mod tests {
     fn endpoint_defaults_to_http_and_root() {
         let value = normalize_endpoint("staragent.internal:8080/nodes?ignored=1").unwrap();
         assert_eq!(value.as_str(), "http://staragent.internal:8080/");
+    }
+
+    #[test]
+    fn bundled_runtime_is_resolved_beside_the_desktop_executable() {
+        let path = bundled_runtime_path().unwrap();
+        let expected = if cfg!(target_os = "windows") {
+            "staragent-runtime.exe"
+        } else {
+            "staragent-runtime"
+        };
+        assert_eq!(path.file_name().unwrap(), expected);
     }
 
     #[test]

@@ -47,8 +47,16 @@ STARAGENT_MANAGED_OPTION = "@staragent.managed"
 STARAGENT_AGENT_OPTION = "@staragent.agent"
 
 
-def native_windows_sessions() -> bool:
-    return os.name == "nt"
+def native_sessions_enabled() -> bool:
+    from staragent.native_sessions import native_session_mode_enabled
+
+    return native_session_mode_enabled()
+
+
+def native_session_backend() -> str:
+    from staragent.native_sessions import native_session_backend_name
+
+    return native_session_backend_name()
 
 
 def native_registry():
@@ -76,7 +84,7 @@ def discover_local_tmux_statuses(lines: int = 80) -> dict[str, SessionStatus]:
     statuses: dict[str, SessionStatus] = {}
     panes = tmux_active_panes()
     pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], lines)
-    process_tree = {} if native_windows_sessions() else process_children()
+    process_tree = {} if os.name == "nt" else process_children()
     git_cache: dict[str, tuple[str, list[str]]] = {}
     for session in sessions:
         name = str(session["name"])
@@ -102,7 +110,7 @@ def discover_local_tmux_navigation_statuses() -> dict[str, SessionStatus]:
     node = socket.gethostname()
     panes = tmux_active_panes()
     pane_outputs = capture_tmux_pane_tails([str(session["name"]) for session in sessions], 20)
-    process_tree = {} if native_windows_sessions() else process_children()
+    process_tree = {} if os.name == "nt" else process_children()
     adoptions = load_adoptions()
     statuses: dict[str, SessionStatus] = {}
     for session in sessions:
@@ -247,7 +255,7 @@ def local_tmux_status(
 
 
 def list_tmux_sessions() -> list[dict[str, int | str]]:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         return [
             {
                 "name": session.name,
@@ -257,7 +265,7 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
                 "created": session.created,
                 "managed": "agent",
                 "managed_agent": session.agent,
-                "backend": "conpty",
+                "backend": native_session_backend(),
             }
             for session in native_registry().list()
         ]
@@ -300,7 +308,7 @@ def list_tmux_sessions() -> list[dict[str, int | str]]:
 
 
 def capture_tmux_pane(session: str, lines: int = 80) -> str:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native = native_registry().get(session)
         if not native:
             return ""
@@ -322,7 +330,7 @@ def capture_tmux_pane_tails(sessions: list[str], lines: int = 20) -> dict[str, s
 
 
 def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native = native_registry().get(session)
         if not native:
             return ""
@@ -335,7 +343,7 @@ def capture_tmux_pane_ansi(session: str, lines: int = 80) -> str:
 
 
 def tmux_session_exists(session: str) -> bool:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         return native_registry().exists(session)
     try:
         result = run_tmux(["has-session", "-t", session], check=False, capture_output=True)
@@ -350,7 +358,7 @@ def send_tmux_message(session: str, text: str) -> None:
     if not tmux_session_exists(session):
         raise ValueError(f"session not found: {session}")
 
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native = native_registry().get(session)
         if not native:
             raise ValueError(f"session not found: {session}")
@@ -386,7 +394,7 @@ def send_tmux_input(session: str, data: str) -> None:
     if not tmux_session_exists(session):
         raise ValueError(f"session not found: {session}")
 
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native = native_registry().get(session)
         if not native:
             raise ValueError(f"session not found: {session}")
@@ -483,7 +491,7 @@ def start_tmux_worker(name: str, cwd: str, command: str, keep_shell_on_exit: boo
         raise ValueError(f"session already exists: {name}")
 
     agent = agent_from_worker_command(command)
-    if native_windows_sessions():
+    if native_sessions_enabled():
         managed = managed_harness_environment(agent) if agent != "unknown" else {}
         environment = {**os.environ, **managed}
         try:
@@ -581,7 +589,7 @@ def ensure_tmux_session(name: str, cwd: str, command: str) -> None:
         raise ValueError("Command is empty")
     if tmux_session_exists(name):
         return
-    if native_windows_sessions():
+    if native_sessions_enabled():
         agent = agent_from_worker_command(command)
         managed = managed_harness_environment(agent) if agent != "unknown" else {}
         environment = {**os.environ, **managed}
@@ -616,7 +624,7 @@ def wait_for_tmux_session(name: str, interval: float = 2.0) -> None:
 def kill_tmux_session(session: str) -> None:
     if not tmux_session_exists(session):
         raise ValueError(f"session not found: {session}")
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native_registry().kill(session)
         return
     result = run_tmux(
@@ -631,7 +639,7 @@ def kill_tmux_session(session: str) -> None:
 
 
 def tmux_active_panes() -> dict[str, dict[str, str | int]]:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         return {
             session.name: {
                 "current_command": native_session_command(session.command, session.agent),
@@ -672,7 +680,7 @@ def tmux_active_panes() -> dict[str, dict[str, str | int]]:
 
 
 def tmux_active_pane(session: str) -> dict[str, str | int]:
-    if native_windows_sessions():
+    if native_sessions_enabled():
         native = native_registry().get(session)
         if not native:
             return {}
@@ -709,9 +717,9 @@ def native_session_command(command: str, agent: str) -> str:
     if agent and agent != "unknown":
         return agent
     try:
-        return Path(shlex.split(command, posix=False)[0]).stem
+        return Path(shlex.split(command, posix=os.name != "nt")[0]).stem
     except (IndexError, ValueError):
-        return "powershell"
+        return "powershell" if os.name == "nt" else Path(os.environ.get("SHELL", "sh")).name
 
 
 def classify_session_status(

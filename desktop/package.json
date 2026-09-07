@@ -8,9 +8,10 @@
     "build": "vite build",
     "check": "vite build",
     "tauri": "tauri",
+    "runtime:build": "python scripts/build_runtime.py",
     "runtime:build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-runtime.ps1",
-    "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build"
+    "desktop:dev": "npm run runtime:build && tauri dev --config src-tauri/tauri.sidecar.conf.json",
+    "desktop:build": "npm run runtime:build && tauri build --config src-tauri/tauri.sidecar.conf.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1"

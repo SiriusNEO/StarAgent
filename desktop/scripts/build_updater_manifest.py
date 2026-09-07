@@ -63,13 +63,24 @@ def updater_kind(path: Path) -> str | None:
 
 
 def platform_keys(kind: str) -> tuple[str, ...]:
-    if kind == "app":
-        return ("darwin-aarch64-app", "darwin-x86_64-app")
     if kind in {"appimage", "deb", "rpm"}:
         return (f"linux-x86_64-{kind}",)
     if kind in {"nsis", "msi"}:
         return (f"windows-x86_64-{kind}",)
     raise ManifestError(f"Unsupported updater kind: {kind}")
+
+
+def updater_asset_key(path: Path) -> str | None:
+    kind = updater_kind(path)
+    if kind != "app":
+        return kind
+    name = path.name.lower()
+    if any(marker in name for marker in ("aarch64", "arm64")):
+        return "app-aarch64"
+    if any(marker in name for marker in ("x86_64", "x64", "amd64")):
+        return "app-x86_64"
+    # Backward compatibility for the earlier universal updater artifact.
+    return "app-universal"
 
 
 def download_url(repository: str, tag: str, filename: str) -> str:
@@ -94,17 +105,19 @@ def signed_updater_assets(asset_dir: Path) -> dict[str, tuple[Path, str]]:
         signature = signature_path.read_text(encoding="utf-8").strip()
         if not signature:
             raise ManifestError(f"Updater signature is empty: {signature_path.name}")
-        kind = updater_kind(artifact)
-        assert kind is not None
-        if kind in assets:
+        key = updater_asset_key(artifact)
+        assert key is not None
+        if key in assets:
             raise ManifestError(
-                f"More than one {kind} updater artifact was found: "
-                f"{assets[kind][0].name}, {artifact.name}"
+                f"More than one {key} updater artifact was found: "
+                f"{assets[key][0].name}, {artifact.name}"
             )
-        assets[kind] = (artifact, signature)
+        assets[key] = (artifact, signature)
 
-    required = {"appimage", "deb", "nsis", "app"}
+    required = {"appimage", "deb", "nsis"}
     missing = sorted(required - assets.keys())
+    if "app-universal" not in assets:
+        missing.extend(key for key in ("app-aarch64", "app-x86_64") if key not in assets)
     if missing:
         raise ManifestError(f"Missing updater artifacts: {', '.join(missing)}")
     return assets
@@ -124,6 +137,8 @@ def build_manifest(
     platforms: dict[str, dict[str, str]] = {}
 
     for kind, (artifact, signature) in sorted(assets.items()):
+        if kind.startswith("app-"):
+            continue
         entry = {
             "signature": signature,
             "url": download_url(repository, tag, artifact.name),
@@ -131,13 +146,22 @@ def build_manifest(
         for key in platform_keys(kind):
             platforms[key] = entry.copy()
 
+    universal_app = assets.get("app-universal")
+    for architecture in ("aarch64", "x86_64"):
+        artifact, signature = assets.get(f"app-{architecture}") or universal_app or (None, "")
+        assert artifact is not None
+        entry = {
+            "signature": signature,
+            "url": download_url(repository, tag, artifact.name),
+        }
+        platforms[f"darwin-{architecture}-app"] = entry.copy()
+        platforms[f"darwin-{architecture}"] = entry.copy()
+
     # Generic targets keep compatibility with older updater clients and unknown
     # bundle metadata. Installer-specific targets above preserve deb/rpm/msi.
     primary = {
         "linux-x86_64": "appimage",
         "windows-x86_64": "nsis",
-        "darwin-aarch64": "app",
-        "darwin-x86_64": "app",
     }
     for key, kind in primary.items():
         artifact, signature = assets[kind]

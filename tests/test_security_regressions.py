@@ -58,7 +58,7 @@ def test_runtime_identity_is_public_but_contains_no_secret(monkeypatch) -> None:
     assert response.json() == {
         "status": "ok",
         "mode": "launcher",
-        "session_backend": "tmux",
+        "session_backend": "pty",
         "desktop_bundled": True,
     }
     assert "dashboard-secret" not in response.text
