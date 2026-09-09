@@ -91,6 +91,7 @@ from staragent.hub import (
     node_agent_tools_payload,
     node_by_name,
     node_codex_api_key_login_payload,
+    node_codex_browser_callback_payload,
     node_dependencies_payload,
     node_dependency_install_payload,
     node_harness_configuration_payload,
@@ -124,6 +125,7 @@ from staragent.runtime import (
 )
 from staragent.schemas import (
     CodexApiKeyLoginRequest,
+    CodexBrowserCallbackRequest,
     CreateDirectory,
     CreateWorker,
     HarnessConfigRequest,
@@ -164,8 +166,11 @@ def dashboard_mode(value: str | None = None) -> str:
     return mode
 
 
-def dashboard_template_context(request: Request) -> dict[str, str]:
-    return {"dashboard_mode": getattr(request.app.state, "dashboard_mode", "hub")}
+def dashboard_template_context(request: Request) -> dict[str, object]:
+    return {
+        "dashboard_mode": getattr(request.app.state, "dashboard_mode", "hub"),
+        "desktop_bundled": os.environ.get("STARAGENT_DESKTOP_BUNDLED") == "1",
+    }
 
 
 templates = Jinja2Templates(
@@ -1439,6 +1444,41 @@ def register_nodes_routes(app: FastAPI) -> None:
             f"Codex API key login {'finished' if payload.get('ok') else 'failed'} on {node.name}.",
             source="hub.agents",
             details={"node": node.name, "agent": "codex", "method": "api_key"},
+        )
+        return no_store_dashboard_json(payload)
+
+    @app.post("/api/nodes/{node_id}/agent-tools/codex/auth/login/browser/callback")
+    def forward_node_codex_browser_callback(
+        node_id: str,
+        request: CodexBrowserCallbackRequest,
+    ) -> JSONResponse:
+        node = dashboard_node_entry(node_id)
+        try:
+            payload = node_codex_browser_callback_payload(
+                node,
+                request.callback_url.get_secret_value(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except urllib.error.HTTPError as exc:
+            detail = (
+                "Update StarAgent on this Node to use remote browser sign-in."
+                if exc.code in {404, 405}
+                else remote_http_error_detail(exc)
+            )
+            raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except (OSError, urllib.error.URLError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        append_hub_event(
+            "info" if payload.get("ok") else "warning",
+            "agent.auth_callback_forwarded" if payload.get("ok") else "agent.auth_callback_failed",
+            (
+                f"Codex browser callback forwarded to {node.name}."
+                if payload.get("ok")
+                else f"Codex browser callback could not be forwarded to {node.name}."
+            ),
+            source="hub.agents",
+            details={"node": node.name, "agent": "codex", "method": "browser"},
         )
         return no_store_dashboard_json(payload)
 

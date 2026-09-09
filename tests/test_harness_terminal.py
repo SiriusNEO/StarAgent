@@ -330,6 +330,39 @@ def test_node_codex_api_key_login_does_not_log_or_return_the_secret(monkeypatch)
     assert secret not in repr(events)
 
 
+def test_node_codex_browser_callback_does_not_log_or_return_the_url(monkeypatch) -> None:
+    callback = "http://localhost:1455/auth/callback?code=secret&state=value"
+    events: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setenv("STARAGENT_NODE_TOKEN", "node-secret")
+    monkeypatch.setattr(
+        node_app,
+        "relay_codex_browser_callback",
+        lambda value: {
+            "ok": value == callback,
+            "status": "pending",
+            "detail": "forwarded",
+        },
+    )
+    monkeypatch.setattr(
+        node_app,
+        "append_node_outbox_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    client = TestClient(node_app.create_app())
+
+    response = client.post(
+        "/api/agent-tools/codex/auth/login/browser/callback",
+        headers={"Authorization": "Bearer node-secret"},
+        json={"callback_url": callback},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["status"] == "pending"
+    assert callback not in response.text
+    assert callback not in repr(events)
+
+
 def test_hub_forwards_api_key_login_only_to_the_selected_node(monkeypatch) -> None:
     secret = "sk-test-forwarded-secret"
     worker = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
@@ -360,6 +393,35 @@ def test_hub_forwards_api_key_login_only_to_the_selected_node(monkeypatch) -> No
     assert result["node"] == "worker"
     assert secret not in str(result)
     assert "[REDACTED]" in result["detail"]
+
+
+def test_hub_forwards_codex_browser_callback_only_to_the_selected_node(monkeypatch) -> None:
+    callback = "http://localhost:1455/auth/callback?code=secret&state=value"
+    worker = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
+    calls: list[tuple[str, str, str, dict[str, str]]] = []
+
+    def fake_request(node, method, path, body, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append((node.name, method, path, body))
+        return {"ok": True, "status": "pending", "detail": "forwarded"}
+
+    monkeypatch.setattr(hub, "request_json", fake_request)
+
+    result = hub.node_codex_browser_callback_payload(worker, callback)
+
+    assert calls == [
+        (
+            "worker",
+            "POST",
+            "/api/agent-tools/codex/auth/login/browser/callback",
+            {"callback_url": callback},
+        )
+    ]
+    assert result == {
+        "ok": True,
+        "status": "pending",
+        "detail": "forwarded",
+        "node": "worker",
+    }
 
 
 def test_dashboard_api_key_login_targets_the_selected_node(monkeypatch) -> None:
@@ -396,6 +458,36 @@ def test_dashboard_api_key_login_targets_the_selected_node(monkeypatch) -> None:
     assert response.headers["cache-control"] == "no-store"
     assert calls == [("worker", secret)]
     assert secret not in response.text
+
+
+def test_dashboard_codex_browser_callback_targets_the_selected_node(monkeypatch) -> None:
+    callback = "http://localhost:1455/auth/callback?code=secret&state=value"
+    worker = hub.NodeEntry(name="worker", url="http://worker:8081", mode="lan")
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(dashboard_app, "auth_enabled", lambda: False)
+    monkeypatch.setattr(dashboard_app, "node_by_name", lambda _node_id: worker)
+
+    def fake_callback(node, value):  # type: ignore[no-untyped-def]
+        calls.append((node.name, value))
+        return {"ok": True, "status": "pending", "detail": "forwarded", "node": node.name}
+
+    monkeypatch.setattr(
+        dashboard_app,
+        "node_codex_browser_callback_payload",
+        fake_callback,
+    )
+    monkeypatch.setattr(dashboard_app, "append_hub_event", lambda *_args, **_kwargs: None)
+    client = TestClient(dashboard_app.create_app())
+
+    response = client.post(
+        "/api/nodes/worker/agent-tools/codex/auth/login/browser/callback",
+        json={"callback_url": callback},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert calls == [("worker", callback)]
+    assert callback not in response.text
 
 
 @pytest.mark.parametrize(

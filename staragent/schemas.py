@@ -37,3 +37,7 @@ class HarnessModelPreferenceRequest(BaseModel):
 
 class CodexApiKeyLoginRequest(BaseModel):
     api_key: SecretStr
+
+
+class CodexBrowserCallbackRequest(BaseModel):
+    callback_url: SecretStr

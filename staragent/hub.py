@@ -11,7 +11,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from staragent.agent_auth import login_codex_with_api_key, logout_agent
+from staragent.agent_auth import (
+    login_codex_with_api_key,
+    logout_agent,
+    relay_codex_browser_callback,
+)
 from staragent.agent_history import (
     HISTORY_AGENTS,
     agent_history_payload,
@@ -1113,6 +1117,30 @@ def node_codex_api_key_login_payload(node: NodeEntry, api_key: str) -> dict[str,
     if normalized["ok"]:
         invalidate_node_agent_tools(node.name)
     return normalized
+
+
+def node_codex_browser_callback_payload(
+    node: NodeEntry,
+    callback_url: str,
+) -> dict[str, object]:
+    if node.is_local:
+        result = relay_codex_browser_callback(callback_url)
+    else:
+        result = request_json(
+            node,
+            "POST",
+            "/api/agent-tools/codex/auth/login/browser/callback",
+            {"callback_url": callback_url},
+            timeout=NODE_CODEX_LOGIN_REQUEST_TIMEOUT_SECONDS,
+        )
+    payload = result if isinstance(result, dict) else {}
+    status = "pending" if payload.get("status") == "pending" else "error"
+    return {
+        "ok": bool(payload.get("ok")) and status == "pending",
+        "status": status,
+        "detail": redact_log_text(payload.get("detail"), max_chars=500),
+        "node": node.name,
+    }
 
 
 def invalidate_node_agent_tools(node_name: str) -> None:
