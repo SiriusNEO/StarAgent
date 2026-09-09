@@ -470,6 +470,13 @@ elements.updateButton.addEventListener("click", () => {
   }
   refreshDesktopUpdate();
 });
+window.addEventListener("staragent-desktop-update-requested", () => {
+  if (desktopUpdate?.available && pendingUpdateReady) {
+    elements.updatePanel.hidden = false;
+    return;
+  }
+  refreshDesktopUpdate();
+});
 elements.updateLater.addEventListener("click", dismissDesktopUpdate);
 elements.updateLaterButton.addEventListener("click", dismissDesktopUpdate);
 elements.updateInstall.addEventListener("click", installDesktopUpdate);

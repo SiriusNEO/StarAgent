@@ -11,7 +11,11 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
 
 from staragent.adopt import adopt_existing_session, discover_adoptable_sessions
-from staragent.agent_auth import login_codex_with_api_key, logout_agent
+from staragent.agent_auth import (
+    login_codex_with_api_key,
+    logout_agent,
+    relay_codex_browser_callback,
+)
 from staragent.agent_history import agent_history_payload
 from staragent.agent_models import (
     agent_models_payload,
@@ -62,6 +66,7 @@ from staragent.runtime import (
 )
 from staragent.schemas import (
     CodexApiKeyLoginRequest,
+    CodexBrowserCallbackRequest,
     CreateDirectory,
     CreateWorker,
     HarnessConfigRequest,
@@ -385,6 +390,25 @@ def create_app() -> FastAPI:
             "Codex API key login finished." if result.get("ok") else "Codex API key login failed.",
             source="node.agents",
             details={"agent": "codex", "method": "api_key"},
+        )
+        return no_store_json(result)
+
+    @app.post("/api/agent-tools/codex/auth/login/browser/callback")
+    def codex_browser_callback(request: CodexBrowserCallbackRequest) -> JSONResponse:
+        try:
+            result = relay_codex_browser_callback(request.callback_url.get_secret_value())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_node_outbox_event(
+            "info" if result.get("ok") else "warning",
+            "agent.auth_callback_forwarded" if result.get("ok") else "agent.auth_callback_failed",
+            (
+                "Codex browser callback forwarded."
+                if result.get("ok")
+                else "Codex browser callback could not be forwarded."
+            ),
+            source="node.agents",
+            details={"agent": "codex", "method": "browser"},
         )
         return no_store_json(result)
 

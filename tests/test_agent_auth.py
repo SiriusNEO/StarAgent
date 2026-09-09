@@ -83,6 +83,62 @@ def test_codex_api_key_login_redacts_cli_error_output(monkeypatch) -> None:
     assert "[REDACTED]" in result["detail"]
 
 
+def test_codex_browser_callback_is_relayed_to_the_matching_loopback_server(
+    monkeypatch,
+) -> None:
+    secret = "one-time-secret"
+    targets: list[agent_auth._CodexLoopbackTarget] = []
+
+    def fake_request(target):  # type: ignore[no-untyped-def]
+        targets.append(target)
+        if target.request_target.startswith("/auth/callback"):
+            return 302, "http://localhost:1455/success?finished=true"
+        return 200, ""
+
+    monkeypatch.setattr(agent_auth, "_request_codex_loopback", fake_request)
+
+    result = agent_auth.relay_codex_browser_callback(
+        f"http://localhost:1455/auth/callback?code={secret}&state=valid-state"
+    )
+
+    assert result["ok"] is True
+    assert [target.port for target in targets] == [1455, 1455]
+    assert targets[0].request_target == (f"/auth/callback?code={secret}&state=valid-state")
+    assert targets[1].request_target == "/success?finished=true"
+    assert secret not in str(result)
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    (
+        "https://localhost:1455/auth/callback?code=a&state=b",
+        "http://example.com:1455/auth/callback?code=a&state=b",
+        "http://localhost:8080/auth/callback?code=a&state=b",
+        "http://localhost:1455/other?code=a&state=b",
+        "http://localhost:1455/auth/callback?code=a",
+    ),
+)
+def test_codex_browser_callback_rejects_non_codex_targets(callback_url: str) -> None:
+    with pytest.raises(ValueError):
+        agent_auth.relay_codex_browser_callback(callback_url)
+
+
+def test_codex_browser_callback_connection_error_does_not_expose_the_url(monkeypatch) -> None:
+    secret = "callback-secret"
+    monkeypatch.setattr(
+        agent_auth,
+        "_request_codex_loopback",
+        lambda _target: (_ for _ in ()).throw(ConnectionRefusedError()),
+    )
+
+    result = agent_auth.relay_codex_browser_callback(
+        f"http://localhost:1457/auth/callback?code={secret}&state=valid-state"
+    )
+
+    assert result["ok"] is False
+    assert secret not in str(result)
+
+
 def test_logout_agent_uses_the_claude_allowlisted_command(monkeypatch) -> None:
     call: dict[str, object] = {}
 

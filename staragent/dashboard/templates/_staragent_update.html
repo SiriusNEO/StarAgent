@@ -1,3 +1,69 @@
+{% macro desktop_update(runtime=none) %}
+  {% set info = runtime or {} %}
+  <section class="band node-staragent-update desktop-managed-update" aria-labelledby="desktop-update-title">
+    <div class="settings-section-copy">
+      <span class="settings-section-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M20 11a8 8 0 0 0-14.8-4.2"></path>
+          <path d="M4 4v5h5M4 13a8 8 0 0 0 14.8 4.2"></path>
+          <path d="M20 20v-5h-5"></path>
+        </svg>
+      </span>
+      <div>
+        <h2 id="desktop-update-title">{{ t("overview.desktop_update_title") }}</h2>
+        <p>{{ t("overview.desktop_update_description") }}</p>
+      </div>
+    </div>
+
+    <div class="settings-update-layout" data-update-state="up_to_date">
+      <div class="settings-update-summary">
+        <div class="settings-update-product">
+          <span class="settings-update-logo" aria-hidden="true">
+            <img src="{{ url_for('static', path='staragent-logo.svg') }}?v={{ static_version('staragent-logo.svg') }}" width="42" height="42" alt="">
+          </span>
+          <div>
+            <span>{{ t("settings.update.desktop.signed_channel") }}</span>
+            <strong>StarAgent Desktop</strong>
+          </div>
+          <span class="settings-update-state">{{ t("settings.update.desktop.managed") }}</span>
+        </div>
+        <p class="settings-update-message">{{ t("settings.update.desktop.detail") }}</p>
+        <div class="settings-update-actions">
+          <a class="settings-update-install desktop-update-open" href="/.staragent/desktop-updates">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.8-4.2M4 4v5h5M4 13a8 8 0 0 0 14.8 4.2M20 20v-5h-5"></path></svg>
+            <span>{{ t("settings.update.desktop.open") }}</span>
+          </a>
+        </div>
+      </div>
+
+      <dl class="settings-update-facts">
+        <div>
+          <dt>{{ t("settings.update.installed") }}</dt>
+          <dd><code>{% if info.version %}v{{ info.version }}{% else %}—{% endif %}</code></dd>
+        </div>
+        <div>
+          <dt>{{ t("settings.update.channel") }}</dt>
+          <dd>{{ t("settings.update.desktop.stable_or_nightly") }}</dd>
+        </div>
+        <div>
+          <dt>{{ t("settings.update.desktop.package") }}</dt>
+          <dd>{{ t("settings.update.desktop.native_binary") }}</dd>
+        </div>
+        <div>
+          <dt>Git</dt>
+          <dd>{{ t("settings.update.desktop.not_required") }}</dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="settings-update-safety">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+      <span>{{ t("settings.update.desktop.safety") }}</span>
+      <a href="https://github.com/SiriusNEO/StarAgent/releases" target="_blank" rel="noreferrer">{{ t("settings.update.desktop.releases") }} ↗</a>
+    </div>
+  </section>
+{% endmacro %}
+
 {% macro staragent_update(id_prefix, title, description, check_url, apply_url, restart_url, runtime=none, update_supported=true, node_available=true, product_label="StarAgent", section_class="settings-section") %}
   {% set info = runtime or {} %}
   {% set initial_state = "checking" if update_supported else ("legacy" if node_available else "unavailable") %}

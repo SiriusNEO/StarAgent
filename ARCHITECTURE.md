@@ -200,8 +200,10 @@ File browsing and preview are served from the machine that owns the session:
 Changed Files are derived from the session workspace Git status.
 
 CLI inventory probes execute version commands and disable nonessential updater traffic. They cache
-results on the Node and expose reviewed install or update options without executing them. An install
-or update begins only after a separate authenticated POST and user confirmation. The Node resolves a
+results on the Node and expose reviewed install or update options without executing them. A manual
+refresh verifies npm-installed Harness versions against that npm registry before offering an update;
+an unknown version is shown as a check action rather than as an available update. An install or update
+begins only after a separate authenticated POST and user confirmation. The Node resolves a
 fixed install option or derives an update argv from the detected installation source, then executes it
 without a shell or interactive stdin. Official native installers are bounded downloads from fixed
 HTTPS hosts and run from temporary files. Windows `.cmd` launchers are resolved explicitly and run
@@ -227,6 +229,9 @@ its interactive provider add/remove pickers plus managed provider environment va
 is allowlisted for Codex and Claude Code; OpenCode provider removal remains interactive so the user can
 choose exactly which credential source to delete. The legacy Codex device-login WebSocket stays mapped
 for older Remote Nodes, while capability `agent_auth_management: 2` identifies the generic flow API.
+Browser and device-code flows still run through the vendor CLI's PTY, but the Dashboard extracts only
+the public sign-in URL and one-time code into a guided GUI. The raw live terminal remains available in
+a collapsed technical-details section for interaction and troubleshooting.
 
 Model and reasoning selection follow the same Node boundary. Catalog commands are fixed by the backend, bounded by
 timeouts and normalized again at the Hub. Browser input is accepted only as a length- and
@@ -259,7 +264,9 @@ Nightly. Relevant `dev` pushes generate a monotonic prerelease SemVer, embed the
 sign each updater package. CI uploads uniquely named packages before replacing `latest.json`, then
 removes obsolete assets, so an interrupted rolling publish leaves either the old complete update or
 the new complete update available. The unprivileged Dashboard WebView cannot select an endpoint or
-invoke the updater.
+invoke the updater. A fixed same-origin navigation can only bring the trusted desktop update window
+forward; channel selection, update inspection, confirmation, verification, and installation stay in
+that native window.
 
 ## Logging and Supervision
 

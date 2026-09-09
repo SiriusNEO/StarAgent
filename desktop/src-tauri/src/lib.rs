@@ -16,6 +16,7 @@ use url::Url;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8765;
 const DASHBOARD_WINDOW: &str = "dashboard";
+const DESKTOP_UPDATE_PATH: &str = "/.staragent/desktop-updates";
 const STABLE_UPDATE_ENDPOINT: &str =
     "https://github.com/SiriusNEO/StarAgent/releases/latest/download/latest.json";
 const NIGHTLY_UPDATE_ENDPOINT: &str =
@@ -560,6 +561,24 @@ fn same_origin(candidate: &Url, expected: &Url) -> bool {
         && candidate.port_or_known_default() == expected.port_or_known_default()
 }
 
+fn is_desktop_update_request(candidate: &Url, expected: &Url) -> bool {
+    same_origin(candidate, expected) && candidate.path() == DESKTOP_UPDATE_PATH
+}
+
+fn show_desktop_update_window(app: &AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or_else(|| "The trusted desktop window is unavailable.".to_string())?;
+    if let Some(dashboard) = app.get_webview_window(DASHBOARD_WINDOW) {
+        let _ = dashboard.close();
+    }
+    main.show()
+        .map_err(|error| format!("Could not show desktop updates: {error}"))?;
+    let _ = main.set_focus();
+    let _ = main.eval("window.dispatchEvent(new Event('staragent-desktop-update-requested'))");
+    Ok(())
+}
+
 fn show_dashboard_window(app: &AppHandle, url: Url) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW) {
         window
@@ -571,6 +590,7 @@ fn show_dashboard_window(app: &AppHandle, url: Url) -> Result<(), String> {
         let _ = window.set_focus();
     } else {
         let allowed_origin = url.clone();
+        let navigation_app = app.clone();
         let window = WebviewWindowBuilder::new(app, DASHBOARD_WINDOW, WebviewUrl::External(url))
             .title("StarAgent Workspace")
             .inner_size(1320.0, 860.0)
@@ -578,7 +598,13 @@ fn show_dashboard_window(app: &AppHandle, url: Url) -> Result<(), String> {
             .center()
             .prevent_overflow()
             .enable_clipboard_access()
-            .on_navigation(move |candidate| same_origin(candidate, &allowed_origin))
+            .on_navigation(move |candidate| {
+                if is_desktop_update_request(candidate, &allowed_origin) {
+                    let _ = show_desktop_update_window(&navigation_app);
+                    return false;
+                }
+                same_origin(candidate, &allowed_origin)
+            })
             .on_new_window(|target, _features| {
                 if matches!(target.scheme(), "http" | "https" | "mailto") {
                     let _ = open::that_detached(target.as_str());
@@ -651,9 +677,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        bundled_runtime_path, compact_update_notes, normalize_endpoint, normalized_commit,
-        same_origin, DesktopUpdateChannel, DesktopUpdateEvent, NIGHTLY_UPDATE_ENDPOINT,
-        STABLE_UPDATE_ENDPOINT,
+        bundled_runtime_path, compact_update_notes, is_desktop_update_request, normalize_endpoint,
+        normalized_commit, same_origin, DesktopUpdateChannel, DesktopUpdateEvent,
+        DESKTOP_UPDATE_PATH, NIGHTLY_UPDATE_ENDPOINT, STABLE_UPDATE_ENDPOINT,
     };
     use url::Url;
 
@@ -693,6 +719,23 @@ mod tests {
         ));
         assert!(!same_origin(
             &Url::parse("http://hub.example.com/").unwrap(),
+            &expected,
+        ));
+    }
+
+    #[test]
+    fn desktop_update_handoff_is_fixed_to_the_selected_origin() {
+        let expected = normalize_endpoint("http://127.0.0.1:8765").unwrap();
+        assert!(is_desktop_update_request(
+            &expected.join(DESKTOP_UPDATE_PATH).unwrap(),
+            &expected,
+        ));
+        assert!(!is_desktop_update_request(
+            &Url::parse("https://hub.example.com/.staragent/desktop-updates").unwrap(),
+            &expected,
+        ));
+        assert!(!is_desktop_update_request(
+            &expected.join("/nodes/local").unwrap(),
             &expected,
         ));
     }

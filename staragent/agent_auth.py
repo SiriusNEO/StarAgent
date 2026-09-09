@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import shutil
 import subprocess
+import urllib.parse
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,6 +20,8 @@ from staragent.windows import background_process_kwargs, windows_process_argv
 AGENT_AUTH_TIMEOUT_SECONDS = 3.0
 CODEX_DOCTOR_TIMEOUT_SECONDS = 4.0
 CODEX_LOGIN_TIMEOUT_SECONDS = 30.0
+CODEX_BROWSER_CALLBACK_TIMEOUT_SECONDS = 30.0
+CODEX_BROWSER_CALLBACK_PORTS = frozenset({1455, 1457})
 AGENT_LOGOUT_TIMEOUT_SECONDS = 10.0
 AGENT_AUTH_STATUSES = {
     "authenticated",
@@ -459,6 +464,135 @@ def login_codex_with_api_key(api_key: str, executable: str = "") -> dict[str, ob
         "credential_type": "api_key",
         "detail": "Codex accepted and stored the API key on this Node.",
     }
+
+
+def relay_codex_browser_callback(callback_url: str) -> dict[str, object]:
+    """Deliver Codex's browser callback to the Node-local login server.
+
+    Codex registers a loopback OAuth redirect, so a browser on another machine
+    cannot reach it directly. Keep this relay deliberately narrow: it may only
+    contact Codex's two registered loopback ports and callback/success paths.
+    """
+    callback = _codex_loopback_target(callback_url, expected_path="/auth/callback")
+    if not callback.query_has_result:
+        raise ValueError("The Codex callback URL is missing its authorization result.")
+
+    try:
+        status, location = _request_codex_loopback(callback)
+        if 300 <= status < 400:
+            if not location:
+                return _codex_callback_rejected()
+            redirect = _codex_loopback_redirect(location, callback.port)
+            if redirect is not None:
+                status, _ = _request_codex_loopback(redirect)
+            else:
+                status = 200
+        if not 200 <= status < 300:
+            return _codex_callback_rejected()
+    except (ConnectionError, OSError, TimeoutError, http.client.HTTPException):
+        return {
+            "ok": False,
+            "status": "error",
+            "detail": (
+                "No matching Codex browser login is waiting on this Node. "
+                "Start browser login here, finish it in the browser, then paste the URL again."
+            ),
+        }
+
+    return {
+        "ok": True,
+        "status": "pending",
+        "detail": "The browser callback reached Codex. Waiting for Codex to finish signing in.",
+    }
+
+
+def _codex_callback_rejected() -> dict[str, object]:
+    return {
+        "ok": False,
+        "status": "error",
+        "detail": (
+            "Codex rejected that callback. Start a new browser login and paste "
+            "the latest localhost URL."
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class _CodexLoopbackTarget:
+    port: int
+    request_target: str
+    query_has_result: bool = False
+
+
+def _codex_loopback_target(
+    value: str,
+    *,
+    expected_path: str,
+    expected_port: int | None = None,
+) -> _CodexLoopbackTarget:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 16_384:
+        raise ValueError("Paste the complete Codex localhost callback URL.")
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("The Codex callback URL is invalid.") from exc
+    if (
+        parsed.scheme.lower() != "http"
+        or (parsed.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or port not in CODEX_BROWSER_CALLBACK_PORTS
+        or (expected_port is not None and port != expected_port)
+        or parsed.path != expected_path
+    ):
+        raise ValueError("Only a Codex localhost callback URL is accepted.")
+    params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query_has_result = any(params.get("state", ())) and (
+        any(params.get("code", ())) or any(params.get("error", ()))
+    )
+    request_target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return _CodexLoopbackTarget(
+        port=port,
+        request_target=request_target,
+        query_has_result=query_has_result,
+    )
+
+
+def _codex_loopback_redirect(value: str, port: int) -> _CodexLoopbackTarget | None:
+    parsed = urllib.parse.urlsplit(str(value or "").strip())
+    if parsed.scheme.lower() == "https":
+        # Recent Codex versions can use a hosted success page. Credentials have
+        # already been persisted before this redirect is returned.
+        return None
+    return _codex_loopback_target(
+        value,
+        expected_path="/success",
+        expected_port=port,
+    )
+
+
+def _request_codex_loopback(target: _CodexLoopbackTarget) -> tuple[int, str]:
+    connection = http.client.HTTPConnection(
+        "127.0.0.1",
+        target.port,
+        timeout=CODEX_BROWSER_CALLBACK_TIMEOUT_SECONDS,
+    )
+    try:
+        connection.request(
+            "GET",
+            target.request_target,
+            headers={"Host": f"localhost:{target.port}", "User-Agent": "StarAgent"},
+        )
+        response = connection.getresponse()
+        status = int(response.status)
+        location = str(response.getheader("Location") or "")
+        response.read(64 * 1024)
+        return status, location
+    finally:
+        connection.close()
 
 
 def logout_agent(agent: str, executable: str = "") -> dict[str, object]:

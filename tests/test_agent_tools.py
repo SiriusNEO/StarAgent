@@ -184,7 +184,7 @@ def test_agent_tool_status_detects_npm_and_exposes_safe_update_command() -> None
 
     assert status["install_method"] == "npm"
     assert status["update_command"] == "npm install -g @openai/codex@latest"
-    assert status["update_action"] == "update"
+    assert status["update_action"] == "check"
 
 
 def test_missing_agent_tools_offer_official_and_china_install_sources(monkeypatch) -> None:
@@ -553,6 +553,47 @@ def test_codex_update_cache_does_not_trust_stale_results(tmp_path) -> None:
     assert update["status"] == "unknown"
 
 
+def test_npm_update_probe_compares_the_registry_version(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: "/usr/bin/npm" if command == "npm" else None,
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "run_agent_command",
+        lambda argv, timeout: (0, '"0.153.4"'),
+    )
+
+    update = agent_tools.probe_npm_update_status(spec, "codex-cli 0.153.4")
+
+    assert update["status"] == "up_to_date"
+    assert update["current_version"] == "0.153.4"
+    assert update["latest_version"] == "0.153.4"
+    assert update["source"] == "npm_registry"
+
+
+def test_npm_update_probe_fails_closed_on_invalid_registry_output(monkeypatch) -> None:
+    spec = agent_tools.agent_tool_spec("codex")
+    assert spec is not None
+    monkeypatch.setattr(
+        agent_tools.shutil,
+        "which",
+        lambda command, path=None: "/usr/bin/npm" if command == "npm" else None,
+    )
+    monkeypatch.setattr(
+        agent_tools,
+        "run_agent_command",
+        lambda argv, timeout: (0, "not-json"),
+    )
+
+    update = agent_tools.probe_npm_update_status(spec, "codex-cli 0.153.4")
+
+    assert update["status"] == "unknown"
+
+
 def test_agent_tool_update_skips_an_already_current_codex(monkeypatch) -> None:
     spec = agent_tools.agent_tool_spec("codex")
     assert spec is not None
@@ -568,7 +609,7 @@ def test_agent_tool_update_skips_an_already_current_codex(monkeypatch) -> None:
             "latest_version": "0.153.4",
         },
     )
-    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: current)
+    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec, **_kwargs: current)
     monkeypatch.setattr(
         agent_tools,
         "run_agent_update_command",
@@ -593,11 +634,20 @@ def test_agent_tool_update_runs_only_the_detected_allowlisted_command(monkeypatc
         executable="/usr/local/bin/codex",
         resolved_executable="/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
         version="codex-cli 1.2.3",
+        update={
+            "status": "update_available",
+            "current_version": "1.2.3",
+            "latest_version": "1.2.4",
+        },
     )
     after = {**before, "version": "codex-cli 1.2.4"}
     probes = iter((before, after))
     commands: list[list[str]] = []
-    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: next(probes))
+    monkeypatch.setattr(
+        agent_tools,
+        "probe_agent_tool",
+        lambda _spec, **_kwargs: next(probes),
+    )
 
     def fake_update(argv: list[str]) -> tuple[int, str]:
         commands.append(argv)
@@ -635,8 +685,17 @@ def test_agent_tool_update_failure_is_bounded_and_redacted(monkeypatch) -> None:
         executable="/usr/local/bin/codex",
         resolved_executable="/usr/local/lib/node_modules/@openai/codex/bin/codex.js",
         version="codex-cli 1.2.3",
+        update={
+            "status": "update_available",
+            "current_version": "1.2.3",
+            "latest_version": "1.2.4",
+        },
     )
-    monkeypatch.setattr(agent_tools, "probe_agent_tool", lambda _spec: before)
+    monkeypatch.setattr(
+        agent_tools,
+        "probe_agent_tool",
+        lambda _spec, **_kwargs: before,
+    )
     monkeypatch.setattr(
         agent_tools,
         "run_agent_update_command",
