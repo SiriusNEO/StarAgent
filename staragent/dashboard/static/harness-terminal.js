@@ -285,6 +285,7 @@
   const authRoot = document.querySelector("[data-harness-auth-terminal]");
   if (authRoot) {
     const authNode = authRoot.dataset.node || "";
+    const authNodeLocal = authRoot.dataset.nodeLocal === "true";
     const authAgent = authRoot.dataset.agent || "";
     const authTerminalElement = authRoot.querySelector(".harness-auth-terminal");
     const authScreen = authTerminalElement.querySelector(".terminal-screen");
@@ -295,7 +296,27 @@
     const authApiKeyStatus = authApiKeyForm.querySelector("[data-harness-api-key-status]");
     const authMethodButtons = Array.from(authRoot.querySelectorAll("[data-auth-method]"));
     const authMethodDetails = Array.from(authRoot.querySelectorAll("[data-auth-method-detail]"));
+    const authDeviceGuide = authRoot.querySelector("[data-auth-device-guide]");
     const authDeviceForbidden = authRoot.querySelector("[data-auth-device-forbidden]");
+    const authProgress = authRoot.querySelector("[data-auth-progress]");
+    const authProgressLabel = authProgress.querySelector("[data-auth-progress-label]");
+    const authProgressTitle = authProgress.querySelector("[data-auth-progress-title]");
+    const authProgressMessage = authProgress.querySelector("[data-auth-progress-message]");
+    const authBrowserStep = authRoot.querySelector("[data-auth-browser-step]");
+    const authBrowserUrl = authBrowserStep.querySelector("[data-auth-browser-url]");
+    const authBrowserLink = authBrowserStep.querySelector("[data-auth-browser-link]");
+    const authDeviceCode = authRoot.querySelector("[data-auth-device-code]");
+    const authDeviceCodeValue = authDeviceCode.querySelector("[data-auth-device-code-value]");
+    const authCopyCode = authDeviceCode.querySelector("[data-auth-copy-code]");
+    const authResponse = authRoot.querySelector("[data-auth-response]");
+    const authResponseInput = authResponse.querySelector("input[name='response']");
+    const authTechnical = authRoot.querySelector("[data-auth-technical]");
+    const authBrowserCallback = authRoot.querySelector("[data-auth-browser-callback]");
+    const authBrowserCallbackInput = authBrowserCallback.querySelector("input[name='callback_url']");
+    const authBrowserCallbackStatus = authBrowserCallback.querySelector(
+      "[data-auth-browser-callback-status]",
+    );
+    const authBrowserCallbackSubmit = authBrowserCallback.querySelector("button[type='submit']");
     const authClose = authRoot.querySelector(".harness-auth-dialog-close");
     const authDone = authRoot.querySelector(".harness-auth-dialog-done");
     const authStart = authRoot.querySelector(".harness-auth-dialog-start");
@@ -310,7 +331,16 @@
     let authOutputTail = "";
     let authActionError = "";
     let authRequestBusy = false;
+    let authCallbackBusy = false;
+    let authLoginUrl = "";
+    let authOneTimeCode = "";
     let authDecoder = new TextDecoder();
+    const browserUsesNodeLoopback = authNodeLocal && new Set([
+      "localhost",
+      "127.0.0.1",
+      "::1",
+      "[::1]",
+    ]).has(window.location.hostname.toLowerCase());
 
     const sendAuth = (payload) => {
       if (!authSocket || authSocket.readyState !== WebSocket.OPEN) {
@@ -318,6 +348,66 @@
       }
       authSocket.send(JSON.stringify(payload));
       return true;
+    };
+
+    const setAuthProgress = (state, label, title, message) => {
+      authProgress.dataset.state = state;
+      authProgressLabel.textContent = label;
+      authProgressTitle.textContent = title;
+      authProgressMessage.textContent = message;
+    };
+
+    const copyAuthText = async (value) => {
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(value);
+          return true;
+        } catch (_error) {
+          // Fall through for non-secure Dashboard origins.
+        }
+      }
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      return copied;
+    };
+
+    const plainAuthOutput = (value) => value
+      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+      .replace(/\r/g, "\n");
+
+    const safeAuthUrl = (value) => {
+      try {
+        const url = new URL(value);
+        return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+      } catch (_error) {
+        return "";
+      }
+    };
+
+    const resetAuthGui = () => {
+      authLoginUrl = "";
+      authOneTimeCode = "";
+      authBrowserStep.hidden = true;
+      authBrowserUrl.textContent = "";
+      authBrowserLink.href = "#";
+      authDeviceCode.hidden = true;
+      authDeviceCodeValue.textContent = "—";
+      authCopyCode.textContent = t("agents.auth_copy_code");
+      authResponse.hidden = true;
+      authResponseInput.value = "";
+      setAuthProgress(
+        "idle",
+        t("agents.auth_gui_ready"),
+        t("agents.auth_gui_ready_title"),
+        t("agents.auth_gui_ready_help"),
+      );
     };
 
     const fitAuth = () => {
@@ -367,7 +457,15 @@
       authTransport = selectedButton.dataset.authTransport || "terminal";
       authActionError = "";
       authOutputTail = "";
+      resetAuthGui();
       authDeviceForbidden.hidden = true;
+      authDeviceGuide.hidden = !(authAgent === "codex" && method === "device");
+      authBrowserCallback.hidden = !(
+        authAgent === "codex" && method === "browser" && !browserUsesNodeLoopback
+      );
+      authBrowserCallbackInput.value = "";
+      authBrowserCallbackStatus.textContent = "";
+      authBrowserCallbackStatus.classList.remove("is-error", "is-success");
       authMethodButtons.forEach((button) => {
         const selected = button.dataset.authMethod === method;
         button.classList.toggle("is-active", selected);
@@ -380,6 +478,7 @@
       const usesApiKey = authTransport === "api_key";
       authTerminalPanel.hidden = !usesTerminal;
       authApiKeyForm.hidden = !usesApiKey;
+      authTechnical.open = usesTerminal && !["codex", "claude"].includes(authAgent);
       authApiKeyStatus.textContent = "";
       authApiKeyStatus.classList.remove("is-error", "is-success");
       authStartLabel.textContent = selectedButton.dataset.startLabel || t("agents.continue");
@@ -394,14 +493,74 @@
     };
 
     const inspectAuthOutput = (text) => {
-      if (authAgent !== "codex" || authMethod !== "device") {
-        return;
-      }
-      authOutputTail = `${authOutputTail}${text}`.slice(-2400);
-      if (/device code request failed[\s\S]*403|403 forbidden/i.test(authOutputTail)) {
+      authOutputTail = `${authOutputTail}${text}`.slice(-16000);
+      const output = plainAuthOutput(authOutputTail);
+      if (
+        authAgent === "codex"
+        && authMethod === "device"
+        && /device code request failed[\s\S]*403|403 forbidden/i.test(output)
+      ) {
         authActionError = t("agents.codex_device_forbidden");
         authDeviceForbidden.hidden = false;
         authStatus.textContent = authActionError;
+        setAuthProgress(
+          "error",
+          t("agents.auth_gui_attention"),
+          t("agents.auth_gui_error_title"),
+          authActionError,
+        );
+        return;
+      }
+
+      const urls = output.match(/https?:\/\/[^\s<>"'\x1b]+/g) || [];
+      const candidate = (
+        authMethod === "device"
+          ? urls.find((value) => /\/codex\/device(?:[/?#]|$)/i.test(value))
+          : urls.find((value) => !/^https?:\/\/(?:localhost|127\.0\.0\.1|\[?::1\]?)/i.test(value))
+      ) || "";
+      const loginUrl = safeAuthUrl(candidate.replace(/[),.;]+$/, ""));
+      if (loginUrl && loginUrl !== authLoginUrl) {
+        authLoginUrl = loginUrl;
+        authBrowserUrl.textContent = loginUrl;
+        authBrowserLink.href = loginUrl;
+        authBrowserStep.hidden = false;
+        setAuthProgress(
+          "action",
+          t("agents.auth_gui_action"),
+          t("agents.auth_gui_browser_title"),
+          t("agents.auth_gui_browser_help"),
+        );
+        if (authAgent === "claude") {
+          authResponse.hidden = false;
+        }
+      }
+
+      if (authAgent === "codex" && authMethod === "device") {
+        const codeMatch = output.match(
+          /one-time code[\s\S]{0,240}?\b([A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,2})\b/i,
+        );
+        const code = codeMatch?.[1]?.toUpperCase() || "";
+        if (code && code !== authOneTimeCode) {
+          authOneTimeCode = code;
+          authDeviceCodeValue.textContent = code;
+          authDeviceCode.hidden = false;
+          setAuthProgress(
+            "action",
+            t("agents.auth_gui_action"),
+            t("agents.auth_gui_device_title"),
+            t("agents.auth_gui_device_help"),
+          );
+        }
+      }
+
+      if (/successfully logged in|login successful|authentication complete/i.test(output)) {
+        authResponse.hidden = true;
+        setAuthProgress(
+          "success",
+          t("agents.auth_gui_complete"),
+          t("agents.auth_gui_success_title"),
+          t("agents.auth_gui_success_help"),
+        );
       }
     };
 
@@ -444,12 +603,26 @@
       authActionError = "";
       authOutputTail = "";
       authDecoder = new TextDecoder();
+      resetAuthGui();
       authDeviceForbidden.hidden = true;
       authStatus.textContent = t("agents.auth_starting");
+      setAuthProgress(
+        "starting",
+        t("agents.auth_gui_connecting"),
+        t("agents.auth_gui_starting_title"),
+        t("agents.auth_gui_starting_help"),
+      );
       try {
         await initializeAuthTerminal();
       } catch (error) {
-        authStatus.textContent = error?.message || t("agents.test_assets_failed");
+        const message = error?.message || t("agents.test_assets_failed");
+        authStatus.textContent = message;
+        setAuthProgress(
+          "error",
+          t("agents.auth_gui_attention"),
+          t("agents.auth_gui_error_title"),
+          message,
+        );
         authRequestBusy = false;
         setAuthControlsDisabled(false);
         return;
@@ -464,8 +637,16 @@
       socket.binaryType = "arraybuffer";
       socket.addEventListener("open", () => {
         authStatus.textContent = t("agents.auth_running");
+        setAuthProgress(
+          "running",
+          t("agents.auth_gui_connected"),
+          t("agents.auth_gui_preparing_title"),
+          t("agents.auth_gui_preparing_help"),
+        );
         fitAuth();
-        authTerm.focus();
+        if (authTechnical.open) {
+          authTerm.focus();
+        }
       });
       socket.addEventListener("message", (event) => {
         if (typeof event.data === "string") {
@@ -478,7 +659,14 @@
         }
       });
       socket.addEventListener("error", () => {
-        authStatus.textContent = t("agents.auth_terminal_error");
+        authActionError = t("agents.auth_terminal_error");
+        authStatus.textContent = authActionError;
+        setAuthProgress(
+          "error",
+          t("agents.auth_gui_attention"),
+          t("agents.auth_gui_error_title"),
+          authActionError,
+        );
       });
       socket.addEventListener("close", (event) => {
         if (authSocket === socket) {
@@ -491,6 +679,14 @@
             ? event.reason
             : t("agents.auth_finished")
         );
+        if (!authActionError && authProgress.dataset.state !== "success") {
+          setAuthProgress(
+            "complete",
+            t("agents.auth_gui_complete"),
+            t("agents.auth_gui_checking_title"),
+            t("agents.auth_gui_checking_help"),
+          );
+        }
         refreshAuthStatus();
       });
     };
@@ -540,6 +736,55 @@
       }
     };
 
+    const submitBrowserCallback = async () => {
+      const callbackUrl = authBrowserCallbackInput.value.trim();
+      if (!callbackUrl) {
+        authBrowserCallbackStatus.textContent = t("agents.codex_browser_callback_required");
+        authBrowserCallbackStatus.classList.add("is-error");
+        authBrowserCallbackInput.focus();
+        return;
+      }
+      if (authCallbackBusy) {
+        return;
+      }
+      authCallbackBusy = true;
+      authBrowserCallbackInput.disabled = true;
+      authBrowserCallbackSubmit.disabled = true;
+      authBrowserCallbackStatus.textContent = t("agents.codex_browser_callback_sending", {
+        node: authNode,
+      });
+      authBrowserCallbackStatus.classList.remove("is-error", "is-success");
+      try {
+        const requestBody = JSON.stringify({callback_url: callbackUrl});
+        authBrowserCallbackInput.value = "";
+        const response = await fetch(
+          `/api/nodes/${encodeURIComponent(authNode)}/agent-tools/codex/auth/login/browser/callback`,
+          {
+            method: "POST",
+            cache: "no-store",
+            headers: {"Content-Type": "application/json"},
+            body: requestBody,
+          },
+        );
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.ok) {
+          throw new Error(body.detail || t("agents.auth.error"));
+        }
+        authBrowserCallbackStatus.textContent = t("agents.codex_browser_callback_success");
+        authBrowserCallbackStatus.classList.add("is-success");
+      } catch (error) {
+        authBrowserCallbackStatus.textContent = t("agents.codex_browser_callback_failed", {
+          message: error?.message || t("agents.auth.error"),
+        });
+        authBrowserCallbackStatus.classList.add("is-error");
+      } finally {
+        authBrowserCallbackInput.value = "";
+        authBrowserCallbackInput.disabled = false;
+        authBrowserCallbackSubmit.disabled = false;
+        authCallbackBusy = false;
+      }
+    };
+
     const closeAuthDialog = () => {
       if (authRoot.open) {
         authRoot.close();
@@ -584,6 +829,47 @@
       event.preventDefault();
       submitApiKey();
     });
+    authBrowserCallback.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitBrowserCallback();
+    });
+    authCopyCode.addEventListener("click", async () => {
+      if (!authOneTimeCode) {
+        return;
+      }
+      const copied = await copyAuthText(authOneTimeCode);
+      authCopyCode.textContent = copied
+        ? t("agents.auth_code_copied")
+        : t("agents.copy_failed");
+      window.setTimeout(() => {
+        authCopyCode.textContent = t("agents.auth_copy_code");
+      }, 1400);
+    });
+    authResponse.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const response = authResponseInput.value.trim();
+      if (!response || !sendAuth({type: "input", data: `${response}\r`})) {
+        return;
+      }
+      authResponseInput.value = "";
+      authResponse.hidden = true;
+      setAuthProgress(
+        "running",
+        t("agents.auth_gui_connected"),
+        t("agents.auth_gui_finishing_title"),
+        t("agents.auth_gui_finishing_help"),
+      );
+    });
+    authTechnical.addEventListener("toggle", () => {
+      if (authTechnical.open) {
+        requestAnimationFrame(() => {
+          fitAuth();
+          if (authRequestBusy) {
+            authTerm?.focus();
+          }
+        });
+      }
+    });
     authStart.addEventListener("click", () => {
       if (authTransport === "api_key") {
         authApiKeyForm.requestSubmit();
@@ -605,6 +891,8 @@
         authSocket.close(1000, "authentication dialog closed");
       }
       authApiKeyInput.value = "";
+      authBrowserCallbackInput.value = "";
+      authResponseInput.value = "";
       refreshAuthStatus();
     });
     window.addEventListener("beforeunload", () => {

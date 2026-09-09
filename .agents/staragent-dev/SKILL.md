@@ -36,6 +36,8 @@ Keep the `agent` vs `node` vocabulary clean: agents are coding CLIs, nodes are m
 - Keep tmux as the source of truth.
 - Keep local and remote behavior aligned; remote sessions should go through the node API like normal network traffic.
 - Preserve the distinction between `agent` and `system` sessions.
+- Treat **modern, easy to use, and GUI-first** as product requirements. Normal workflows should expose structured status, clear next actions, and in-page feedback instead of raw PTYs, browser alerts, or commands the user must copy into another Terminal.
+- Keep CLI and PTY primitives as reliable implementation layers and explicit advanced/troubleshooting fallbacks. Do not remove useful terminal access or conceal errors merely to make a flow look graphical.
 - Avoid compatibility aliases for renamed concepts unless explicitly requested. This project prefers clean refactors.
 - Keep StarAgent runtime files project-local under `.staragent/` unless `STARAGENT_STATE_DIR` explicitly overrides it.
 - Keep Tailscale-specific operational docs under `tailscale/`; core StarAgent code should only require a reachable endpoint.

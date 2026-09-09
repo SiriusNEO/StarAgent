@@ -571,6 +571,18 @@ if (agentToolsBand) {
     }
   };
 
+  const runAgentUpdateCheck = async (row, button) => {
+    const node = row.dataset.node || "";
+    button.disabled = true;
+    button.textContent = t("agents.checking_updates");
+    status.textContent = t("agents.checking_updates_on", {node});
+    const ok = await loadAgentNode(node, true);
+    updateCardSummaries();
+    status.textContent = ok
+      ? t("agents.node_current", {node})
+      : t("agents.check_failed");
+  };
+
   const runAgentInstall = async (row, tool, option, button) => {
     const node = row.dataset.node || "";
     const label = tool.label || tool.name || t("sessions.agent_cli");
@@ -872,34 +884,49 @@ if (agentToolsBand) {
       current.title = tool.update.checked_at ? checkedTime(tool.update.checked_at) : "";
       actions.appendChild(current);
     } else if (tool.update_command) {
-      if (updateStatus === "update_available" && tool.update.latest_version) {
-        const available = document.createElement("span");
-        available.className = "agent-cli-update-state is-available";
-        available.textContent = t("agents.update_available_version", {
-          version: tool.update.latest_version,
-        });
-        actions.appendChild(available);
-      }
-      const command = document.createElement("code");
-      command.textContent = tool.update_command;
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "copy-button inline-copy";
-      copy.dataset.copy = tool.update_command;
-      copy.textContent = tool.update_action === "install" ? t("agents.copy_install") : t("agents.copy_update");
-      actions.append(command, copy);
-      if (
-        tool.status === "available"
-        && tool.update_action === "update"
-        && payload.updates_supported
-        && !payload.stale
-      ) {
-        const update = document.createElement("button");
-        update.type = "button";
-        update.className = "agent-cli-update-button";
-        update.textContent = t("agents.update_now");
-        update.addEventListener("click", () => runAgentUpdate(row, tool, update));
-        actions.appendChild(update);
+      if (tool.update_action === "check") {
+        const unknown = document.createElement("span");
+        unknown.className = "agent-cli-update-state is-unknown";
+        unknown.textContent = t("agents.update_not_checked");
+        if (tool.update.checked_at) {
+          unknown.title = checkedTime(tool.update.checked_at);
+        }
+        const check = document.createElement("button");
+        check.type = "button";
+        check.className = "agent-cli-update-button is-secondary";
+        check.textContent = t("agents.check_updates");
+        check.addEventListener("click", () => runAgentUpdateCheck(row, check));
+        actions.append(unknown, check);
+      } else {
+        if (updateStatus === "update_available" && tool.update.latest_version) {
+          const available = document.createElement("span");
+          available.className = "agent-cli-update-state is-available";
+          available.textContent = t("agents.update_available_version", {
+            version: tool.update.latest_version,
+          });
+          actions.appendChild(available);
+        }
+        const command = document.createElement("code");
+        command.textContent = tool.update_command;
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "copy-button inline-copy";
+        copy.dataset.copy = tool.update_command;
+        copy.textContent = tool.update_action === "install" ? t("agents.copy_install") : t("agents.copy_update");
+        actions.append(command, copy);
+        if (
+          tool.status === "available"
+          && tool.update_action === "update"
+          && payload.updates_supported
+          && !payload.stale
+        ) {
+          const update = document.createElement("button");
+          update.type = "button";
+          update.className = "agent-cli-update-button";
+          update.textContent = t("agents.update_now");
+          update.addEventListener("click", () => runAgentUpdate(row, tool, update));
+          actions.appendChild(update);
+        }
       }
     }
 
@@ -1015,7 +1042,10 @@ if (agentToolsBand) {
     }
     try {
       const query = refresh ? "?refresh=true" : "";
-      const response = await fetch(`/api/nodes/${encodeURIComponent(node)}/agent-tools${query}`);
+      const response = await fetch(
+        `/api/nodes/${encodeURIComponent(node)}/agent-tools${query}`,
+        {cache: "no-store"},
+      );
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(body.detail || t("agents.check_failed"));

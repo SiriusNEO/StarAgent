@@ -496,6 +496,8 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert 'new CustomEvent("staragent:harness-auth"' in script
     assert "/auth/logout" in script
     assert "renderAgentUsage" in script
+    assert 'tool.update_action === "check"' in script
+    assert "runAgentUpdateCheck" in script
     assert "remaining_percent" in script
     assert "copy.dataset.copy = usage.action" in script
     assert "/agent-tools" in script
@@ -551,6 +553,25 @@ def test_agents_page_checks_clis_without_blocking_initial_render() -> None:
     assert "grid-template-columns: minmax(0, 1fr)" in grid_rule
     assert "repeat(" not in grid_rule
     assert "grid-template-columns: minmax(0, 1fr)" in node_row_rule
+
+
+def test_harness_auth_keeps_the_pty_as_a_gui_fallback() -> None:
+    template = (PROJECT_ROOT / "staragent" / "dashboard" / "templates" / "agents.html").read_text(
+        encoding="utf-8"
+    )
+    script = (
+        PROJECT_ROOT / "staragent" / "dashboard" / "static" / "harness-terminal.js"
+    ).read_text(encoding="utf-8")
+
+    assert "data-auth-progress" in template
+    assert "data-auth-browser-step" in template
+    assert "data-auth-device-code" in template
+    assert '<details class="harness-auth-technical"' in template
+    assert "plainAuthOutput" in script
+    assert "safeAuthUrl" in script
+    assert '["http:", "https:"].includes(url.protocol)' in script
+    assert "authTechnical.open" in script
+    assert 'sendAuth({type: "input", data: `${response}\\r`})' in script
 
 
 def test_session_creation_stays_on_sessions_page() -> None:

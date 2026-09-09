@@ -492,6 +492,7 @@
     class="harness-auth-dialog"
     data-harness-auth-terminal
     data-node="{{ current_node.name }}"
+    data-node-local="{{ 'true' if current_node.entry.is_local else 'false' }}"
     data-agent="{{ tool.name }}"
     data-agent-label="{{ tool.label }}"
     data-default-method="{{ default_auth_method }}"
@@ -561,25 +562,111 @@
       </div>
 
       <div data-harness-auth-terminal-panel>
+        <div class="harness-auth-guide" data-auth-device-guide hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <div>
+            <strong>{{ t("agents.codex_device_setup_title") }}</strong>
+            <span>{{ t("agents.codex_device_setup_help") }}</span>
+          </div>
+          <a href="https://chatgpt.com/#settings/Security" target="_blank" rel="noreferrer">{{ t("agents.codex_device_setup_action") }}</a>
+        </div>
         <div class="harness-auth-alert" data-auth-device-forbidden hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 19h18.4L12 3Z"/><path d="M12 9v4M12 17h.01"/></svg>
-          <span>{{ t("agents.codex_device_forbidden") }}</span>
-        </div>
-        <div class="web-terminal harness-auth-terminal">
-          <div class="terminal-screen">
-            <div class="harness-auth-terminal-placeholder">{{ t("agents.auth_not_started") }}</div>
+          <div>
+            <span>{{ t("agents.codex_device_forbidden") }}</span>
+            <a href="https://chatgpt.com/#settings/Security" target="_blank" rel="noreferrer">{{ t("agents.codex_device_setup_action") }}</a>
           </div>
-          <div class="terminal-status">
-            <span class="terminal-connection-meta">
-              <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
-              <strong class="terminal-connection-value">PTY</strong>
-              <span class="terminal-connection-divider" aria-hidden="true">·</span>
-              <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
-              <strong class="terminal-connection-value">WebSocket</strong>
+        </div>
+
+        <section class="harness-auth-progress" data-auth-progress data-state="idle" aria-live="polite">
+          <div class="harness-auth-progress-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 2.8 8.2 7 10 4.2-1.8 7-5.5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          </div>
+          <div>
+            <span data-auth-progress-label>{{ t("agents.auth_gui_ready") }}</span>
+            <strong data-auth-progress-title>{{ t("agents.auth_gui_ready_title") }}</strong>
+            <p data-auth-progress-message>{{ t("agents.auth_gui_ready_help") }}</p>
+          </div>
+        </section>
+
+        <section class="harness-auth-browser-step" data-auth-browser-step hidden>
+          <div>
+            <span>{{ t("agents.auth_sign_in_link") }}</span>
+            <strong>{{ t("agents.auth_continue_browser") }}</strong>
+            <code data-auth-browser-url></code>
+          </div>
+          <a href="#" target="_blank" rel="noopener noreferrer" data-auth-browser-link>{{ t("agents.auth_open_browser") }}</a>
+        </section>
+
+        <section class="harness-auth-device-code" data-auth-device-code hidden>
+          <div>
+            <span>{{ t("agents.auth_one_time_code") }}</span>
+            <code data-auth-device-code-value>—</code>
+            <small>{{ t("agents.auth_one_time_code_help") }}</small>
+          </div>
+          <button type="button" data-auth-copy-code>{{ t("agents.auth_copy_code") }}</button>
+        </section>
+
+        <form class="harness-auth-response" data-auth-response hidden>
+          <label>
+            <span>{{ t("agents.auth_response_label") }}</span>
+            <input name="response" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="{{ t('agents.auth_response_placeholder') }}">
+          </label>
+          <button type="submit">{{ t("agents.auth_response_submit") }}</button>
+        </form>
+
+        <details class="harness-auth-technical" data-auth-technical>
+          <summary>
+            <span>
+              <strong>{{ t("agents.auth_technical_details") }}</strong>
+              <small>{{ t("agents.auth_technical_help") }}</small>
             </span>
-            <span class="terminal-connection-state" aria-live="polite">{{ t("agents.auth_not_started") }}</span>
+            <span class="harness-auth-technical-transport">PTY · WebSocket</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
+          </summary>
+          <div class="web-terminal harness-auth-terminal">
+            <div class="terminal-screen">
+              <div class="harness-auth-terminal-placeholder">{{ t("agents.auth_not_started") }}</div>
+            </div>
+            <div class="terminal-status">
+              <span class="terminal-connection-meta">
+                <span class="terminal-connection-label">{{ t("detail.backend") }}</span>
+                <strong class="terminal-connection-value">PTY</strong>
+                <span class="terminal-connection-divider" aria-hidden="true">·</span>
+                <span class="terminal-connection-label">{{ t("detail.transport") }}</span>
+                <strong class="terminal-connection-value">WebSocket</strong>
+              </span>
+              <span class="terminal-connection-state" aria-live="polite">{{ t("agents.auth_not_started") }}</span>
+            </div>
           </div>
-        </div>
+        </details>
+        <form class="harness-auth-callback" data-auth-browser-callback hidden>
+          <div class="harness-auth-callback-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12h8M13 9l3 3-3 3"/><rect x="3" y="5" width="18" height="14" rx="3"/></svg>
+            <div>
+              <strong>{{ t("agents.codex_browser_callback_title") }}</strong>
+              <span>{{ t("agents.codex_browser_callback_help") }}</span>
+            </div>
+          </div>
+          <label for="harness-auth-callback-{{ tool.name }}">
+            <span>{{ t("agents.codex_browser_callback_label") }}</span>
+            <input
+              id="harness-auth-callback-{{ tool.name }}"
+              name="callback_url"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              placeholder="http://localhost:1455/auth/callback?..."
+            >
+          </label>
+          <div class="harness-auth-callback-actions">
+            <small>{{ t("agents.codex_browser_callback_privacy") }}</small>
+            <button type="submit">{{ t("agents.codex_browser_callback_submit") }}</button>
+          </div>
+          <p data-auth-browser-callback-status aria-live="polite"></p>
+        </form>
       </div>
 
       <form class="harness-api-key-form" data-harness-api-key-form hidden>

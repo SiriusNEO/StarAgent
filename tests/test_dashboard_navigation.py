@@ -150,6 +150,7 @@ def test_codex_harness_page_offers_multiple_secure_login_methods(monkeypatch) ->
 
     assert response.status_code == 200
     assert 'data-default-method="device"' in response.text
+    assert 'data-node-local="false"' in response.text
     assert "data-harness-auth-terminal" in response.text
     assert 'data-auth-method="browser"' in response.text
     assert 'data-auth-method="device"' in response.text
@@ -157,7 +158,15 @@ def test_codex_harness_page_offers_multiple_secure_login_methods(monkeypatch) ->
     assert 'data-auth-method="environment"' in response.text
     assert 'name="api_key"' in response.text
     assert 'type="password"' in response.text
+    assert 'data-auth-progress data-state="idle"' in response.text
+    assert "data-auth-browser-step" in response.text
+    assert "data-auth-device-code" in response.text
+    assert 'class="harness-auth-technical"' in response.text
+    assert "Open the live terminal only for interaction or troubleshooting." in response.text
     assert "Device-code login is beta" in response.text
+    assert "Open ChatGPT security" in response.text
+    assert "data-auth-browser-callback" in response.text
+    assert "Finish a remote browser sign-in" in response.text
     assert "StarAgent does not save or log this value" in response.text
 
 
@@ -170,6 +179,7 @@ def test_local_codex_harness_recommends_browser_login(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert 'data-default-method="browser"' in response.text
+    assert 'data-node-local="true"' in response.text
 
 
 def test_claude_harness_offers_account_console_sso_and_cloud_access(monkeypatch) -> None:
@@ -268,6 +278,29 @@ def test_node_pages_keep_navigation_and_actions_in_node_scope(monkeypatch) -> No
     assert ">Overview</span>" not in sessions.text
     assert sessions.text.count('name="node" value="worker"') == 2
     assert 'href="/nodes/local/sessions"' not in sessions.text
+
+
+def test_bundled_desktop_uses_native_updates_without_requiring_git(monkeypatch) -> None:
+    local = node_view(
+        "local",
+        runtime={
+            "reported": True,
+            "version": "0.1.3-dev.0",
+            "update_supported": True,
+        },
+    )
+    monkeypatch.setenv("STARAGENT_DESKTOP_BUNDLED", "1")
+    monkeypatch.setattr(dashboard_app, "dashboard_node_view", lambda node_id: local)
+    client = dashboard_client(monkeypatch)
+
+    response = client.get("/nodes/local")
+
+    assert response.status_code == 200
+    assert "StarAgent Desktop updates" in response.text
+    assert "Git is not required" in response.text
+    assert 'href="/.staragent/desktop-updates"' in response.text
+    assert "v0.1.3-dev.0" in response.text
+    assert "data-staragent-update" not in response.text
 
 
 def test_node_overview_distinguishes_legacy_from_unavailable_nodes(monkeypatch) -> None:

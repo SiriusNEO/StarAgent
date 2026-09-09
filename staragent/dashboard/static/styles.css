@@ -960,6 +960,11 @@ a {
   transform: translateY(-1px);
 }
 
+.desktop-update-open {
+  text-decoration: none;
+  width: max-content;
+}
+
 .settings-update-check:disabled,
 .settings-update-install:disabled {
   cursor: wait;
@@ -4674,6 +4679,16 @@ dd {
   background: var(--warn);
 }
 
+.agent-cli-update-state.is-unknown {
+  background: var(--surface-subtle);
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.agent-cli-update-state.is-unknown::before {
+  background: var(--muted);
+}
+
 .agent-cli-presets {
   background: color-mix(in srgb, var(--surface-subtle) 72%, transparent);
   border-top: 1px solid var(--line);
@@ -4799,6 +4814,16 @@ dd {
 .agent-cli-update-button:disabled {
   cursor: wait;
   opacity: 0.58;
+}
+
+.agent-cli-update-button.is-secondary {
+  background: var(--surface);
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.agent-cli-update-button.is-secondary:hover:not(:disabled) {
+  background: var(--neutral);
 }
 
 .agent-update-dialog {
@@ -5831,8 +5856,315 @@ dd {
 
 [data-harness-auth-terminal-panel][hidden],
 .harness-api-key-form[hidden],
+.harness-auth-guide[hidden],
+.harness-auth-browser-step[hidden],
+.harness-auth-device-code[hidden],
+.harness-auth-response[hidden],
+.harness-auth-callback[hidden],
 .harness-auth-alert[hidden] {
   display: none;
+}
+
+.harness-auth-progress {
+  align-items: center;
+  background:
+    radial-gradient(circle at 90% 12%, color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent), transparent 44%),
+    var(--surface-subtle);
+  border-radius: 15px;
+  display: grid;
+  gap: 13px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  min-height: 96px;
+  padding: 16px;
+}
+
+.harness-auth-progress-mark {
+  align-items: center;
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 10%, var(--surface));
+  border-radius: 13px;
+  color: var(--agent-brand, var(--accent));
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  transition: background 160ms ease, color 160ms ease;
+  width: 42px;
+}
+
+.harness-auth-progress-mark svg {
+  fill: none;
+  height: 21px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 21px;
+}
+
+.harness-auth-progress[data-state="starting"] .harness-auth-progress-mark,
+.harness-auth-progress[data-state="running"] .harness-auth-progress-mark {
+  animation: auth-progress-pulse 1.4s ease-in-out infinite;
+}
+
+.harness-auth-progress[data-state="action"] .harness-auth-progress-mark {
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 16%, var(--surface));
+}
+
+.harness-auth-progress[data-state="success"] .harness-auth-progress-mark,
+.harness-auth-progress[data-state="complete"] .harness-auth-progress-mark {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.harness-auth-progress[data-state="error"] .harness-auth-progress-mark {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.harness-auth-progress > div:last-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.harness-auth-progress [data-auth-progress-label] {
+  color: var(--agent-brand, var(--accent));
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.harness-auth-progress [data-auth-progress-title] {
+  font-size: 14px;
+  letter-spacing: -0.015em;
+}
+
+.harness-auth-progress [data-auth-progress-message] {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@keyframes auth-progress-pulse {
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--agent-brand, var(--accent)) 8%, transparent);
+    transform: scale(0.96);
+  }
+}
+
+.harness-auth-browser-step,
+.harness-auth-device-code {
+  align-items: center;
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--agent-brand, var(--accent)) 22%, var(--line));
+  border-radius: 13px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 10px;
+  padding: 13px 14px;
+}
+
+.harness-auth-browser-step > div,
+.harness-auth-device-code > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.harness-auth-browser-step span,
+.harness-auth-device-code span,
+.harness-auth-response label > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.harness-auth-browser-step strong {
+  font-size: 12px;
+}
+
+.harness-auth-browser-step code {
+  color: var(--muted);
+  display: block;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harness-auth-browser-step a,
+.harness-auth-device-code button,
+.harness-auth-response button {
+  align-items: center;
+  background: var(--agent-brand, var(--accent));
+  border: 1px solid var(--agent-brand, var(--accent));
+  border-radius: 999px;
+  color: var(--accent-contrast, #fff);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 850;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 13px;
+  text-decoration: none;
+}
+
+.harness-auth-device-code code {
+  color: var(--text);
+  font: 850 24px/1.1 "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.harness-auth-device-code small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.harness-auth-response {
+  align-items: end;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 10px;
+}
+
+.harness-auth-response label {
+  display: grid;
+  gap: 5px;
+}
+
+.harness-auth-response input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--text);
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-height: 38px;
+  outline: 0;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.harness-auth-response input:focus {
+  border-color: var(--agent-brand, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent);
+}
+
+.harness-auth-technical {
+  margin-top: 10px;
+}
+
+.harness-auth-technical > summary {
+  align-items: center;
+  border-radius: 10px;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  list-style: none;
+  padding: 9px 10px;
+}
+
+.harness-auth-technical > summary::-webkit-details-marker {
+  display: none;
+}
+
+.harness-auth-technical > summary:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.harness-auth-technical > summary > span:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.harness-auth-technical > summary strong {
+  color: currentColor;
+  font-size: 10px;
+}
+
+.harness-auth-technical > summary small,
+.harness-auth-technical-transport {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.harness-auth-technical > summary svg {
+  fill: none;
+  height: 16px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  transition: transform 140ms ease;
+  width: 16px;
+}
+
+.harness-auth-technical[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.harness-auth-guide {
+  align-items: center;
+  background: color-mix(in srgb, var(--agent-brand, var(--accent)) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--agent-brand, var(--accent)) 25%, var(--line));
+  border-radius: 11px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  margin-bottom: 9px;
+  padding: 10px 12px;
+}
+
+.harness-auth-guide > svg,
+.harness-auth-callback-head > svg {
+  fill: none;
+  height: 18px;
+  stroke: var(--agent-brand, var(--accent));
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+  width: 18px;
+}
+
+.harness-auth-guide > div,
+.harness-auth-callback-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.harness-auth-guide strong,
+.harness-auth-callback-head strong {
+  font-size: 11px;
+}
+
+.harness-auth-guide span,
+.harness-auth-callback-head span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.harness-auth-guide a,
+.harness-auth-alert a {
+  color: currentColor;
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.harness-auth-guide a:hover,
+.harness-auth-alert a:hover {
+  text-decoration: underline;
 }
 
 .harness-auth-alert {
@@ -5860,9 +6192,15 @@ dd {
   width: 17px;
 }
 
+.harness-auth-alert > div {
+  display: grid;
+  gap: 3px;
+}
+
 .harness-auth-terminal {
   border-radius: 13px;
   grid-template-rows: minmax(280px, 42vh) auto;
+  margin-top: 5px;
 }
 
 .harness-auth-terminal .terminal-screen {
@@ -5879,6 +6217,102 @@ dd {
   opacity: 0.68;
   padding: 24px;
   position: absolute;
+}
+
+.harness-auth-callback {
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+}
+
+.harness-auth-callback-head {
+  align-items: start;
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.harness-auth-callback label {
+  display: grid;
+  gap: 5px;
+}
+
+.harness-auth-callback label > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.harness-auth-callback input {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--text);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  min-width: 0;
+  outline: none;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.harness-auth-callback input:focus {
+  border-color: var(--agent-brand, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--agent-brand, var(--accent)) 12%, transparent);
+}
+
+.harness-auth-callback-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.harness-auth-callback-actions small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.harness-auth-callback-actions button {
+  background: var(--agent-brand, var(--accent));
+  border: 0;
+  border-radius: 9px;
+  color: var(--accent-contrast, #fff);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 8px 11px;
+}
+
+.harness-auth-callback-actions button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.harness-auth-callback > p {
+  color: var(--muted);
+  font-size: 10px;
+  margin: 0;
+}
+
+.harness-auth-callback > p:empty {
+  display: none;
+}
+
+.harness-auth-callback > p.is-error {
+  color: var(--danger);
+}
+
+.harness-auth-callback > p.is-success {
+  color: var(--success);
 }
 
 .harness-api-key-form {
@@ -10857,6 +11291,45 @@ dd {
     gap: 5px;
   }
 
+  .harness-auth-guide {
+    align-items: start;
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .harness-auth-guide > a {
+    grid-column: 2;
+  }
+
+  .harness-auth-callback-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .harness-auth-callback-actions button {
+    width: 100%;
+  }
+
+  .harness-auth-browser-step,
+  .harness-auth-device-code,
+  .harness-auth-response {
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harness-auth-browser-step a,
+  .harness-auth-device-code button,
+  .harness-auth-response button {
+    width: 100%;
+  }
+
+  .harness-auth-technical-transport {
+    display: none;
+  }
+
+  .harness-auth-technical > summary {
+    grid-template-columns: minmax(0, 1fr) 16px;
+  }
+
   .harness-auth-terminal {
     grid-template-rows: minmax(220px, 38vh) auto;
   }
@@ -11638,6 +12111,11 @@ html:is([data-surface-mode="glass"], [data-surface-mode="clear-glass"]) :where(
   }
 
   .agent-update-dialog[open] {
+    animation: none;
+  }
+
+  .harness-auth-progress[data-state="starting"] .harness-auth-progress-mark,
+  .harness-auth-progress[data-state="running"] .harness-auth-progress-mark {
     animation: none;
   }
 

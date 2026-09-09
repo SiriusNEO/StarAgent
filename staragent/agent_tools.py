@@ -43,6 +43,7 @@ from staragent.windows import (
 
 AGENT_TOOL_CACHE_TTL_SECONDS = 60.0
 AGENT_TOOL_PROBE_TIMEOUT_SECONDS = 3.0
+AGENT_TOOL_UPDATE_CHECK_TIMEOUT_SECONDS = 8.0
 AGENT_TOOL_UPDATE_TIMEOUT_SECONDS = 180.0
 AGENT_TOOL_INSTALL_TIMEOUT_SECONDS = 300.0
 AGENT_TOOL_UPDATE_OUTPUT_MAX_CHARS = 4_000
@@ -369,7 +370,11 @@ def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
         if cached and not force and now - cached[0] < AGENT_TOOL_CACHE_TTL_SECONDS:
             return copy.deepcopy(cached[1])
         with ThreadPoolExecutor(max_workers=len(AGENT_TOOL_SPECS)) as executor:
-            tools = list(executor.map(probe_agent_tool, AGENT_TOOL_SPECS))
+            probes = [
+                executor.submit(probe_agent_tool, spec, refresh_update=force)
+                for spec in AGENT_TOOL_SPECS
+            ]
+            tools = [probe.result() for probe in probes]
         payload: dict[str, object] = {
             "supported": True,
             "updates_supported": True,
@@ -385,7 +390,11 @@ def agent_tools_payload(*, force: bool = False) -> dict[str, object]:
         return copy.deepcopy(payload)
 
 
-def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
+def probe_agent_tool(
+    spec: AgentToolSpec,
+    *,
+    refresh_update: bool = False,
+) -> dict[str, object]:
     environment = probe_environment(spec.name)
     executable = shutil.which(spec.command, path=environment.get("PATH"))
     if not executable:
@@ -435,18 +444,30 @@ def probe_agent_tool(spec: AgentToolSpec) -> dict[str, object]:
             resolved_executable=resolved_executable,
             error=detail,
         )
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    install_method = detect_install_method(spec, executable, resolved_executable)
+    with ThreadPoolExecutor(max_workers=3) as executor:
         auth_future = executor.submit(probe_agent_auth, spec.name, executable)
         usage_future = executor.submit(probe_agent_usage, spec.name, executable)
+        update_future = (
+            executor.submit(probe_npm_update_status, spec, output)
+            if refresh_update and install_method == "npm"
+            else None
+        )
         auth = auth_future.result()
         usage = usage_future.result()
+        update = probe_agent_update_status(spec, output)
+        if update_future is not None:
+            refreshed_update = update_future.result()
+            if refreshed_update["status"] != "unknown":
+                update = refreshed_update
     return tool_status(
         spec,
         status="available",
         executable=executable,
         resolved_executable=resolved_executable,
+        install_method=install_method,
         version=output or "installed",
-        update=probe_agent_update_status(spec, output),
+        update=update,
         auth=auth,
         usage=usage,
     )
@@ -493,18 +514,12 @@ def tool_status(
     else:
         normalized_usage = unknown_agent_usage(spec.name)
     normalized_update = normalize_agent_update_status(update)
-    update_is_current = (
-        normalized_status == "available" and normalized_update["status"] == "up_to_date"
+    managed_update_command, update_action = agent_update_controls(
+        spec,
+        normalized_status,
+        method,
+        normalized_update,
     )
-    managed_update_command = (
-        "" if update_is_current else update_command(spec, normalized_status, method)
-    )
-    if update_is_current:
-        update_action = "current"
-    elif normalized_status == "unknown":
-        update_action = ""
-    else:
-        update_action = "install" if normalized_status == "missing" else "update"
     return {
         "name": spec.name,
         "label": spec.label,
@@ -626,6 +641,24 @@ def payload_with_node(
 def clear_agent_tools_cache() -> None:
     with _CACHE_LOCK:
         _CACHE.clear()
+
+
+def agent_update_controls(
+    spec: AgentToolSpec,
+    status: str,
+    install_method: str,
+    update: dict[str, str],
+) -> tuple[str, str]:
+    if status == "unknown":
+        return "", ""
+    if status == "missing":
+        return update_command(spec, status, install_method), "install"
+    if update["status"] == "up_to_date":
+        return "", "current"
+    command = update_command(spec, status, install_method)
+    if update["status"] == "unknown" and install_method == "npm":
+        return command, "check"
+    return command, "update"
 
 
 def install_agent_tool(name: str, option_id: str) -> dict[str, object]:
@@ -768,7 +801,7 @@ def update_agent_tool(name: str) -> dict[str, object]:
     if not lock.acquire(blocking=False):
         raise AgentToolUpdateBusyError(f"{spec.label} is already being updated.")
     try:
-        before = probe_agent_tool(spec)
+        before = probe_agent_tool(spec, refresh_update=True)
         command = str(before.get("update_command") or "")
         base_result: dict[str, object] = {
             "ok": False,
@@ -991,7 +1024,11 @@ def normalize_agent_update_status(value: object) -> dict[str, str]:
         "current_version": clean_tool_text(payload.get("current_version"), max_chars=80),
         "latest_version": clean_tool_text(payload.get("latest_version"), max_chars=80),
         "checked_at": clean_tool_text(payload.get("checked_at"), max_chars=80),
-        "source": "codex_version_cache" if payload.get("source") == "codex_version_cache" else "",
+        "source": (
+            str(payload["source"])
+            if payload.get("source") in {"codex_version_cache", "npm_registry"}
+            else ""
+        ),
     }
 
 
@@ -999,6 +1036,48 @@ def probe_agent_update_status(spec: AgentToolSpec, installed_version: str) -> di
     if spec.name == "codex":
         return probe_codex_update_status(installed_version)
     return normalize_agent_update_status(None)
+
+
+def probe_npm_update_status(
+    spec: AgentToolSpec,
+    installed_version: str,
+) -> dict[str, str]:
+    current = numeric_cli_version(installed_version)
+    environment = probe_environment(spec.name)
+    npm = shutil.which("npm", path=environment.get("PATH"))
+    if not current or not npm:
+        return normalize_agent_update_status(None)
+    returncode, output = run_agent_command(
+        [
+            npm,
+            "view",
+            spec.npm_package,
+            "version",
+            "--json",
+            "--prefer-online",
+            "--fetch-retries=0",
+            "--fetch-timeout=5000",
+        ],
+        timeout=AGENT_TOOL_UPDATE_CHECK_TIMEOUT_SECONDS,
+    )
+    if returncode != 0:
+        return normalize_agent_update_status(None)
+    try:
+        reported = json.loads(output)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return normalize_agent_update_status(None)
+    latest = numeric_cli_version(reported if isinstance(reported, str) else "")
+    if not latest:
+        return normalize_agent_update_status(None)
+    return normalize_agent_update_status(
+        {
+            "status": "update_available" if latest > current else "up_to_date",
+            "current_version": version_text(current),
+            "latest_version": version_text(latest),
+            "checked_at": utc_timestamp(),
+            "source": "npm_registry",
+        }
+    )
 
 
 def probe_codex_update_status(
