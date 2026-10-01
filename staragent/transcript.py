@@ -19,6 +19,10 @@ from staragent.text import strip_ansi
 # terminal text is only a last-resort display fallback.
 
 WORKING_STATUS_PATTERN = re.compile(r"^\s*(?:[◦∙·○●⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*)?Working\b", re.IGNORECASE)
+CODEX_ERROR_PATTERN = re.compile(
+    r"^\s*⚠\s+.*(?:error|failed|unavailable|at capacity|overloaded|rate limit|timed? out)",
+    re.IGNORECASE,
+)
 MAX_TRANSCRIPT_CACHE_FILES = 32
 
 
@@ -185,15 +189,22 @@ def parse_codex_transcript(text: str, cli_pid: int = 0) -> TranscriptState:
         messages = codex_messages_from_events(rollout)
         user_index = latest_event_index(rollout, "user")
         assistant_index = latest_event_index(rollout, "assistant_final")
-        reply = rollout[assistant_index]["text"] if assistant_index >= 0 else ""
-        working = user_index > assistant_index
+        turn_end_index = latest_event_index(rollout, "turn_complete")
+        completion_index = max(assistant_index, turn_end_index)
+        error_index = latest_codex_error_index(rollout)
+        if error_index > user_index and error_index >= assistant_index:
+            reply = str(rollout[error_index].get("text") or "")
+        else:
+            reply = str(rollout[assistant_index].get("text") or "") if assistant_index >= 0 else ""
+        working = user_index > completion_index
+        final = completion_index >= 0 and completion_index > user_index
         return TranscriptState(
             reply=reply,
-            completed_reply=reply if reply else "",
+            completed_reply=reply if reply and final else "",
             working=working,
             working_label="Working" if working else "",
             working_since_ms=event_timestamp_at(rollout, user_index) if working else 0,
-            final=bool(reply and not working),
+            final=final,
             messages=tuple(messages),
             token_usage=codex_token_usage_from_events(rollout),
         )
@@ -560,12 +571,22 @@ def codex_event_from_json(obj: object) -> dict[str, object] | None:
         return None
     if obj.get("type") == "event_msg":
         payload = obj.get("payload")
-        if isinstance(payload, dict) and payload.get("type") == "token_count":
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("type") == "token_count":
             return {
                 "kind": "token_count",
                 "info": payload.get("info"),
                 "rate_limits": payload.get("rate_limits"),
                 "plan_type": payload.get("plan_type"),
+                "timestamp_ms": event_timestamp_ms(obj),
+            }
+        if payload.get("type") == "task_complete":
+            error_text = codex_task_error_text(payload.get("error"))
+            return {
+                "kind": "turn_complete",
+                "text": error_text,
+                "is_error": bool(payload.get("error")),
                 "timestamp_ms": event_timestamp_ms(obj),
             }
         return None
@@ -616,7 +637,21 @@ def codex_lifecycle_from_json(obj: object) -> str:
         return "working"
     if event.get("kind") == "assistant_final":
         return "review"
+    if event.get("kind") == "turn_complete":
+        return "review"
     return ""
+
+
+def codex_task_error_text(error: object) -> str:
+    if isinstance(error, str):
+        return error.strip()
+    if not isinstance(error, dict):
+        return ""
+    message = error.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    code = error.get("codex_error_info") or error.get("code")
+    return f"Codex request failed ({code})." if code else "Codex request failed."
 
 
 def codex_token_usage_from_events(events: list[dict[str, object]]) -> TokenUsage | None:
@@ -726,6 +761,10 @@ def codex_messages_from_events(events: list[dict[str, object]]) -> list[Transcri
             messages.append(
                 TranscriptMessage("agent", text, timestamp_ms, str(event.get("id") or ""))
             )
+        elif kind == "turn_complete" and event.get("is_error"):
+            messages.append(
+                TranscriptMessage("session", text, timestamp_ms, str(event.get("id") or ""))
+            )
     return messages
 
 
@@ -746,6 +785,14 @@ def join_codex_text_blocks(content: object, kind: str) -> str:
 def latest_event_index(events: list[dict[str, object]], kind: str) -> int:
     for index in range(len(events) - 1, -1, -1):
         if events[index].get("kind") == kind:
+            return index
+    return -1
+
+
+def latest_codex_error_index(events: list[dict[str, object]]) -> int:
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        if event.get("kind") == "turn_complete" and event.get("is_error"):
             return index
     return -1
 
@@ -1237,16 +1284,23 @@ def extract_latest_worked_report(lines: list[str]) -> str:
 
 def codex_has_final_report(lines: list[str]) -> bool:
     tail = lines[-120:]
-    worked_index = latest_matching_line(tail, r"Worked for")
+    completed_index = latest_codex_terminal_completion_index(tail)
     working_index = latest_working_line_index(tail)
-    return worked_index >= 0 and worked_index > working_index
+    return completed_index >= 0 and completed_index > working_index
 
 
 def codex_is_working(lines: list[str]) -> bool:
     tail = lines[-120:]
-    worked_index = latest_matching_line(tail, r"Worked for")
+    completed_index = latest_codex_terminal_completion_index(tail)
     working_index = latest_working_line_index(tail)
-    return working_index >= 0 and working_index > worked_index
+    return working_index >= 0 and working_index > completed_index
+
+
+def latest_codex_terminal_completion_index(lines: list[str]) -> int:
+    return max(
+        latest_matching_line(lines, r"Worked for"),
+        latest_matching_line(lines, CODEX_ERROR_PATTERN.pattern),
+    )
 
 
 def latest_working_label(lines: list[str]) -> str:
