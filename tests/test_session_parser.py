@@ -150,6 +150,65 @@ def test_codex_lifecycle_reads_newest_turn_without_full_transcript(tmp_path, mon
     assert working.final is False
 
 
+def test_codex_task_error_ends_working_turn(tmp_path, monkeypatch) -> None:
+    transcript.clear_transcript_caches()
+    path = tmp_path / "codex-error.jsonl"
+    user = {
+        "type": "response_item",
+        "timestamp": "2026-10-01T10:00:00Z",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Continue"}],
+        },
+    }
+    failure = {
+        "type": "event_msg",
+        "timestamp": "2026-10-01T10:00:02Z",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": "turn-1",
+            "last_agent_message": None,
+            "error": {
+                "message": "Selected model is at capacity. Please try a different model.",
+                "codex_error_info": "server_overloaded",
+            },
+        },
+    }
+    path.write_text(
+        "\n".join(json.dumps(item) for item in [user, failure]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(transcript, "find_codex_rollout_by_pid", lambda pid: str(path))
+
+    lifecycle = transcript.detect_transcript_lifecycle("", "codex", cli_pid=42)
+    state = transcript.parse_codex_transcript("", cli_pid=42)
+
+    assert lifecycle.working is False
+    assert lifecycle.final is True
+    assert lifecycle.lifecycle_id
+    assert state.working is False
+    assert state.final is True
+    assert state.completed_reply == "Selected model is at capacity. Please try a different model."
+    assert state.messages[-1].role == "session"
+    assert state.messages[-1].text == state.completed_reply
+
+
+def test_codex_terminal_error_ends_working_fallback() -> None:
+    state = transcript.parse_codex_transcript(
+        "\n".join(
+            [
+                "› Continue",
+                "• Working (12s • esc to interrupt)",
+                "⚠ Selected model is at capacity. Please try a different model.",
+            ]
+        )
+    )
+
+    assert state.working is False
+    assert state.final is True
+
+
 def test_claude_tool_use_is_working_until_end_turn(monkeypatch) -> None:
     events = [
         {
